@@ -12,7 +12,8 @@
    nonce/AD) so large files can be streamed, resumed, and seeked.
 3. Pad ciphertext to a size bucket to hide exact length.
 4. Upload to blob storage via a pre-signed URL (resumable protocol,
-   e.g., tus or S3 multipart).
+   e.g., tus or S3 multipart). Encryption runs in the core worker using
+   streams, so large files never sit fully in memory.
 5. Send a regular E2EE message carrying `{blob_id, key, ciphertext_hash,
    mime, size, dimensions/duration, encrypted thumbnail}`.
 
@@ -38,9 +39,8 @@ NAT traversal, echo cancellation, and bandwidth estimation built in.
 | Call type | Topology | Server role |
 |-----------|----------|-------------|
 | 1:1 | Peer-to-peer; TURN relay fallback (or forced relay for IP privacy) | Signalling + TURN |
-| Group (3–32 video) | **SFU** (Selective Forwarding Unit) | Forwards encrypted frames; never decrypts |
-| Large audio-only (≤100) | SFU with audio-level-based forwarding | Same |
-| Offline (Wi-Fi P2P) 1:1 | Direct, local network | None |
+| Group (3–50) | **SFU** (LiveKit, ADR-0006) | Forwards encrypted frames; never decrypts |
+| Offline, same local network | Direct WebRTC, host ICE candidates only; 1:1 or full mesh up to ~4 | None |
 
 Mesh (everyone sends to everyone) is rejected for groups > 4: upload
 bandwidth grows O(n).
@@ -50,8 +50,10 @@ bandwidth grows O(n).
 - Call offer/answer/ICE candidates are sent as **E2EE messages** over the
   normal messaging channel (so the server can't tamper with DTLS
   fingerprints).
-- Server-side signalling only allocates SFU rooms/TURN credentials and rings
-  devices via VoIP push (PushKit on iOS / high-priority FCM on Android).
+- Server-side signalling only allocates SFU rooms/TURN credentials and
+  notifies devices via Web Push. **Web limitation:** a closed PWA can only
+  show a notification ("Incoming call — tap to answer"), not a ringing
+  full-screen UI; native wrappers add CallKit / Android Telecom later.
 
 ## 4. End-to-end encryption of call media
 
@@ -59,7 +61,9 @@ DTLS-SRTP alone is hop-by-hop when an SFU is present (the SFU terminates
 DTLS). So we add an **inner frame-level encryption layer**:
 
 - **SFrame (RFC 9605)** applied to each encoded media frame before
-  packetisation, using WebRTC Encoded Transform / insertable streams.
+  packetisation, using WebRTC Encoded Transform (`RTCRtpScriptTransform`
+  in Safari/Firefox, encoded insertable streams in Chromium; feature-detect
+  and refuse to join a group call unencrypted).
 - **Keys**: derived from the conversation's MLS group via the MLS *exporter*
   (`MLS-Exporter("call", call_id, 32)`); each sender gets its own key ID.
   When membership changes, the MLS epoch advances and call keys rotate.
@@ -77,7 +81,7 @@ change.
   per receiver.
 - Active-speaker detection via audio-level RTP header extension (unencrypted
   by design — a known small metadata leak; document it).
-- Last-N video forwarding for large groups.
+- Last-N video forwarding: at most 16 video tiles at once in a 50-person call.
 - Bandwidth estimation (transport-cc / GCC), FEC/RED for audio.
 - ICE restart on network change (FR-CALL-8).
 
@@ -89,7 +93,8 @@ change.
 | Video bitrate per stream | 0.3–1.5 Mbps |
 | SFU capacity | ~hundreds of participants per core; benchmark chosen SFU |
 
-## 7. Open questions
-- Build on an existing SFU (LiveKit, mediasoup, Janus, Jitsi, Pion-based) vs
-  a custom one — ADR-0006.
-- Do we record calls? (Proposed: **no** server-side recording, ever.)
+## 7. Decisions
+- SFU: **LiveKit** (Apache-2.0, self-hostable, browser SDK with E2EE
+  support) + **coturn** for TURN — ADR-0006. We drive key management
+  ourselves (MLS exporter) instead of LiveKit's shared-passphrase E2EE.
+- No server-side recording, ever.

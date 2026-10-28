@@ -24,7 +24,7 @@ devices.
 ## Non-goals (v1)
 
 - Public channels / broadcast to unbounded audiences.
-- Federation with other messaging networks (revisit later — see ADR-0009).
+- Federation between servers (self-hosting *is* in scope; revisit federation later — see ADR-0009).
 - Bots / third-party integrations.
 - Payments.
 - Server-side search, backups, or AI features that require plaintext.
@@ -38,17 +38,25 @@ devices.
 | Everyday user | Familiar UX, reliable delivery, media, calls with family/friends |
 | Privacy-conscious user | Verifiable encryption, minimal metadata, disappearing messages |
 | Off-grid / crisis user | Messaging without infrastructure, low battery use, store-and-forward |
-| Group organiser | Groups of tens to hundreds, admin controls, group calls |
+| Group organiser | Groups of up to 50, admin controls, group calls |
 
-## Platforms **[ASSUMPTION]**
+## Platforms (decided)
 
-iOS and Android first. Desktop (macOS/Windows/Linux) and Web are later
-phases. Web is a poor fit for E2EE key storage and for Bluetooth, so it is the
-lowest priority. Needs confirmation — see doc 09.
+**Web app + installable PWA first**, on any modern browser (desktop and
+mobile). Native wrappers (iOS, Android, desktop) come later and reuse the
+same web UI and the same Rust/WASM core. They are mainly needed for
+Bluetooth / Wi-Fi Aware offline mode and better background behaviour, which
+browsers cannot provide (see doc 07).
+
+## Openness (decided)
+
+Fully open: client, server, protocol spec, and infrastructure config are
+public. Anyone can self-host a server (Docker Compose). Licence proposed in
+ADR-0012.
 
 ## Success metrics (initial)
 
 - Message delivery p95 < 1 s when both parties online.
 - Call setup p95 < 3 s; ≥ 99% of calls connect (including via TURN).
 - Zero plaintext user content observable server-side (verified by audit).
-- Offline mode: two phones in BLE range exchange a text in < 5 s.
+- Offline mode: two browsers on the same local network/hotspot with no internet exchange a text in < 5 s (BLE target applies to native wrappers).

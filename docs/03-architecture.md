@@ -25,7 +25,7 @@ flowchart LR
     end
     A <-- "TLS: encrypted envelopes" --> GW
     B <-- "TLS: encrypted envelopes" --> GW
-    A <-. "BLE / Wi-Fi Direct (offline mode)" .-> B
+    A <-. "WebRTC on local network (offline mode)" .-> B
     A <-- "SRTP media (P2P when possible)" --> B
 
     subgraph Service
@@ -43,47 +43,65 @@ flowchart LR
         PUSH[Push dispatcher]
     end
     A -- "upload ciphertext" --> BLOB
-    DS --> PUSH --> APNs/FCM
+    DS --> PUSH --> WP[Browser push services]
     A <-- "SRTP (group calls)" --> SFU
     A <-- "relayed media" --> TURN
 ```
 
-## 3. Client architecture
+## 3. Client architecture (web / PWA first)
 
 ```
-┌────────────────────────────────────────────────────────┐
-│ UI layer (platform-native or cross-platform toolkit)   │
-├────────────────────────────────────────────────────────┤
-│ App services: conversations, contacts, notifications,  │
-│ media pipeline, call UI integration (CallKit/Telecom)  │
-├────────────────────────────────────────────────────────┤
-│ CORE LIBRARY (shared, cross-platform)                  │
-│  • Identity & device keys      • E2EE protocol engine  │
-│  • Message model & sync        • Attachment crypto     │
-│  • Encrypted local DB          • Envelope codec        │
-│  • Transport abstraction ──────┬──────────┬────────────│
-├────────────────────────────────┼──────────┼────────────┤
-│ Server transport (WS/QUIC)     │ BLE      │ Wi-Fi P2P  │
-├────────────────────────────────┴──────────┴────────────┤
-│ Real-time media engine (WebRTC-class) + frame E2EE     │
-└────────────────────────────────────────────────────────┘
+┌──────────────────────────── Main thread ───────────────────────────┐
+│ UI: TypeScript + React (ADR-0004)                                  │
+│ Media: WebRTC (getUserMedia, RTCPeerConnection), MapLibre GL       │
+├────────────────────────────────────────────────────────────────────┤
+│ Core worker (Dedicated/Shared Worker)                              │
+│  CORE LIBRARY: Rust compiled to WASM (ADR-0003)                    │
+│   • Identity & device keys       • MLS engine (OpenMLS)            │
+│   • Message model & sync         • Attachment crypto               │
+│   • Envelope codec (protobuf)    • Mesh routing (offline)          │
+│   • Encrypted local DB: SQLite-WASM on OPFS                        │
+│   • Transport abstraction ──────────┬──────────────┬───────────────│
+├─────────────────────────────────────┼──────────────┼───────────────┤
+│ WebSocket to server                 │ WebRTC data  │ (native only) │
+│                                     │ channels on  │ BLE / Wi-Fi   │
+│                                     │ local network│ Aware plugins │
+├─────────────────────────────────────┴──────────────┴───────────────┤
+│ Service worker: app-shell cache, Web Push handling, update gating  │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
-Key point: the **E2EE protocol engine does not know which transport** is
-used. Offline mode is a different transport plus a different
-ordering/consistency strategy (doc 07), not a separate app.
+- The **core runs in a worker**, so crypto and DB work never block the UI
+  and keys stay out of the main thread's reach as far as the platform allows.
+- **SFrame for calls** runs in an `RTCRtpScriptTransform` worker (Safari,
+  Firefox) or via encoded insertable streams (Chromium), keyed from the core.
+- The **same Rust core** builds for native wrappers later (UniFFI bindings
+  for Swift/Kotlin, or a Tauri/Capacitor bridge), so security-critical code
+  is written once.
+- The E2EE engine **does not know which transport** carries an envelope.
+  Offline mode is a different transport plus a different ordering strategy
+  (doc 07), not a separate app.
+
+### Browser storage constraints
+- Storage can be evicted (especially Safari when the site isn't installed
+  and unused for 7 days). Mitigations: prompt install, request persistent
+  storage, linked-device sync, encrypted backup (FR-MSG-13).
+- Local DB encrypted with a key that is itself wrapped by a
+  **non-extractable WebCrypto AES-GCM key** in IndexedDB, plus an optional
+  passphrase.
 
 ## 4. Server components
 
 | Component | Responsibility | State |
 |-----------|---------------|-------|
-| Edge gateway | TLS termination, long-lived client connections (WebSocket or QUIC), auth, rate limiting, routing to services | Stateless (connection registry in cache) |
-| Account & auth | Registration, device linking, auth tokens, account deletion | Accounts DB |
+| Edge gateway | TLS termination, long-lived WebSocket connections, auth, rate limiting, routing to services | Stateless (connection registry in cache) |
+| Account & auth | Phone verification (SMS/voice OTP via pluggable provider), device linking, auth tokens, account deletion | Accounts DB |
+| Contact lookup | Rate-limited phone-number → account lookup | Accounts DB |
 | Key directory | Publishes per-device public identity keys and one-time key packages/prekeys; optional key-transparency log | Key DB, append-only log |
 | Delivery service | Accepts encrypted envelopes, fans out per recipient device, stores until acked, **orders group handshake messages** (required by MLS) | Message queue store |
 | Group state service | Stores the *encrypted* group state / ordering epoch counter; never sees membership in plaintext if we adopt encrypted group metadata | Small KV |
 | Blob service | Pre-signed upload/download URLs for encrypted attachments; TTL-based deletion | Object storage + CDN |
-| Push dispatcher | Sends content-free wake-ups via APNs/FCM | Device push tokens |
+| Push dispatcher | Sends content-free or E2EE wake-ups via Web Push (VAPID, RFC 8291); APNs/FCM for native wrappers later | Push subscriptions |
 | Call signalling | Relays encrypted SDP/ICE between peers; allocates SFU rooms | Ephemeral |
 | SFU cluster | Forwards (does not decrypt) group-call media; simulcast layer selection | Ephemeral |
 | STUN/TURN | NAT traversal and IP-hiding relay | Stateless |
@@ -100,7 +118,7 @@ ordering/consistency strategy (doc 07), not a separate app.
 3. Delivery Service durably stores one queue entry per recipient device, acks
    sender.
 4. For each recipient device: if connected, push over its live connection;
-   otherwise trigger content-free push notification.
+   otherwise send a Web Push message.
 5. Recipient fetches, decrypts, acks; Delivery Service deletes its entry.
 
 ### 5.2 Send media
@@ -126,8 +144,8 @@ ordering/consistency strategy (doc 07), not a separate app.
 
 | Entity | Fields | Retention |
 |--------|--------|-----------|
-| Account | account_id, identifier hash, created_at, auth credential | Until deletion |
-| Device | device_id, account_id, identity public key, push token, last_seen (coarse) | Until unlinked |
+| Account | account_id, phone number (needed for login + SMS), created_at, auth credential | Until deletion |
+| Device | device_id, account_id, identity public key, Web Push subscription, last_seen (coarse) | Until unlinked |
 | KeyPackage | device_id, package bytes, expires_at | Until consumed/expired |
 | QueuedEnvelope | recipient_device_id, envelope bytes, received_at | Until acked or 30 days |
 | Blob | blob_id, size, expires_at | **[ASSUMPTION]** 30 days |
@@ -146,4 +164,8 @@ lists, plaintext group names/members (goal), locations, call content.
 - **Observability:** metrics on queue depth, delivery latency, error rates;
   no per-user content or identifiers in logs.
 - **Rate limiting & abuse:** per-account and per-IP token buckets at the edge;
-  proof-of-work or attestation for registration (**open**).
+  SMS-pumping protection (per-prefix limits, CAPTCHA/proof-of-work before
+  sending a code, block premium-rate ranges).
+- **Self-hosting:** every service ships as a container; a single Docker
+  Compose file runs the full stack (gateway + services, PostgreSQL, Valkey,
+  MinIO, LiveKit, coturn) for small deployments.

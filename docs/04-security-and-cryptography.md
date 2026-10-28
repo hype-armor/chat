@@ -18,6 +18,9 @@ graph (who talks to whom), group membership, timing/presence metadata.
 | Nearby attacker in offline mode | Sniff BLE/Wi-Fi, impersonate peers, flood mesh | **Yes** |
 | Device thief (locked device) | Physical access | **Yes** — at-rest encryption + keystore |
 | Device thief (unlocked) / malware on device | Full access | **No** (out of scope; mitigate with app lock, disappearing messages) |
+| Malicious web-app delivery (our server or CDN serves modified JS/WASM) | Steal keys/plaintext from browser clients | **Yes** — see §9; the hardest problem of web-first E2EE |
+| Malicious browser extension | Read page/DOM | **No** (warn users; core in worker limits exposure) |
+| Strangers in offline open rooms | Spam, impersonation, social engineering | **Yes** — see doc 07 §5 |
 | Global passive network adversary | Correlate all traffic | **No** (out of scope) |
 
 ### Security goals
@@ -37,17 +40,18 @@ graph (who talks to whom), group membership, timing/presence metadata.
 | FS / PCS in groups | Strong, built in | Good 1:1; group PCS weaker | Weaker |
 | Standardisation | IETF standard | De-facto standard, well studied | Matrix spec; moving to MLS |
 | Post-quantum | PQ/hybrid ciphersuites being standardised | PQXDH + SPQR (shipped by Signal) | Not yet |
-| Mature libraries | OpenMLS (Rust, MIT), MLS++ (C++, BSD) | libsignal (Rust, **AGPL-3.0**) | vodozemac (Rust, Apache-2.0) |
+| Mature libraries | OpenMLS (Rust, MIT; compiles to WASM), MLS++ (C++, BSD) | libsignal (Rust, AGPL-3.0 — fine now we're fully open — but no supported browser/WASM build) | vodozemac (Rust, Apache-2.0; WASM) |
 | Ordering requirement | Needs a Delivery Service to **order commits** — tension with offline mode | No global ordering needed — great for offline | No global ordering |
 | Real-world | Webex, RCS (GSMA Universal Profile 3.0), Wire, Discord DAVE | Signal, WhatsApp | Element/Matrix |
 
-### Recommendation (pending ADR-0002)
+### Decision (ADR-0002)
 
 **MLS for all conversations (1:1 treated as a 2-member group)**, using
-OpenMLS, with a hybrid post-quantum ciphersuite once available in the
-library. Rationale: one code path for 1:1 and groups, best group
-scalability, IETF standard, permissive licence, and native exporter secrets
-to key group calls (doc 05).
+OpenMLS compiled to WASM, with a hybrid post-quantum ciphersuite once
+available in the library. With groups capped at 50, MLS's O(log n) scaling
+matters less than it would at 1,000 — the deciding reasons are: one code
+path for 1:1 and groups, IETF standard, strong group PCS, a library that
+runs in the browser, and exporter secrets to key group calls (doc 05).
 
 Main risk: MLS needs commits to be totally ordered per group, which is easy
 with a server and hard in a mesh. Doc 07 describes how offline mode handles
@@ -58,12 +62,12 @@ membership changes deferred until online).
 
 | Key | Where generated | Storage | Lifetime |
 |-----|----------------|---------|----------|
-| Device identity (signature) key | Device | Platform keystore (non-exportable where possible) | Life of device |
+| Device identity (signature) key | Device | Encrypted local DB (key wrapped by non-extractable WebCrypto key; platform keystore in native wrappers) | Life of device |
 | MLS key packages (init keys) | Device | Public part uploaded to Key Directory; private in encrypted DB | Single-use, expire ~30 days |
 | Group epoch secrets | Derived per epoch | Encrypted local DB | Deleted after epoch advance + grace window |
 | Attachment keys | Per file, random | Inside encrypted message | Life of message |
 | Call media keys | Exported from MLS epoch | Memory only | Life of call / epoch |
-| Local DB key | Device | Wrapped by keystore | Life of install |
+| Local DB key | Device | Wrapped by non-extractable WebCrypto key (+ optional passphrase) | Life of install |
 
 ### Identity verification
 - **Safety numbers / QR codes** per contact (out-of-band comparison).
@@ -79,13 +83,15 @@ membership changes deferred until online).
 | Encrypted group state (membership, name, avatar inside MLS) | Group membership from server | S |
 | Content-free push notifications | Content from Apple/Google | M |
 | Padding message sizes to buckets | Message length leakage | S |
-| Private contact discovery (hashed + rate-limited, or PSI/enclave) | Address book | S |
+| Phone-number contact lookup: one number at a time, strictly rate-limited; no bulk address-book upload. (Hashing phone numbers does not hide them — the space is small enough to brute-force.) | Address book | M |
+| Phone number never transmitted in offline mode or shown to strangers | Identity of offline users | M |
 | Delete delivery records on ack | Historical metadata | M |
 | Optional IP-hiding relay for calls | User IP from call peer | S |
 
 ## 5. At-rest security
-- Local database encrypted (e.g., SQLCipher-class) with key in
-  Secure Enclave/StrongBox-backed keystore.
+- Local database (SQLite-WASM on OPFS) encrypted at page level, with the
+  key wrapped by a non-extractable WebCrypto key; Secure Enclave /
+  StrongBox in native wrappers.
 - Optional app lock (biometric/PIN).
 - Disappearing messages delete from local DB and secure-delete attachments.
 
@@ -96,14 +102,47 @@ membership changes deferred until online).
 - Rate limiting, registration friction, and user-side blocking.
 - No client-side scanning of content. **[ASSUMPTION — policy decision]**
 
-## 7. Backup **(open — ADR-0010)**
-Options: no backups (device transfer only); encrypted backups with a
-user-held recovery key; PIN-derived keys protected by a server-side
-hardware enclave with guess limits. Every option is a trade-off between
-recoverability and attack surface.
+## 7. Backup (ADR-0010)
+Browsers can evict storage, so "device transfer only" is not enough for a
+web-first product. Decision: **encrypted backup with a user-held 128-bit
+recovery key** (shown once, like a BIP-39 phrase) stored as an opaque blob
+on the server. No PIN-plus-enclave scheme: it needs trusted hardware that
+self-hosters can't be assumed to have.
 
 ## 8. Assurance
 - Use only audited libraries; no hand-rolled crypto.
 - Formal protocol review + third-party penetration test before launch.
 - Fuzzing of envelope parsers and mesh packet parsers.
 - Bug bounty after launch.
+
+## 9. Web code-delivery integrity
+
+On the web, the server delivers the client code on every load. A compromised
+or coerced server could ship a key-stealing bundle to one targeted user.
+This is the main weakness of browser E2EE and we must be honest about it.
+
+Layered mitigations:
+
+1. **Open source + reproducible builds** (NFR-SEC-9): anyone can rebuild the
+   bundle and compare hashes.
+2. **Immutable, versioned bundles**: every release is content-addressed
+   (`/v/<hash>/...`) with Subresource Integrity on every script and WASM
+   file; releases and their hashes are published in a public, append-only
+   transparency log (e.g., signed git tags + Sigstore/Rekor entry).
+3. **Service-worker update gate**: the installed service worker serves the
+   pinned version and only switches to a new release after verifying its
+   release signature and transparency-log inclusion; the UI shows the
+   version hash. Limitation: browsers re-check the service worker script
+   itself periodically, so this raises the bar rather than eliminating the
+   risk.
+4. **Independent verifier extension** (C): a browser extension that checks
+   loaded assets against the published log (cf. Meta's Code Verify).
+5. **Native wrappers / signed web bundles** for high-risk users: code
+   changes only on signed app updates. Chrome Isolated Web Apps are a
+   possible future option.
+6. **Self-hosting**: users who don't trust our server can run their own and
+   serve the bundle themselves.
+
+Also: strict Content Security Policy (no inline script, no `eval`, WASM
+allowed via `wasm-unsafe-eval` only), Trusted Types, no third-party scripts
+or analytics, COOP/COEP isolation.

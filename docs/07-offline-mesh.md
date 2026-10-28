@@ -1,122 +1,177 @@
 # 07 — Offline / Serverless Mode
 
-**Status:** Draft — highest technical risk area; needs a prototype spike
-before committing (see doc 09).
+**Status:** Draft — highest technical risk; prototype spikes are scheduled
+in Phase 0 (doc 09).
 
 ## 1. What "serverless" means here
 
-Devices exchange the **same E2EE envelopes** used online, but over local
-radio links, optionally relayed by other app users (store-and-forward mesh).
-There is no server for ordering, key directory, or storage.
+Devices exchange the **same E2EE envelopes** used online, over local links
+and relayed by other app users, with no server for ordering, key directory,
+or storage. Opt-in only (FR-OFF-1).
 
-Opt-in only (FR-OFF-1): it costs battery and broadcasts a (rotating)
-presence beacon.
+Because the product is **web/PWA first**, offline mode comes in two tiers:
 
-## 2. Transport options
+| Tier | Runs in | Link | Discovery | Ships |
+|------|---------|------|-----------|-------|
+| **1. Local mode** | Any modern browser / installed PWA | WebRTC data channels over a shared local network (router with no uplink, or one phone's hotspot) | Scan a QR code once; after that, peers introduce each other | Phase 4 |
+| **2. Radio mesh** | Native wrappers (Android, iOS, desktop) | Bluetooth LE + Wi-Fi Aware / Wi-Fi Direct / Multipeer | Automatic, in the background | Phase 6 |
 
-| Transport | Range | Throughput | iOS | Android | iOS↔Android | Use |
-|-----------|-------|-----------|-----|---------|-------------|-----|
-| Bluetooth LE (GATT / L2CAP CoC) | ~10–100 m | ~10s–100s kbps practical | ✅ (CoreBluetooth; background limits) | ✅ | ✅ **only common denominator historically** | Discovery, text, control |
-| Apple Multipeer Connectivity | ~Wi-Fi | High | ✅ | ❌ | ❌ | iOS↔iOS media |
-| Wi-Fi Direct | ~50–100 m | High (Mbps) | ❌ | ✅ | ❌ | Android↔Android media |
-| Wi-Fi Aware (NAN) | ~50 m | High | iOS 26+ framework (verify interop) | ✅ Android 8+ (device-dependent) | Possibly — **spike required** | Media, calls |
-| Same LAN (mDNS + TCP/QUIC) | Network | High | ✅ | ✅ | ✅ | Hotspot / local router without internet |
-| Google Nearby Connections | — | — | Limited | ✅ | Partial | Rejected: proprietary, Play Services dependency |
+Both tiers carry the same envelopes and mesh routing, so a native device on
+the same network bridges Tier 1 rooms to the Tier 2 radio mesh.
 
-**Plan:** BLE for discovery and text everywhere; upgrade to the best
-available high-bandwidth link (Wi-Fi Aware → Wi-Fi Direct / Multipeer →
-LAN) for media when both peers support it.
+## 2. Why the browser can't do Bluetooth/Wi-Fi mesh
 
-## 3. Protocol layers
+| Capability needed | Browser support |
+|-------------------|-----------------|
+| BLE advertising / peripheral role (be discoverable) | **None** in any browser |
+| BLE central role (connect to a device) | Web Bluetooth: Chromium only, not Safari/iOS, needs a user-picked device each time, no background — can't build a mesh |
+| Wi-Fi Direct / Aware / Multipeer | **None** |
+| LAN discovery (mDNS, UDP broadcast, raw sockets) | **None** |
+| WebRTC peer-to-peer over the local network | **Yes**, everywhere, but needs the offer/answer exchanged somehow |
+| Running in the background | Very limited (service worker only, short-lived) |
+
+So Tier 1 uses WebRTC and solves signalling with QR codes; automatic
+discovery needs native code.
+
+## 3. Tier 1 — Local mode (browser)
+
+### 3.1 Prerequisites
+- Each user loaded the PWA while online (it is cached by the service worker
+  and runs offline afterwards). A browser can't serve the app to a newcomer:
+  web pages can't run an HTTP server, and service workers / camera /
+  WebRTC need a secure (HTTPS) origin.
+- Devices are on the same local network: one phone's hotspot is enough;
+  no internet is needed.
+
+### 3.2 Pairing and joining
+1. Host taps **"Start local room"**. The core creates a room
+   `{room_id, room_key, host ephemeral pubkey}` and a compact WebRTC offer
+   (ICE ufrag/pwd, DTLS fingerprint, host candidates), all encoded in one
+   QR code.
+2. Joiner scans it. Their browser builds an answer and shows it as a QR code;
+   the host scans it back. (Two scans for the very first link.)
+3. Once one data channel is open, **the mesh does signalling**: further
+   joiners scan *any* member's room QR, and the room exchanges WebRTC
+   offers/answers over existing data channels, so each newcomer meets the
+   rest of the room without more scanning.
+4. Keep each device's direct connections bounded (e.g., ≤ 8) and relay the
+   rest via mesh routing (§6) so phones don't hold 50 connections.
+
+**ICE detail to verify in the spike:** browsers hide local IPs behind
+mDNS `.local` names unless the page has camera/microphone permission.
+We already need the camera to scan, so real host candidates should be
+available; we still need to test hotspots on iOS and Android, where client
+isolation or mDNS blocking might break this.
+
+### 3.3 Who you can talk to
+- **Contacts**: devices recognise each other by long-term identity keys,
+  and existing 1:1 and group conversations continue (§5).
+- **Strangers** (FR-OFF-10):
+  - Every room member has a fresh **ephemeral room identity**: a new key
+    pair, a display name, and an avatar. No phone number, no long-term
+    key.
+  - **Room chat**: messages encrypted with the room key from the QR code.
+    This keeps out anyone who isn't in the room, but treat it as **public
+    to everyone who has the QR**; the UI labels it that way.
+  - **Direct messages to a stranger**: a 2-member MLS group between the two
+    ephemeral identities. It is private, but whether the person is who they
+    say they are is unverified.
+  - **Promote to contact** (FR-OFF-11): both users consent; they swap
+    long-term identity keys (and, optionally, phone numbers) inside the
+    encrypted DM and compare a safety code.
+- **Broadcasts** (FR-OFF-12): signed by the sender's room identity, relayed
+  across the room/mesh, and marked "unverified" unless signed by a contact.
+
+### 3.4 Calls in local mode
+WebRTC media goes directly over the same local connections: 1:1 calls, or
+a full mesh of up to ~4 people. SFrame is still applied (FR-CALL-10).
+
+## 4. Tier 2 — Radio mesh (native wrappers)
+
+| Transport | Range | Throughput | iOS | Android | Cross-OS | Use |
+|-----------|-------|-----------|-----|---------|----------|-----|
+| Bluetooth LE (GATT / L2CAP) | 10–100 m | 10s–100s kbps | ✅ (background limits) | ✅ | ✅ | Discovery, text, control |
+| Wi-Fi Aware (NAN) | ~50 m | Mbps | iOS 26+ framework | ✅ (device-dependent) | Possibly — spike | Media, calls |
+| Wi-Fi Direct | ~100 m | Mbps | ❌ | ✅ | ❌ | Android↔Android media |
+| Multipeer Connectivity | Wi-Fi range | Mbps | ✅ | ❌ | ❌ | Apple↔Apple media |
+| Local network (WebRTC) | network | Mbps | ✅ | ✅ | ✅ + browsers | Bridge to Tier 1 |
+
+- Automatic discovery uses rotating pseudonymous BLE beacons: contacts
+  recognise them through an HMAC keyed with a secret shared between
+  contacts; strangers see only a random per-window token plus "open to
+  strangers" if the user enabled it.
+- Platform limits: on iOS, BLE advertising and scanning in the background
+  are throttled (overflow area), so reliable discovery mostly needs the app
+  in the foreground. On Android, continuous scanning needs a foreground
+  service with a notification. Budget: NFR-RES-2.
+
+## 5. Cryptography offline: the MLS ordering problem
+
+MLS needs one agreed order of **commits** per group. Offline partitions
+could each commit and split the group into incompatible versions.
+
+**Decision (ADR-0007): freeze membership offline.**
+- Offline devices may send *application messages* in the group's current
+  epoch, but may not commit: no adding or removing members, no key updates.
+  Commits wait until the device is back online.
+- 2-member groups created offline (new contact, stranger DM) are safe:
+  their welcome needs no server, and a later re-key goes through the server
+  once online.
+- Cost: forward secrecy holds within an epoch (per-message ratchet), but
+  post-compromise healing waits until the next online commit. With groups
+  capped at 50, re-keying on reconnect is cheap.
+- Devices pre-cache contacts' key packages while online. QR exchanges carry
+  key packages for strangers.
+
+Considered and rejected for v1: a single designated device that may commit
+offline (fails when that device is absent); decentralised MLS with fork
+merging (still research); a second, pairwise-ratchet protocol for offline
+use (another protocol to audit).
+
+## 6. Mesh routing (both tiers)
 
 ```
 ┌───────────────────────────────────────────────┐
 │ E2EE envelope (same as online)                │
 ├───────────────────────────────────────────────┤
-│ Mesh routing: msg_id, dest tag, TTL, hops,    │
-│ dedup bloom filter, spray-and-wait            │
+│ Mesh: msg_id, blinded dest tag, TTL, hops,    │
+│ have/want sync, spray-and-wait                │
 ├───────────────────────────────────────────────┤
-│ Link security: Noise (XX/IK) session between  │
-│ neighbours — authenticates & hides headers    │
+│ Link auth: DTLS (WebRTC) or Noise XX (radio)  │
 ├───────────────────────────────────────────────┤
-│ Fragmentation / reassembly / flow control     │
-├───────────────────────────────────────────────┤
-│ BLE │ Wi-Fi Aware │ Wi-Fi Direct │ MPC │ LAN  │
+│ WebRTC data channel │ BLE │ Wi-Fi Aware │ ... │
 └───────────────────────────────────────────────┘
 ```
+- Store-and-forward with hop limit 7 and TTL 24 h; per-device relay quota
+  (e.g., 50 MB, least-recently-used eviction).
+- Blinded destination tags: recipients recognise their messages; relays
+  can't tell who the recipient is.
+- When two peers meet, they exchange "have"/"want" summaries.
+- Location updates: no more than 2 hops.
 
-### Discovery & privacy
-- Beacons carry a **rotating pseudonymous token** (e.g., HMAC of a time
-  window with a key shared among contacts), so contacts recognise each
-  other but strangers can't track a device over time.
-- Relaying for strangers uses an anonymous token only.
+## 7. Reconciliation when back online (FR-OFF-8)
 
-### Routing
-- **Epidemic / spray-and-wait** store-and-forward with: hop limit
-  (**[ASSUMPTION]** 7), TTL (24 h), per-peer rate limits, and per-device
-  relay storage quota (e.g., 50 MB, LRU).
-- **Destination tags** are blinded (recipient can recognise messages for
-  them; relays can't link tag → identity).
-- Deduplicate by message ID; sync via "I have / I want" summaries when two
-  peers meet.
+- Envelopes carry `{sender_device, epoch, generation, lamport clock,
+  wall clock}`. Clients merge offline history into timelines ordered by
+  `(epoch, lamport, sender)` and show the original timestamps.
+- Offline messages reach group members who were not present only if a
+  member's device re-sends them through the server after reconnecting.
+  **Decision: yes, for contact groups**: a sender's device re-sends its own
+  offline-sent messages once online, and receivers drop duplicates by
+  msg_id. Room and stranger traffic is never uploaded.
 
-## 4. Cryptography offline — the MLS ordering problem
-
-MLS (doc 04) requires a single agreed order of **commits** per group.
-Offline, two partitions could each commit, forking the group.
-
-| Approach | Description | Verdict |
-|----------|-------------|---------|
-| **A. Freeze membership offline** | Offline nodes may send *application messages* in the current epoch, but may not commit (no add/remove/key-update). Commits wait until online. | **Proposed for v1** — simple, safe |
-| B. Designated committer | Only the group owner/admin device may commit offline | Fragile if that device is absent |
-| C. Decentralised MLS (DMLS / fork-resolution research) | Allow forks and merge | Research-grade; revisit later |
-| D. Pairwise Double Ratchet for offline | Use per-pair ratchets, fan out per member | Works without ordering; O(n) cost; a second protocol to audit |
-
-Consequences of A:
-- Offline sessions have FS within an epoch (per-message ratchets) but
-  weaker PCS until the next online commit.
-- New contacts met offline (FR-OFF-7) need a 1:1 group created offline: a
-  2-member group's initial welcome is fine without a server because nobody
-  else can commit; QR exchange carries a key package.
-- Key packages: devices pre-cache contacts' key packages while online;
-  offline QR exchange covers strangers.
-
-## 5. Reconciliation when back online (FR-OFF-8)
-
-- Messages carry `{sender_device, epoch, generation, lamport clock,
-  wall-clock}`; clients merge offline history into conversation timelines
-  ordered by `(epoch, lamport, sender)` and display with original
-  timestamps.
-- Clients upload nothing extra to the server; peers who weren't present
-  offline simply never see offline-only messages unless a client
-  re-shares them (**[ASSUMPTION]** we don't backfill; open question).
-
-## 6. Threats specific to offline mode
+## 8. Threats specific to offline mode & strangers
 
 | Threat | Mitigation |
 |--------|-----------|
-| Tracking via BLE beacons | Rotating tokens, MAC randomisation |
-| Flooding / storage DoS | Hop/TTL limits, rate limits, quotas, optional proof-of-work on relayed messages |
+| Tracking via beacons / ephemeral IDs | Rotating tokens, a fresh room identity per room, MAC randomisation |
+| Spam/flooding by strangers (no phone verification offline) | Per-identity rate limits, small proof-of-work on broadcasts, hop/TTL limits, local block/mute, stranger media blurred and not auto-downloaded |
+| Impersonation of a contact | Contacts verified by long-term keys; strangers clearly labelled; promoting needs a safety-code comparison |
+| Fake "official" emergency broadcasts | Always marked unverified unless signed by a contact |
 | Sybil relays dropping messages | Multi-path spray, delivery receipts |
-| Malicious packet parsing | Fuzzed parsers in memory-safe language |
-| Impersonation | All content authenticated by E2EE; link layer by Noise |
+| Malicious packets | Parsers written in Rust and fuzzed |
+| Room QR leaked/photographed | Room chat treated as public; DMs use separate keys |
 
-*Lesson from prior art:* Bridgefy's early mesh protocol was publicly
-broken (2020); Briar and Berty are better references. Our mesh design must be
-reviewed by the same auditors as the main protocol.
-
-## 7. Platform constraints (major risk)
-
-- **iOS background BLE** is heavily restricted: advertising in background
-  moves data to an overflow area only discoverable by iOS devices actively
-  scanning for that service UUID; scanning is throttled. Reliable offline
-  mode on iOS likely requires the app in foreground or a recent foreground
-  session.
-- **Android** requires a foreground service with a persistent notification
-  for continuous scanning; OEM battery killers vary.
-- Battery budget: NFR-RES-2.
-
-## 8. Prior art to study
-Briar (Tor + BT + Wi-Fi, Bramble protocols), Berty (Wesh protocol, IPFS-based),
-Bridgefy, Meshtastic (LoRa — possible future hardware add-on), FireChat,
-Apple's Find My offline-finding crypto design.
+*Prior art:* Bridgefy's early mesh protocol was publicly broken (2020).
+Briar (Bramble), Berty (Wesh), and Meshtastic are better references. The
+mesh design goes to the same auditors as the main protocol.

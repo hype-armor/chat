@@ -13,13 +13,14 @@ Items marked **[ASSUMPTION]** need stakeholder confirmation (see doc 09).
 
 | ID | Requirement | Pri |
 |----|-------------|-----|
-| FR-ID-1 | A user can register an account. Identifier is **[ASSUMPTION]** a phone number *or* a username; phone number is not required. | M |
-| FR-ID-2 | Each device generates its own long-term identity key pair locally; private keys never leave the device unencrypted. | M |
-| FR-ID-3 | A user can link multiple devices (phone + tablet/desktop) to one account; each device is a separate cryptographic participant. | S |
+| FR-ID-1 | A user registers with a **phone number**, verified by SMS (voice-call fallback) one-time code. | M |
+| FR-ID-1a | The phone number is never shown to strangers (including in offline mode); users have a display name and avatar for that. | M |
+| FR-ID-2 | Each device (browser profile / installed PWA) generates its own long-term identity key pair locally; private keys never leave the device unencrypted. | M |
+| FR-ID-3 | A user can link multiple devices/browsers to one account by scanning a QR code; each device is a separate cryptographic participant. | M |
 | FR-ID-4 | A user can view and remove linked devices; removal revokes the device from all conversations. | S |
 | FR-ID-5 | Users can verify each other's identity out-of-band (QR code scan or comparing a safety number). | M |
 | FR-ID-6 | Users are warned when a contact's identity key changes. | M |
-| FR-ID-7 | Contact discovery does not upload the user's address book in plaintext. | S |
+| FR-ID-7 | Users find contacts by entering a phone number, or (where the browser supports the Contact Picker API) by picking contacts; the address book is never uploaded in bulk or in plaintext. | S |
 | FR-ID-8 | A user can block and report another user. | M |
 | FR-ID-9 | A user can delete their account and all server-held data. | M |
 
@@ -29,14 +30,15 @@ Items marked **[ASSUMPTION]** need stakeholder confirmation (see doc 09).
 |----|-------------|-----|
 | FR-MSG-1 | Send/receive text messages in 1:1 conversations. | M |
 | FR-MSG-2 | Create groups, add/remove members, leave a group. | M |
-| FR-MSG-3 | Group sizes up to **[ASSUMPTION]** 1,000 members. | M |
+| FR-MSG-3 | Group sizes up to **50 members** (including all of each member's devices as separate leaves). | M |
 | FR-MSG-4 | Group roles: owner/admin/member; admins control membership, name, avatar, and settings. | M |
 | FR-MSG-5 | Delivery states: sent, delivered, read (read receipts can be disabled). | M |
 | FR-MSG-6 | Typing indicators (can be disabled). | S |
 | FR-MSG-7 | Reply/quote, reactions, edit, delete-for-everyone (time-limited). | S |
 | FR-MSG-8 | Disappearing messages with per-conversation timer. | S |
-| FR-MSG-9 | Messages sent while offline are queued and sent on reconnect; messages to offline recipients are held server-side until fetched or expired (**[ASSUMPTION]** 30 days). | M |
-| FR-MSG-10 | Message history is available on a newly linked device (encrypted device-to-device transfer). | C |
+| FR-MSG-9 | Messages sent while offline are queued and sent on reconnect; messages to offline recipients are held server-side until fetched or expired (30 days, pending confirmation — doc 09). | M |
+| FR-MSG-10 | Message history is available on a newly linked device (encrypted device-to-device transfer). | S |
+| FR-MSG-13 | Encrypted backup of keys and history with a user-held recovery key, because browsers can evict site storage. | S |
 | FR-MSG-11 | Mentions (@user) and per-conversation mute/notification settings. | S |
 | FR-MSG-12 | Local full-text search of message history (on-device only). | S |
 
@@ -58,15 +60,15 @@ Items marked **[ASSUMPTION]** need stakeholder confirmation (see doc 09).
 | ID | Requirement | Pri |
 |----|-------------|-----|
 | FR-CALL-1 | 1:1 voice and video calls. | M |
-| FR-CALL-2 | Group voice and video calls up to **[ASSUMPTION]** 32 video / 100 audio-only participants. | M |
+| FR-CALL-2 | Group voice and video calls up to **50 participants** (the max group size); up to 16 video tiles shown at once, the rest audio + thumbnail. | M |
 | FR-CALL-3 | All call media is end-to-end encrypted, including through any server relay/SFU. | M |
 | FR-CALL-4 | Mute, camera on/off, switch camera, speaker routing, Bluetooth headset support. | M |
-| FR-CALL-5 | Incoming-call ringing while the app is backgrounded (CallKit on iOS / ConnectionService on Android). | M |
+| FR-CALL-5 | Incoming calls are signalled by a push notification when the app is closed (web limitation: no full-screen ringing); native wrappers add CallKit / Android Telecom ringing later. | M |
 | FR-CALL-6 | Join/leave an in-progress group call; call link for group members. | S |
 | FR-CALL-7 | Screen sharing. | C |
 | FR-CALL-8 | Adaptive quality under poor networks; seamless Wi-Fi ↔ cellular handover. | S |
 | FR-CALL-9 | Option to always relay calls (hide IP address from peer). | S |
-| FR-CALL-10 | Calls in offline/serverless mode (local Wi-Fi only, 1:1). | C |
+| FR-CALL-10 | Calls in offline/serverless mode over a shared local network/hotspot (1:1 and small groups). | S |
 
 ### 1.5 Location sharing (LOC)
 
@@ -84,20 +86,23 @@ Items marked **[ASSUMPTION]** need stakeholder confirmation (see doc 09).
 | ID | Requirement | Pri |
 |----|-------------|-----|
 | FR-OFF-1 | Users can opt in to serverless mode; it is off by default. | M |
-| FR-OFF-2 | Discover nearby users of the app over Bluetooth LE and/or Wi-Fi peer-to-peer. | M |
+| FR-OFF-2 | Connect to nearby users with no internet: in the browser, over a shared local network / phone hotspot, paired by QR code; in native wrappers, also discover automatically over Bluetooth LE and Wi-Fi Aware/Direct. | M |
 | FR-OFF-3 | Exchange E2EE text messages with existing contacts directly, without internet. | M |
 | FR-OFF-4 | Exchange messages within existing groups while offline. | S |
 | FR-OFF-5 | Multi-hop store-and-forward relay through other app users (mesh), with hop and TTL limits. | S |
 | FR-OFF-6 | Send small media (images, voice notes) over Wi-Fi peer-to-peer links. | S |
-| FR-OFF-7 | Add a new contact in person, offline, via QR code. | S |
+| FR-OFF-7 | Add a new contact in person, offline, via QR code. | M |
 | FR-OFF-8 | Messages exchanged offline sync consistently with server history once back online. | M |
-| FR-OFF-9 | iOS ↔ Android interoperability in offline mode. | S |
+| FR-OFF-9 | Offline mode works across browsers and OSes (any modern browser on the same local network). | M |
+| FR-OFF-10 | Talk to **strangers** nearby: join a local *open room* (public, unauthenticated by phone number, encrypted against outsiders who don't have the room code) and send direct messages to a stranger's in-room identity. | M |
+| FR-OFF-11 | Strangers can be promoted to contacts (exchange of long-term keys, with explicit consent from both). | S |
+| FR-OFF-12 | Local broadcast messages (e.g., emergency notices) relayed by participating devices, clearly labelled as unverified unless signed by a known contact. | S |
 
 ### 1.7 Notifications (NOT)
 
 | ID | Requirement | Pri |
 |----|-------------|-----|
-| FR-NOT-1 | Push notifications for messages and calls. | M |
+| FR-NOT-1 | Push notifications for messages and calls via the Web Push standard (on iOS/iPadOS only once the PWA is installed to the home screen, 16.4+). | M |
 | FR-NOT-2 | Push payloads contain no plaintext content or sender identity; the device decrypts locally to render. | M |
 
 ### 1.8 Safety & moderation (SAF)
@@ -107,6 +112,17 @@ Items marked **[ASSUMPTION]** need stakeholder confirmation (see doc 09).
 | FR-SAF-1 | Users can report a message; the report includes content the reporter chooses to disclose, verifiable via message franking. | S |
 | FR-SAF-2 | Rate limiting and anti-spam on account creation and message sending. | M |
 | FR-SAF-3 | Message requests from non-contacts are held separately until accepted. | S |
+
+---
+
+### 1.9 Platform (PLAT)
+
+| ID | Requirement | Pri |
+|----|-------------|-----|
+| FR-PLAT-1 | Runs in current Chrome/Edge, Firefox, and Safari (desktop + mobile), last 2 major versions. | M |
+| FR-PLAT-2 | Installable PWA with offline app shell (works with no network after first load). | M |
+| FR-PLAT-3 | Requests persistent storage (`navigator.storage.persist()`) and warns the user if it is denied. | M |
+| FR-PLAT-4 | Native wrappers (Android, iOS, desktop) reuse the web UI and core. | S (phase 2) |
 
 ---
 
@@ -123,8 +139,9 @@ Items marked **[ASSUMPTION]** need stakeholder confirmation (see doc 09).
 | NFR-SEC-5 | Server stores the minimum metadata needed; delivery records are deleted after delivery. | M |
 | NFR-SEC-6 | Local data at rest is encrypted, with keys in the platform keystore (Secure Enclave / StrongBox). | M |
 | NFR-SEC-7 | Independent security audit before public launch. | M |
-| NFR-SEC-8 | Client code open source for verifiability. **[ASSUMPTION]** | S |
-| NFR-SEC-9 | Reproducible builds. | C |
+| NFR-SEC-8 | Client, server, and protocol are open source (licence: ADR-0012). | M |
+| NFR-SEC-10 | Web code-delivery integrity: users can verify the JS/WASM they run matches a published, reproducible release (see doc 04 §9). | M |
+| NFR-SEC-9 | Reproducible builds of the web bundle and server images. | M |
 
 ### 2.2 Performance (PERF)
 
@@ -133,8 +150,9 @@ Items marked **[ASSUMPTION]** need stakeholder confirmation (see doc 09).
 | NFR-PERF-1 | Message end-to-end latency (both online, same region) | p95 < 1 s |
 | NFR-PERF-2 | Call setup time | p95 < 3 s |
 | NFR-PERF-3 | Call mouth-to-ear latency | < 300 ms same region |
-| NFR-PERF-4 | Cold app start to conversation list | < 1.5 s on mid-range device |
-| NFR-PERF-5 | Group membership change in a 1,000-member group | < 2 s client CPU on mid-range device |
+| NFR-PERF-4 | Cold PWA start (cached) to conversation list | < 1.5 s on mid-range phone |
+| NFR-PERF-6 | Initial download of web app (compressed JS + WASM) | < 2 MB before first render |
+| NFR-PERF-5 | Group membership change in a 50-member group | < 200 ms client CPU on mid-range phone |
 
 ### 2.3 Scalability & availability (SCALE)
 
@@ -150,7 +168,7 @@ Items marked **[ASSUMPTION]** need stakeholder confirmation (see doc 09).
 | ID | Requirement | Target |
 |----|-------------|--------|
 | NFR-RES-1 | Idle battery drain (online mode, no activity) | < 1% / hour |
-| NFR-RES-2 | Idle battery drain with offline mesh enabled | < 3% / hour **[ASSUMPTION]** |
+| NFR-RES-2 | Idle battery drain with offline mesh enabled (native wrappers) | < 3% / hour |
 | NFR-RES-3 | Data usage for 1:1 video call | Adaptive; ≤ 1.5 Mbps by default |
 
 ### 2.5 Usability & accessibility (UX)
@@ -166,7 +184,8 @@ Items marked **[ASSUMPTION]** need stakeholder confirmation (see doc 09).
 | ID | Requirement | Pri |
 |----|-------------|-----|
 | NFR-LEG-1 | GDPR / CCPA compliance for server-held personal data (export, deletion). | M |
-| NFR-LEG-2 | App store policy compliance (background location, Bluetooth, CallKit rules incl. China). | M |
+| NFR-LEG-2 | Browser permission best practice (ask in context); app-store policy compliance once native wrappers ship. | M |
+| NFR-LEG-5 | SMS-pumping / toll-fraud protection on phone verification. | M |
 | NFR-LEG-3 | Export-control review for cryptography (e.g., US EAR self-classification). | M |
 | NFR-LEG-4 | Dependency licences compatible with our distribution model (note: AGPL libraries). | M |
 
@@ -176,4 +195,5 @@ Items marked **[ASSUMPTION]** need stakeholder confirmation (see doc 09).
 |----|-------------|-----|
 | NFR-OPS-1 | Privacy-preserving telemetry only (aggregate, no content, no per-user tracking). | M |
 | NFR-OPS-2 | Infrastructure as code; zero-downtime deploys. | S |
+| NFR-OPS-4 | One-command self-hosting (Docker Compose) with documented config. | M |
 | NFR-OPS-3 | Protocol versioning so old clients keep working through upgrades. | M |

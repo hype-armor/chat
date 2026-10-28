@@ -1,8 +1,8 @@
 # Design Documentation
 
-Planning documents for the chat service. Nothing here is final: every
-technology choice is still open and is tracked as an Architecture Decision
-Record (ADR) under [`adr/`](adr/).
+Planning documents for the chat service: a web/PWA-first, fully open-source,
+end-to-end encrypted messenger. Technology choices are recorded as
+Architecture Decision Records (ADRs) under [`adr/`](adr/).
 
 | # | Document | Purpose |
 |---|----------|---------|
@@ -12,8 +12,8 @@ Record (ADR) under [`adr/`](adr/).
 | 04 | [Security & Cryptography](04-security-and-cryptography.md) | Threat model and end-to-end encryption design |
 | 05 | [Media & Calling](05-media-and-calling.md) | Attachments, 1:1 and group voice/video |
 | 06 | [Location Sharing](06-location-sharing.md) | One-shot and live location |
-| 07 | [Offline / Serverless Mode](07-offline-mesh.md) | Bluetooth and Wi-Fi peer-to-peer messaging |
-| 08 | [Technology Options](08-technology-options.md) | Candidate stacks and evaluation criteria |
+| 07 | [Offline / Serverless Mode](07-offline-mesh.md) | Local-network mode (web) and Bluetooth/Wi-Fi mesh (native) |
+| 08 | [Technology Stack](08-technology-stack.md) | Chosen technologies and why |
 | 09 | [Roadmap & Open Questions](09-roadmap-and-open-questions.md) | Phasing, milestones, and decisions we need from stakeholders |
 | — | [ADR index](adr/README.md) | Decision log |
 

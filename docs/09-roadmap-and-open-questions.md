@@ -2,71 +2,66 @@
 
 **Status:** Draft
 
-## 1. Phased roadmap (indicative)
+## 1. Stakeholder decisions (2026-10-28)
+
+| Question | Answer | Where applied |
+|----------|--------|---------------|
+| Platforms | Web + PWA first | 01, 03, ADR-0004, ADR-0013 |
+| Identity | Phone number | 02 FR-ID-1, ADR-0011 |
+| Max group size | 50 (chat and calls) | 02 FR-MSG-3, FR-CALL-2 |
+| Offline scope | Contacts **and strangers** | 07 §3.3, FR-OFF-10..12 |
+| Technology | No restrictions — best fit | 08, ADRs 0001–0013 |
+| Openness | Fully open source, self-hostable | 01, NFR-SEC-8, ADR-0012 |
+
+## 2. Phased roadmap
 
 | Phase | Scope | Exit criteria |
 |-------|-------|---------------|
-| **0. Discovery & spikes** | Accept ADRs 0001–0005; spikes: (a) OpenMLS on iOS+Android via Rust core, (b) BLE iOS↔Android text exchange incl. background, (c) SFrame through chosen SFU | Spikes demoed; risks re-assessed |
-| **1. MVP messaging** | Accounts, device keys, 1:1 + group text (MLS), push, encrypted local storage | Internal dogfood; delivery p95 < 1 s |
-| **2. Media & location** | Encrypted attachments, voice notes, one-shot + live location | Feature-complete beta |
-| **3. Calling** | 1:1 calls, then group calls via SFU with SFrame | Call success ≥ 99% |
-| **4. Offline mode** | BLE text with contacts, then mesh relay, then Wi-Fi media | Field test (100+ devices) |
-| **5. Hardening & launch** | Multi-device, key transparency, external audit, bug bounty | Audit findings closed |
-| Later | Desktop, web, backups, federation, LoRa hardware | — |
+| **0. Spikes** | (a) OpenMLS in WASM in all 3 browser engines, 50-member commit timing; (b) SQLite3MultipleCiphers on OPFS; (c) QR-paired WebRTC on a phone hotspot with no internet (iOS Safari PWA + Android Chrome), third peer joining via the mesh; (d) SFrame-encrypted 3-party call through LiveKit | All four demoed; ADRs confirmed or superseded |
+| **1. MVP messaging (web)** | Phone sign-up, device keys, 1:1 + groups (MLS), Web Push, encrypted local DB, PWA install, device linking by QR | Internal dogfood; delivery p95 < 1 s |
+| **2. Media, location, backup** | Encrypted attachments, voice notes, one-shot + live location (foreground), encrypted backup | Feature-complete beta |
+| **3. Calling** | 1:1 P2P calls, then group calls via LiveKit with SFrame | Call success ≥ 99% |
+| **4. Local mode (Tier 1 offline)** | QR rooms, contacts + strangers, mesh relay, local calls, sync back online | Field test with 20+ devices |
+| **5. Hardening & public launch** | Release transparency log + update gate, reproducible builds, key transparency, external audit, self-host package, bug bounty | Audit findings closed |
+| **6. Native wrappers & radio mesh (Tier 2)** | Capacitor Android/iOS + Tauri desktop; BLE / Wi-Fi Aware mesh; CallKit/Telecom ringing; background location | Field test with 100+ devices |
+| Later | Federation (MIMI), LoRa hardware bridge | — |
 
-Offline spike is in Phase 0 deliberately: it is the requirement most likely
-to force architectural changes (protocol choice, platform choice).
-
-## 2. Top risks
+## 3. Top risks
 
 | Risk | Impact | Mitigation |
 |------|--------|-----------|
-| iOS background BLE limits make offline mode unreliable | High | Early spike; set honest UX expectations (foreground mode) |
-| MLS ordering vs. offline mode | High | "Freeze membership offline" (doc 07 §4) |
-| Group call E2EE complexity | Medium | Use SFU with proven SFrame support |
-| Building our own crypto integration incorrectly | High | Audited libraries only; external audit; fuzzing |
-| Abuse/spam with no content visibility | Medium | Franking, rate limits, message requests |
-| App store policy (background location/BLE/VoIP push) | Medium | Early policy review |
+| Web code delivery: a compromised server ships malicious JS to a target | High | Doc 04 §9: reproducible builds, transparency log, service-worker update gate, native wrappers for high-risk users |
+| Browser storage eviction loses keys/history | High | Persistent storage request, install prompt, linked devices, encrypted backup |
+| Hotspot/LAN quirks break QR-paired WebRTC (client isolation, mDNS) | High | Phase 0 spike (c); fallback: the hotspot host relays for others |
+| No background execution on web (missed calls, live location pauses) | Medium | Honest UX; native wrappers in phase 6 |
+| Stranger spam/abuse offline (no phone verification) | Medium | Doc 07 §8 |
+| SMS-pumping fraud and SMS cost | Medium | Rate limits, CAPTCHA/proof-of-work before sending codes, blocking premium-rate number ranges |
+| MLS ordering vs. offline | Medium | Membership frozen offline (ADR-0007) |
+| iOS Safari gaps (Web Push needs an installed PWA, WebRTC/encoded-transform quirks) | Medium | Feature detection; test in WebKit on every PR (Playwright) |
 
-## 3. Open questions for stakeholders
+## 4. Remaining open questions
 
-1. **Platforms**: iOS + Android first? Is desktop or web needed at launch?
-2. **Identity**: phone number, username, email, or anonymous IDs? (Phone
-   numbers ease discovery but are a privacy/metadata cost.)
-3. **Scale**: expected users at launch and in 2 years? Max group size (1,000
-   assumed)? Max group call size (32 video assumed)?
-4. **Open source**: will client and/or server code be published?
-5. **Hosting / jurisdiction**: where will servers run? Any data-residency
+1. **Licence**: AGPL-3.0 for everything, or AGPL apps + Apache-2.0 core
+   library (ADR-0012)?
+2. **Hosting & jurisdiction** for the flagship instance; any data-residency
    needs?
-6. **Business model**: free / paid / enterprise? Affects backups, storage
-   retention, federation.
-7. **Backups**: are encrypted cloud backups required, or is device-to-device
-   transfer enough?
-8. **Offline scope**: contacts only, or also discovering/messaging strangers
-   nearby (e.g., disaster broadcast)? Must offline mode work in the
-   background on iOS?
-9. **Federation / self-hosting**: should organisations be able to run their
-   own server?
-10. **Team**: existing language/platform skills (Rust? Swift/Kotlin?
-    Flutter? Go/Elixir?) — strongly influences ADR-0003/0005.
-11. **Compliance**: any regulated customers (health, government) or target
-    regions with E2EE restrictions?
-12. **Retention defaults**: 30-day server queue / blob retention acceptable?
+3. **Business model / funding**: affects the SMS budget, storage retention,
+   and audit funding.
+4. **Retention defaults**: is 30 days for queued messages and attachment
+   blobs acceptable?
+5. **Attachment size limit**: 100 MB?
+6. **Launch scale**: is 100k monthly active users / 10k concurrent the
+   right first target?
+7. **Moderation stance**: no client-side scanning (current position); is
+   the user-report + message-franking approach enough?
 
-## 4. Assumptions register
-
-All `[ASSUMPTION]` tags across docs 01–08, collected:
+## 5. Assumptions register (still to confirm)
 
 | Doc | Assumption |
 |-----|------------|
-| 01 | iOS + Android first; desktop/web later |
-| 02 | Phone number optional; username supported |
-| 02 | Max group 1,000; group video 32 / audio 100 |
-| 02 | Offline queue + blob retention 30 days |
-| 02 | Attachment limit 100 MB |
+| 02 | Queued-message and blob retention: 30 days |
+| 02 | Attachment limit: 100 MB |
 | 02 | 100k MAU initial capacity |
-| 02 | Mesh idle battery < 3%/h |
-| 02 | Client open source |
 | 04 | No client-side content scanning |
-| 06 | Live location relayed ≤ 2 hops offline |
-| 07 | Mesh hop limit 7, TTL 24 h; no backfill of offline history |
+| 05 | Max 16 video tiles visible in a 50-person call |
+| 07 | Mesh hop limit 7, TTL 24 h, 50 MB relay quota, ≤ 8 direct peers per device |
