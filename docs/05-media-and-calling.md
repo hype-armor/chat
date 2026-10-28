@@ -1,0 +1,95 @@
+# 05 — Media & Calling
+
+**Status:** Draft
+
+## 1. Attachments
+
+### Pipeline (sender)
+1. Pre-process on device: strip EXIF/GPS (FR-MED-8), transcode/compress
+   per quality setting, generate thumbnail/blurhash.
+2. Generate a random 256-bit key; encrypt with a **chunked streaming AEAD**
+   (e.g., AES-256-GCM or ChaCha20-Poly1305 per chunk with chunk index in
+   nonce/AD) so large files can be streamed, resumed, and seeked.
+3. Pad ciphertext to a size bucket to hide exact length.
+4. Upload to blob storage via a pre-signed URL (resumable protocol,
+   e.g., tus or S3 multipart).
+5. Send a regular E2EE message carrying `{blob_id, key, ciphertext_hash,
+   mime, size, dimensions/duration, encrypted thumbnail}`.
+
+### Receiver
+Download (from CDN), verify hash, decrypt chunk-wise, cache locally
+encrypted.
+
+### Group fan-out
+Upload **once**; the key goes into one group message. No per-recipient
+re-upload.
+
+### Retention
+Blobs expire after **[ASSUMPTION]** 30 days or after all recipients'
+devices have fetched (whichever policy we choose; the latter leaks more
+metadata to the server).
+
+## 2. Calling overview
+
+All real-time media uses a WebRTC-class stack (ICE, DTLS-SRTP, Opus,
+VP8/VP9/AV1/H.264) because it is the only mature, cross-platform option with
+NAT traversal, echo cancellation, and bandwidth estimation built in.
+
+| Call type | Topology | Server role |
+|-----------|----------|-------------|
+| 1:1 | Peer-to-peer; TURN relay fallback (or forced relay for IP privacy) | Signalling + TURN |
+| Group (3–32 video) | **SFU** (Selective Forwarding Unit) | Forwards encrypted frames; never decrypts |
+| Large audio-only (≤100) | SFU with audio-level-based forwarding | Same |
+| Offline (Wi-Fi P2P) 1:1 | Direct, local network | None |
+
+Mesh (everyone sends to everyone) is rejected for groups > 4: upload
+bandwidth grows O(n).
+
+## 3. Signalling
+
+- Call offer/answer/ICE candidates are sent as **E2EE messages** over the
+  normal messaging channel (so the server can't tamper with DTLS
+  fingerprints).
+- Server-side signalling only allocates SFU rooms/TURN credentials and rings
+  devices via VoIP push (PushKit on iOS / high-priority FCM on Android).
+
+## 4. End-to-end encryption of call media
+
+DTLS-SRTP alone is hop-by-hop when an SFU is present (the SFU terminates
+DTLS). So we add an **inner frame-level encryption layer**:
+
+- **SFrame (RFC 9605)** applied to each encoded media frame before
+  packetisation, using WebRTC Encoded Transform / insertable streams.
+- **Keys**: derived from the conversation's MLS group via the MLS *exporter*
+  (`MLS-Exporter("call", call_id, 32)`); each sender gets its own key ID.
+  When membership changes, the MLS epoch advances and call keys rotate.
+- The SFU sees only RTP headers + minimal metadata needed for routing
+  (and SFrame headers), never media content.
+
+For 1:1 P2P calls, DTLS-SRTP with fingerprints verified through the E2EE
+signalling channel is already end-to-end; we still apply SFrame for
+uniformity so that a call can be upgraded to a group call without a key
+change.
+
+## 5. Quality & scale features
+
+- **Simulcast** (or SVC with VP9/AV1) so the SFU can forward the right layer
+  per receiver.
+- Active-speaker detection via audio-level RTP header extension (unencrypted
+  by design — a known small metadata leak; document it).
+- Last-N video forwarding for large groups.
+- Bandwidth estimation (transport-cc / GCC), FEC/RED for audio.
+- ICE restart on network change (FR-CALL-8).
+
+## 6. Infrastructure sizing (rough, to validate)
+
+| Item | Rough figure |
+|------|--------------|
+| 1:1 calls relayed via TURN | ~15–20% of calls (higher if IP-hiding default) |
+| Video bitrate per stream | 0.3–1.5 Mbps |
+| SFU capacity | ~hundreds of participants per core; benchmark chosen SFU |
+
+## 7. Open questions
+- Build on an existing SFU (LiveKit, mediasoup, Janus, Jitsi, Pion-based) vs
+  a custom one — ADR-0006.
+- Do we record calls? (Proposed: **no** server-side recording, ever.)
