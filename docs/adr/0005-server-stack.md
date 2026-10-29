@@ -20,4 +20,4 @@ A single Rust binary with internal modules (gateway, accounts, contact lookup, k
 Modules must keep clean boundaries so they can be split into services later. Each server instance needs a shared connection registry (Valkey pub/sub).
 
 ## Validation
-Load test: 10k concurrent WebSockets and 1k msgs/s on one modest node.
+Load test on the launch server: 1,000 concurrent WebSockets and 100 msgs/s (10× launch headroom), with delivery p95 < 1 s.

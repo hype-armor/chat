@@ -27,7 +27,7 @@ cost to operate**.
 | Federation | Not in v1; self-hosting in v1 | 0009 |
 | Backup | Encrypted backup with user-held recovery key | 0010 |
 | Identity | Phone number + SMS/voice one-time code via pluggable provider | 0011 |
-| Licence | AGPL-3.0-or-later for code; CC BY 4.0 for the protocol spec (**proposed**) | 0012 |
+| Licence | AGPL-3.0-or-later for code; CC BY 4.0 for the protocol spec | 0012 |
 | Native wrappers (later) | **Capacitor** (Android/iOS), **Tauri** (desktop), reusing the web UI and core | 0013 |
 
 ## Why these fit
@@ -48,7 +48,7 @@ cost to operate**.
   editors; the WASM core is loaded once and cached.
 
 ### Rust server as a modular monolith
-- At the stated scale (groups ≤ 50) one binary with clear internal modules
+- At launch scale (100 users, groups ≤ 50) one binary with clear internal modules
   (gateway, accounts, keys, delivery, blobs, push, signalling) is simpler
   to run and to self-host. Modules split into services only if load
   demands it.

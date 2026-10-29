@@ -1,6 +1,6 @@
 # ADR-0012: Licence: AGPL-3.0-or-later (code), CC BY 4.0 (spec)
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-28
 - **Related requirements:** NFR-SEC-8
 
@@ -13,10 +13,10 @@ The project is fully open. We want modifications to hosted servers to remain ope
 3. **Split**: AGPL for server/app, Apache-2.0 for the core library to encourage third-party clients.
 
 ## Decision
-Proposed: AGPL-3.0-or-later for server and client, CC BY 4.0 for the protocol spec. Needs a stakeholder decision; the split option is a reasonable alternative.
+AGPL-3.0-or-later for all code (server, client, core), CC BY 4.0 for the protocol spec. The licence text is in the repository root `LICENSE`.
 
 ## Consequences
 Some companies won't use AGPL code.
 
 ## Validation
-Stakeholder sign-off.
+Stakeholder sign-off received 2026-10-29.

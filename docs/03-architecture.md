@@ -148,7 +148,7 @@ flowchart LR
 | Device | device_id, account_id, identity public key, Web Push subscription, last_seen (coarse) | Until unlinked |
 | KeyPackage | device_id, package bytes, expires_at | Until consumed/expired |
 | QueuedEnvelope | recipient_device_id, envelope bytes, received_at | Until acked or 30 days |
-| Blob | blob_id, size, expires_at | **[ASSUMPTION]** 30 days |
+| Blob | blob_id, size, expires_at | 30 days |
 | GroupEpoch | group_id (opaque), current epoch, last commit hash | Life of group |
 
 The server **does not** store: message content, conversation history, contact

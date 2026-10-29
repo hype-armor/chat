@@ -11,7 +11,11 @@
 | Max group size | 50 (chat and calls) | 02 FR-MSG-3, FR-CALL-2 |
 | Offline scope | Contacts **and strangers** | 07 §3.3, FR-OFF-10..12 |
 | Technology | No restrictions — best fit | 08, ADRs 0001–0013 |
-| Openness | Fully open source, self-hostable | 01, NFR-SEC-8, ADR-0012 |
+| Openness | Fully open source, self-hostable | 01, NFR-SEC-8 |
+| Licence (2026-10-29) | AGPL-3.0-or-later (code), CC BY 4.0 (spec) | ADR-0012, `LICENSE` |
+| Retention (2026-10-29) | 30 days for undelivered messages and attachments | 02 FR-MSG-9, 05 §1 |
+| Attachment limit (2026-10-29) | 100 MB | 02 FR-MED-3 |
+| Launch scale (2026-10-29) | 100 users | 02 NFR-SCALE-1, §5 below |
 
 ## 2. Phased roadmap
 
@@ -41,27 +45,35 @@
 
 ## 4. Remaining open questions
 
-1. **Licence**: AGPL-3.0 for everything, or AGPL apps + Apache-2.0 core
-   library (ADR-0012)?
-2. **Hosting & jurisdiction** for the flagship instance; any data-residency
-   needs?
-3. **Business model / funding**: affects the SMS budget, storage retention,
-   and audit funding.
-4. **Retention defaults**: is 30 days for queued messages and attachment
-   blobs acceptable?
-5. **Attachment size limit**: 100 MB?
-6. **Launch scale**: is 100k monthly active users / 10k concurrent the
-   right first target?
-7. **Moderation stance**: no client-side scanning (current position); is
-   the user-report + message-franking approach enough?
+1. **Hosting & jurisdiction** for the main instance (undecided). §5 lists
+   what launch needs; any VPS provider or cloud account will do.
+2. **Funding**: covers SMS costs, hosting, and the external security audit
+   (the audit is the largest single cost).
+3. **Moderation stance**: no client-side scanning (current position); is
+   user reports + message franking enough?
 
-## 5. Assumptions register (still to confirm)
+## 5. Launch deployment (100 users)
+
+At 100 users the whole stack fits on **one modest server**, so hosting can
+stay undecided until Phase 1 without blocking work:
+
+| Item | Launch sizing |
+|------|---------------|
+| Server | One VM, ~4 vCPU / 8 GB RAM, running everything via Docker Compose (Rust server, PostgreSQL, Valkey, MinIO, LiveKit, coturn) |
+| Storage | ~100 GB disk is ample: 100 users × 30-day attachment retention, plus a regional map extract (a full planet tile file is ~100 GB, so start with the regions we need) |
+| Bandwidth | Dominated by group calls and TURN relays; a provider with generous included egress matters more than CPU |
+| Network | Public IPv4, UDP ports open for WebRTC/TURN, a domain with HTTPS |
+| Backups | Nightly PostgreSQL dump to separate storage (holds only ciphertext + account data) |
+| SMS | Any provider behind the pluggable interface; at 100 users cost is negligible |
+
+What to weigh when choosing a host: jurisdiction (legal requests can only
+get metadata, but less is better), UDP support, egress pricing, and
+whether self-hosters can copy the setup easily.
+
+## 6. Assumptions register (still to confirm)
 
 | Doc | Assumption |
 |-----|------------|
-| 02 | Queued-message and blob retention: 30 days |
-| 02 | Attachment limit: 100 MB |
-| 02 | 100k MAU initial capacity |
 | 04 | No client-side content scanning |
 | 05 | Max 16 video tiles visible in a 50-person call |
 | 07 | Mesh hop limit 7, TTL 24 h, 50 MB relay quota, ≤ 8 direct peers per device |

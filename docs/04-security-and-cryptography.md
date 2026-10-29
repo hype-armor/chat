@@ -100,7 +100,7 @@ membership changes deferred until online).
   message was really sent by the accused, without the server reading
   unreported messages.
 - Rate limiting, registration friction, and user-side blocking.
-- No client-side scanning of content. **[ASSUMPTION — policy decision]**
+- No client-side scanning of content. **[ASSUMPTION — policy decision, doc 09]**
 
 ## 7. Backup (ADR-0010)
 Browsers can evict storage, so "device transfer only" is not enough for a

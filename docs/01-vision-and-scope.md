@@ -52,7 +52,7 @@ browsers cannot provide (see doc 07).
 
 Fully open: client, server, protocol spec, and infrastructure config are
 public. Anyone can self-host a server (Docker Compose). Licence proposed in
-ADR-0012.
+ADR-0012: AGPL-3.0-or-later for code, CC BY 4.0 for the protocol spec.
 
 ## Success metrics (initial)
 

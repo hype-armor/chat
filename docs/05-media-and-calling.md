@@ -26,9 +26,9 @@ Upload **once**; the key goes into one group message. No per-recipient
 re-upload.
 
 ### Retention
-Blobs expire after **[ASSUMPTION]** 30 days or after all recipients'
-devices have fetched (whichever policy we choose; the latter leaks more
-metadata to the server).
+Blobs expire after 30 days, whether or not they were fetched. (Deleting
+once every recipient has fetched would need the server to track fetches,
+which leaks more metadata.)
 
 ## 2. Calling overview
 

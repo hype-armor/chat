@@ -36,7 +36,7 @@ Items marked **[ASSUMPTION]** need stakeholder confirmation (see doc 09).
 | FR-MSG-6 | Typing indicators (can be disabled). | S |
 | FR-MSG-7 | Reply/quote, reactions, edit, delete-for-everyone (time-limited). | S |
 | FR-MSG-8 | Disappearing messages with per-conversation timer. | S |
-| FR-MSG-9 | Messages sent while offline are queued and sent on reconnect; messages to offline recipients are held server-side until fetched or expired (30 days, pending confirmation — doc 09). | M |
+| FR-MSG-9 | Messages sent while offline are queued and sent on reconnect; messages to offline recipients are held server-side until fetched or expired (30 days). | M |
 | FR-MSG-10 | Message history is available on a newly linked device (encrypted device-to-device transfer). | S |
 | FR-MSG-13 | Encrypted backup of keys and history with a user-held recovery key, because browsers can evict site storage. | S |
 | FR-MSG-11 | Mentions (@user) and per-conversation mute/notification settings. | S |
@@ -48,7 +48,7 @@ Items marked **[ASSUMPTION]** need stakeholder confirmation (see doc 09).
 |----|-------------|-----|
 | FR-MED-1 | Send images, video, audio clips, voice notes, and arbitrary files. | M |
 | FR-MED-2 | Attachments are encrypted on the device before upload; server stores only ciphertext. | M |
-| FR-MED-3 | Max attachment size **[ASSUMPTION]** 100 MB (2 GB for files: Could). | M |
+| FR-MED-3 | Max attachment size 100 MB. | M |
 | FR-MED-4 | Thumbnails/previews generated on the sending device and sent encrypted. | M |
 | FR-MED-5 | Optional compression/quality settings; resumable uploads and downloads. | S |
 | FR-MED-6 | Media auto-download policy configurable per network type (Wi-Fi / cellular). | S |
@@ -158,7 +158,7 @@ Items marked **[ASSUMPTION]** need stakeholder confirmation (see doc 09).
 
 | ID | Requirement | Target |
 |----|-------------|--------|
-| NFR-SCALE-1 | Initial capacity **[ASSUMPTION]** | 100k MAU, 10k concurrent; architecture scales horizontally to 10M MAU |
+| NFR-SCALE-1 | Launch capacity | 100 users on a single server; growth to ~10k users without redesign (more hardware only); horizontal scaling beyond that is possible but not built for v1 |
 | NFR-SCALE-2 | Messaging service availability | 99.9% monthly |
 | NFR-SCALE-3 | No message loss once the server has acknowledged receipt | Durable write before ack |
 | NFR-SCALE-4 | Multi-region deployment | Should (phase 2) |
