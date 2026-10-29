@@ -25,7 +25,7 @@ import {
   throwUnlessAccepted,
 } from './commits'
 import { RecentIds, fromHex, makeIdentity, plain, randomId, splitIdentity, toHex } from './ids'
-import { type DeviceSync, deviceHex, linkText, ownDevicePlan, parseDeviceSync, parseLinkCode } from './devices'
+import { type DeviceSync, deviceHex, linkText, memberDevicePlan, parseDeviceSync, parseLinkCode } from './devices'
 import { applyReceipt, splitIds } from './receipts'
 import {
   KEY_PACKAGE_TARGET,
@@ -52,6 +52,8 @@ import { SecureStore } from './storage'
 
 /** How long the server may take to answer a request before we reconnect. */
 const REQUEST_TIMEOUT_MS = 20_000
+/** Check members' device lists this often while connected (ADR-0022). */
+const MEMBER_CHECK_MS = 10 * 60_000
 /** Check the server's key-package count this often while connected. */
 const KEY_PACKAGE_CHECK_MS = 6 * 60 * 60_000
 const MAX_RECONNECT_MS = 30_000
@@ -184,6 +186,7 @@ export class Engine {
   private retryTimer?: ReturnType<typeof setTimeout>
   private replenishing = false
   private keyCheckTimer?: ReturnType<typeof setInterval>
+  private memberCheckTimer?: ReturnType<typeof setInterval>
   /** Pending own-device reconciliation (see `syncOwnDevices`). */
   private syncTimer?: ReturnType<typeof setTimeout>
   /** Sync runs, one after another (a caller may need the next one to finish). */
@@ -422,7 +425,7 @@ export class Engine {
   }
 
   /**
-   * Keeps this account's devices in each of its groups (ADR-0019): adds
+   * Keeps every member's devices in each group (ADR-0019, ADR-0022): adds
    * missing ones, removes deleted ones, and creates the self conversation.
    */
   private syncOwnDevices(): Promise<void> {
@@ -441,9 +444,10 @@ export class Engine {
       const hasSelf = Object.values(this.state.conversations).some((c) => c.self && !c.status)
       // The oldest device creates it; duplicates from races are tolerated.
       if (!hasSelf && mine.length > 1 && mine[0] === thisDevice) await this.createSelfConversation(mine)
+      const live = await this.liveDevices(mine)
       for (const id of Object.keys(this.state.conversations)) {
         try {
-          await this.reconcileDevices(id, mine)
+          await this.reconcileDevices(id, live)
         } catch (e) {
           console.warn('updating devices in a conversation failed', e)
         }
@@ -454,61 +458,95 @@ export class Engine {
     this.emitView()
   }
 
-  private async reconcileDevices(conversationId: string, mine: string[]) {
-    const { account, core } = this.ready()
-    const conv = this.state.conversations[conversationId]
-    if (!conv || conv.status || this.state.pendingCommit) return
+  /**
+   * Every member account's current devices (hex), from the server; accounts
+   * it doesn't return no longer exist (ADR-0022).
+   */
+  private async liveDevices(mine: string[]): Promise<Record<string, string[]>> {
     const me = this.myAccount()
-    const members = (core.members(fromHex(conversationId)) as Uint8Array[]).map((m) => {
-      const { account, device } = splitIdentity(m)
-      return { account, device: toHex(device) }
-    })
-    const plan = ownDevicePlan(members, me, deviceHex(account.deviceId), mine)
-    if (!plan) return
-    if (plan.stale.length > 0) {
-      await this.exclusive(async () => {
-        if (this.state.pendingCommit || this.connection !== 'online') return
-        await this.flushOutbox(true)
-        const everyone = this.recipients(conversationId)
-        const staged = core.removeMembers(
-          fromHex(conversationId),
-          plan.stale.map((d) => fromHex(me + d)),
-          randomId(),
-        )
-        const pending: PendingCommit = { conversationId, commitHash: toBase64(staged.commitHash) }
-        await this.sendCommit(pending, staged.commit, everyone)
-      })
-      return // anything missing is added on the next pass
-    }
-    if (plan.missing.length === 0) return
-    const invitee = await this.ownInvitee(plan.missing)
-    if (!invitee) return
-    await this.exclusive(async () => {
-      if (this.state.pendingCommit || this.connection !== 'online') return
-      await this.flushOutbox(true)
-      const existing = this.recipients(conversationId)
-      const added = core.addMembers(fromHex(conversationId), invitee.keyPackages, randomId(), randomId())
-      const pending: PendingCommit = {
-        conversationId,
-        commitHash: toBase64(added.commitHash),
-        invitees: [{ account: me, username: account.username, devices: invitee.devices }],
+    const others = new Set<string>()
+    for (const c of Object.values(this.state.conversations)) {
+      if (c.status) continue
+      for (const m of this.core!.members(fromHex(c.id)) as Uint8Array[]) {
+        const { account } = splitIdentity(m)
+        if (account !== me) others.add(account)
       }
-      const welcome = { envelope: added.welcome, recipients: invitee.devices }
-      await this.sendCommit(pending, added.commit, existing, welcome)
-    })
+    }
+    const live: Record<string, string[]> = { [me]: mine }
+    const accounts = [...others]
+    for (let i = 0; i < accounts.length; i += 200) {
+      const chunk = accounts.slice(i, i + 200)
+      const { devices } = await api.devicesOf(this.account!.token, chunk)
+      for (const [account, ids] of Object.entries(devices)) live[deviceHex(account)] = ids.map(deviceHex)
+    }
+    return live
+  }
+
+  /**
+   * Brings a group's members' devices in line with `live` (ADR-0022), one
+   * commit at a time: additions first, so a restored account still has a
+   * leaf when its lost devices are removed.
+   */
+  private async reconcileDevices(conversationId: string, live: Record<string, string[]>) {
+    const { account, core } = this.ready()
+    for (let round = 0; round < 4; round++) {
+      const conv = this.state.conversations[conversationId]
+      if (!conv || conv.status || this.state.pendingCommit || this.connection !== 'online') return
+      const members = (core.members(fromHex(conversationId)) as Uint8Array[]).map((m) => {
+        const { account, device } = splitIdentity(m)
+        return { account, device: toHex(device) }
+      })
+      const plans = memberDevicePlan(members, live, deviceHex(account.deviceId))
+      const adding = plans.find((p) => p.missing.length > 0)
+      const removing = plans.filter((p) => p.stale.length > 0)
+      let outcome: CommitOutcome | undefined
+      if (adding) {
+        const invitee = await this.deviceInvitee(adding.account, adding.missing)
+        if (!invitee) return
+        outcome = await this.exclusive(async () => {
+          if (this.state.pendingCommit || this.connection !== 'online') return undefined
+          await this.flushOutbox(true)
+          const existing = this.recipients(conversationId)
+          const added = core.addMembers(fromHex(conversationId), invitee.keyPackages, randomId(), randomId())
+          const pending: PendingCommit = {
+            conversationId,
+            commitHash: toBase64(added.commitHash),
+            invitees: [{ account: invitee.account, username: invitee.username, devices: invitee.devices }],
+          }
+          const welcome = { envelope: added.welcome, recipients: invitee.devices }
+          return this.sendCommit(pending, added.commit, existing, welcome)
+        })
+      } else if (removing.length > 0) {
+        outcome = await this.exclusive(async () => {
+          if (this.state.pendingCommit || this.connection !== 'online') return undefined
+          await this.flushOutbox(true)
+          const everyone = this.recipients(conversationId)
+          const identities = removing.flatMap((p) => p.stale.map((d) => fromHex(p.account + d)))
+          const staged = core.removeMembers(fromHex(conversationId), identities, randomId())
+          const pending: PendingCommit = { conversationId, commitHash: toBase64(staged.commitHash) }
+          return this.sendCommit(pending, staged.commit, everyone)
+        })
+      }
+      if (outcome !== 'accepted') return
+    }
   }
 
   /** Claims key packages for some of this account's devices (hex ids). */
-  private async ownInvitee(devices: string[]): Promise<Invitee | undefined> {
-    const { account } = this.ready()
+  private ownInvitee(devices: string[]): Promise<Invitee | undefined> {
+    return this.deviceInvitee(this.myAccount(), devices)
+  }
+
+  /** Claims key packages for some devices (hex ids) of an account. */
+  private async deviceInvitee(account: string, devices: string[]): Promise<Invitee | undefined> {
+    const { account: me } = this.ready()
     if (devices.length === 0) return undefined
-    const claimed = await api.claim(account.token, devices)
+    const claimed = await api.claim(me.token, devices)
     const packages = new Map(Object.entries(claimed.key_packages).map(([id, kp]) => [deviceHex(id), kp]))
     const found = devices.filter((d) => packages.has(d))
     if (found.length === 0) return undefined
     return {
-      username: account.username,
-      account: this.myAccount(),
+      username: account === this.myAccount() ? me.username : (this.state.usernames[account] ?? ''),
+      account,
       devices: found,
       keyPackages: found.map((d) => fromBase64(packages.get(d)!)),
     }
@@ -1177,6 +1215,10 @@ export class Engine {
     this.keyCheckTimer ??= setInterval(() => {
       if (this.connection === 'online') void this.replenishKeyPackages()
     }, KEY_PACKAGE_CHECK_MS)
+    // Members' devices change without telling us (restores, deletions).
+    this.memberCheckTimer ??= setInterval(() => {
+      if (this.connection === 'online') this.scheduleSync()
+    }, MEMBER_CHECK_MS)
     ws.onmessage = (event) => this.onFrame(decodeServerFrame(new Uint8Array(event.data as ArrayBuffer)))
     ws.onclose = () => {
       if (this.ws !== ws) return // replaced or signed out
@@ -1510,7 +1552,9 @@ export class Engine {
     if (p.invitees && conv?.self) {
       this.queueDeviceSync(p.conversationId)
     } else if (p.invitees) {
-      for (const i of p.invitees) if (i.account !== this.myAccount()) this.state.usernames[i.account] = i.username
+      for (const i of p.invitees) {
+        if (i.account !== this.myAccount() && i.username) this.state.usernames[i.account] = i.username
+      }
       if (conv?.name) this.queueGroupInfo(p.conversationId, conv.name, conv.admins ?? [])
       this.queueProfile(p.conversationId)
     }

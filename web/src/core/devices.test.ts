@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { deviceHex, linkText, ownDevicePlan, parseDeviceSync, parseLinkCode } from './devices'
+import { deviceHex, linkText, memberDevicePlan, parseDeviceSync, parseLinkCode } from './devices'
 
 const code = 'AAECAwQFBgcICQoLDA0ODw'
 
@@ -15,22 +15,33 @@ describe('link codes', () => {
   })
 })
 
-describe('ownDevicePlan', () => {
-  const me = 'aa'
+describe('memberDevicePlan', () => {
   const members = [
-    { account: 'bb', device: 'b1' },
-    { account: me, device: 'd1' },
-    { account: me, device: 'd2' },
+    { account: 'bob', device: 'b1' },
+    { account: 'me', device: 'd1' },
+    { account: 'me', device: 'd2' },
   ]
-  it('only the lowest own leaf acts', () => {
-    expect(ownDevicePlan(members, me, 'd2', ['d1', 'd2', 'd3'])).toBeUndefined()
-    expect(ownDevicePlan(members, me, 'd1', ['d1', 'd2', 'd3'])).toEqual({ stale: [], missing: ['d3'] })
+  it('an account keeps its own devices: only its lowest live leaf acts', () => {
+    const live = { me: ['d1', 'd2', 'd3'], bob: ['b1'] }
+    expect(memberDevicePlan(members, live, 'd2')).toEqual([])
+    expect(memberDevicePlan(members, live, 'd1')).toEqual([{ account: 'me', missing: ['d3'], stale: [] }])
   })
   it('removes devices that no longer exist', () => {
-    expect(ownDevicePlan(members, me, 'd1', ['d1'])).toEqual({ stale: ['d2'], missing: [] })
+    expect(memberDevicePlan(members, { me: ['d1'], bob: ['b1'] }, 'd1')).toEqual([
+      { account: 'me', missing: [], stale: ['d2'] },
+    ])
   })
-  it('does nothing in groups this device is not in', () => {
-    expect(ownDevicePlan([{ account: 'bb', device: 'b1' }], me, 'd1', ['d1'])).toBeUndefined()
+  it('a restored account is handled by the group: new device added, lost ones removed', () => {
+    // Bob restored onto b9; b1 is gone. The group's lowest live leaf (d1) acts.
+    const live = { me: ['d1', 'd2'], bob: ['b9'] }
+    expect(memberDevicePlan(members, live, 'd1')).toEqual([{ account: 'bob', missing: ['b9'], stale: ['b1'] }])
+    expect(memberDevicePlan(members, live, 'd2')).toEqual([])
+  })
+  it('a deleted account has its leaves removed', () => {
+    expect(memberDevicePlan(members, { me: ['d1', 'd2'] }, 'd1')).toEqual([{ account: 'bob', missing: [], stale: ['b1'] }])
+  })
+  it("doesn't act for a contact who can act themselves", () => {
+    expect(memberDevicePlan(members, { me: ['d1', 'd2'], bob: ['b1', 'b2'] }, 'd1')).toEqual([])
   })
 })
 

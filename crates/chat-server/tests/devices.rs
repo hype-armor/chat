@@ -208,3 +208,64 @@ async fn sends_skip_removed_devices(pool: PgPool) {
         other => panic!("{other:?}"),
     }
 }
+
+#[sqlx::test]
+async fn members_see_each_others_devices_only(pool: PgPool) {
+    let server = TestServer::start(pool).await;
+    let (alice, alice_token) = server.register("alice.01").await;
+    let (bob, bob_token) = server.register("bob.01").await;
+    let (bob2, _) = link(&server, &bob_token).await;
+    let (carol, _) = server.register("carol.01").await;
+    let (dave, dave_token) = server.register("dave.01").await;
+    server.admit(b"g", &[alice, bob]).await;
+    let account = |token: String, username: &'static str| {
+        let server = &server;
+        async move {
+            let (_, found) = server
+                .post("/v1/lookup", Some(&token), json!({ "username": username }))
+                .await;
+            found["account_id"].as_str().unwrap().to_owned()
+        }
+    };
+    let (bob_account, carol_account) = (
+        account(alice_token.clone(), "bob.01").await,
+        account(alice_token.clone(), "carol.01").await,
+    );
+
+    // Bob shares a conversation with Alice: all his devices, including the
+    // new one that isn't in it yet. Carol shares none: absent.
+    let ask = json!({ "account_ids": [bob_account, carol_account] });
+    let (status, body) = server
+        .post("/v1/devices/of", Some(&alice_token), ask.clone())
+        .await;
+    assert_eq!(status, 200, "{body}");
+    let bobs: Vec<&str> = body["devices"][&bob_account]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d.as_str().unwrap())
+        .collect();
+    assert_eq!(bobs, [bob.to_string(), bob2.to_string()]);
+    assert!(body["devices"].get(&carol_account).is_none());
+    let (_, body) = server.post("/v1/devices/of", Some(&dave_token), ask).await;
+    assert_eq!(body["devices"], json!({}), "strangers learn nothing");
+
+    // A deleted account disappears from the answer.
+    let (status, _) = server
+        .post(
+            "/v1/account/delete",
+            Some(&bob_token),
+            json!({ "username": "bob.01" }),
+        )
+        .await;
+    assert_eq!(status, 204);
+    let (_, body) = server
+        .post(
+            "/v1/devices/of",
+            Some(&alice_token),
+            json!({ "account_ids": [bob_account] }),
+        )
+        .await;
+    assert_eq!(body["devices"], json!({}));
+    let _ = (carol, dave);
+}

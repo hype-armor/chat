@@ -28,3 +28,4 @@ revisited; do it with a new ADR that supersedes the old one.
 | [0019](0019-linked-devices.md) | Linked devices: server-approved link codes, MLS for everything else | Accepted |
 | [0020](0020-safety-numbers.md) | Safety numbers per pair of accounts; warnings on new device keys | Accepted |
 | [0021](0021-usernames-and-invites.md) | Usernames and invite-only sign-up (replaces phone numbers) | Accepted |
+| [0022](0022-backup-and-restore.md) | Backup of history under a recovery key; restore as a new device that members re-add | Accepted |
