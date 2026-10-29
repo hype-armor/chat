@@ -67,7 +67,7 @@ surviving reloads; three-engine browser CI against a real server.
 12. [x] Delivered/read receipts (FR-MSG-5).
 13. [x] PWA polish: install prompt, persistent-storage request and warning,
     update banner (FR-PLAT-2/3).
-14. [ ] Key-package replenishment driven by a server-reported count.
+14. [x] Key-package replenishment driven by a server-reported count.
 15. [ ] Retry and clear feedback for messages the server rejects.
 16. [ ] Real SMS provider behind `CodeSender` (needed for production, not
     for dogfooding).

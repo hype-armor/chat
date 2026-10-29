@@ -65,6 +65,9 @@ message Authenticate {
 message AuthResult {
   // 16-byte device UUID.
   bytes device_id = 1;
+  // This device's unused key packages that are not about to expire; the
+  // client uploads more when it runs low.
+  uint32 key_packages = 2;
 }
 
 message SendEnvelope {

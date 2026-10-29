@@ -61,6 +61,7 @@ export const api = {
     post<Registered>('/v1/link/complete', { code, identity_key: identityKey }),
   deleteAccount: (token: string, phone: string) => post<void>('/v1/account/delete', { phone }, token),
   report: (token: string, report: ReportBody) => post<void>('/v1/reports', report, token),
+  keyCount: (token: string) => get<{ available: number }>('/v1/keys/count', token),
   claim: (token: string, deviceIds: string[]) =>
     post<{ key_packages: Record<string, string> }>('/v1/keys/claim', { device_ids: deviceIds }, token),
 }

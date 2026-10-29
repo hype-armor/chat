@@ -29,7 +29,7 @@ use crate::{
     delivery::{self, SendOutcome},
     error::ApiError,
     hub::Registration,
-    limits,
+    keys, limits,
     metrics::ConnectionGuard,
 };
 
@@ -168,6 +168,7 @@ impl Session {
         let device = device_for_token(db, token)
             .await?
             .ok_or(ApiError::Unauthorized("invalid token"))?;
+        let key_packages = keys::available(db, device).await?;
         let (registration, wake) = self.state.hub.register(device);
         self.authed = Some(Authed {
             device,
@@ -178,6 +179,7 @@ impl Session {
         });
         Ok(Some(server_frame::Body::AuthResult(AuthResult {
             device_id: device.as_bytes().to_vec(),
+            key_packages,
         })))
     }
 

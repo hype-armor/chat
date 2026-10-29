@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatSafetyNumber, observeKeys, scannedMatches, verification, verifyText } from './keys'
+import { formatSafetyNumber, keyPackagesToUpload, observeKeys, scannedMatches, verification, verifyText } from './keys'
 
 describe('observeKeys', () => {
   it('trusts the first keys seen and reports new ones after that', () => {
@@ -31,5 +31,14 @@ describe('safety number presentation', () => {
     expect(scannedMatches(verifyText(digits), digits)).toBe(true)
     expect(scannedMatches(verifyText(digits.replace('0', '1')), digits)).toBe(false)
     expect(scannedMatches(digits, digits)).toBe(false)
+  })
+})
+
+describe('key package replenishment', () => {
+  it('tops up to 20 once fewer than 10 are left', () => {
+    expect(keyPackagesToUpload(0)).toBe(20)
+    expect(keyPackagesToUpload(9)).toBe(11)
+    expect(keyPackagesToUpload(10)).toBe(0)
+    expect(keyPackagesToUpload(25)).toBe(0)
   })
 })

@@ -61,6 +61,7 @@ each group. Welcomes must still go to existing devices.
 | `POST /v1/lookup` | ✓ | `{phone}` → `{account_id, device_ids}` or `404`. One number per call; no bulk lookup |
 | `POST /v1/groups/epoch` | ✓ | `{group_id}` (b64) → `{epoch, last_commit_hash}` (b64 SHA-256 of the accepted commit's ciphertext) or `404` if no commit was recorded. Lets a client that lost the answer to its commit learn whether it was accepted |
 | `POST /v1/keys/claim` | ✓ | `{device_ids}` (1–200) → `{key_packages: {device_id: b64}}`. Each package is handed out once; devices with none left are omitted |
+| `GET /v1/keys/count` | ✓ | → `{available}`: this device's unused key packages with more than 3 days left before they expire |
 
 ## WebSocket `GET /v1/ws`
 
@@ -68,7 +69,10 @@ Binary Protobuf frames (`proto/chat/v1/envelope.proto`): `ClientFrame` in,
 `ServerFrame` out. Replies echo the request's `request_id`; pushed
 deliveries have `request_id = 0`.
 
-1. **Authenticate** within 10 s: `Authenticate{token}` → `AuthResult{device_id}`.
+1. **Authenticate** within 10 s: `Authenticate{token}` → `AuthResult{device_id, key_packages}`.
+   `key_packages` is the same count as `GET /v1/keys/count`. The web client
+   tops up to 20 whenever fewer than 10 are left: on connect, after joining
+   a conversation, and every 6 hours while connected.
    Browsers can't set WebSocket headers and URLs end up in logs, so the
    token travels in the first frame.
 2. The server then sends every queued `Deliver{Envelope}` for the device,

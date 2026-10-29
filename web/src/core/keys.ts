@@ -39,3 +39,12 @@ export function verifyText(digits: string): string {
 export function scannedMatches(scanned: string, digits: string): boolean {
   return scanned.trim() === verifyText(digits)
 }
+
+/** Key packages to keep on the server, and when to top them up. */
+export const KEY_PACKAGE_TARGET = 20
+export const KEY_PACKAGE_LOW = 10
+
+/** How many key packages to upload, given how many the server has left. */
+export function keyPackagesToUpload(available: number): number {
+  return available < KEY_PACKAGE_LOW ? KEY_PACKAGE_TARGET - available : 0
+}
