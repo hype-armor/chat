@@ -45,6 +45,12 @@ impl Hub {
         )
     }
 
+    /// Ends the device's sessions (it was removed): their wake channels
+    /// close, and each session closes its socket.
+    pub fn disconnect(&self, device: &Uuid) {
+        self.lock().remove(device);
+    }
+
     /// Wakes the device's sessions; false if it has none (it's offline).
     pub fn wake(&self, device: &Uuid) -> bool {
         match self.lock().get(device) {

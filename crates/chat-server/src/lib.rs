@@ -4,6 +4,7 @@
 mod auth;
 pub mod config;
 mod delivery;
+mod devices;
 mod error;
 mod groups;
 mod hub;
@@ -77,6 +78,12 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/keys/claim", post(keys::claim))
         .route("/v1/lookup", post(keys::lookup))
         .route("/v1/groups/epoch", post(groups::epoch))
+        .route("/v1/link/start", post(devices::start))
+        .route("/v1/link/approve", post(devices::approve))
+        .route("/v1/link/status", post(devices::status))
+        .route("/v1/link/complete", post(devices::complete))
+        .route("/v1/devices", get(devices::list))
+        .route("/v1/devices/remove", post(devices::remove))
         .route("/v1/push/key", get(push::public_key))
         .route("/v1/push/subscription", post(push::subscribe))
         .route("/v1/push/unsubscribe", post(push::unsubscribe))
