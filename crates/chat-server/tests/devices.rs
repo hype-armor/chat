@@ -47,13 +47,13 @@ async fn link(server: &TestServer, token: &str) -> (Uuid, String) {
 #[sqlx::test]
 async fn linking_a_device_by_code(pool: PgPool) {
     let server = TestServer::start(pool).await;
-    let (_, token) = server.register("+15550006001").await;
+    let (_, token) = server.register("u5550006001.10").await;
     let account = |body: &Value| body["account_id"].as_str().unwrap().to_owned();
     let (_, me) = server
         .post(
             "/v1/lookup",
             Some(&token),
-            json!({ "phone": "+15550006001" }),
+            json!({ "username": "u5550006001.10" }),
         )
         .await;
 
@@ -86,7 +86,7 @@ async fn linking_a_device_by_code(pool: PgPool) {
         .await;
     assert_eq!(status, 200, "{linked}");
     assert_eq!(account(&linked), account(&me));
-    assert_eq!(linked["phone"], "+15550006001");
+    assert_eq!(linked["username"], "u5550006001.10");
     let (_, body) = server
         .post("/v1/link/status", Some(&token), json!({ "code": code }))
         .await;
@@ -96,7 +96,7 @@ async fn linking_a_device_by_code(pool: PgPool) {
     assert_eq!(status, 404);
 
     // Another account cannot see the link.
-    let (_, other) = server.register("+15550006002").await;
+    let (_, other) = server.register("u5550006002.10").await;
     let (status, _) = server
         .post("/v1/link/status", Some(&other), json!({ "code": code }))
         .await;
@@ -121,9 +121,9 @@ async fn linking_a_device_by_code(pool: PgPool) {
 #[sqlx::test]
 async fn listing_and_removing_devices(pool: PgPool) {
     let server = TestServer::start(pool).await;
-    let (first, token) = server.register("+15550006011").await;
+    let (first, token) = server.register("u5550006011.10").await;
     let (second, second_token) = link(&server, &token).await;
-    let (stranger, stranger_token) = server.register("+15550006012").await;
+    let (stranger, stranger_token) = server.register("u5550006012.10").await;
 
     let (_, body) = server.get("/v1/devices", Some(&token)).await;
     let devices = body["devices"].as_array().unwrap();
@@ -163,8 +163,8 @@ async fn listing_and_removing_devices(pool: PgPool) {
 #[sqlx::test]
 async fn sends_skip_removed_devices(pool: PgPool) {
     let server = TestServer::start(pool).await;
-    let (alice, alice_token) = server.register("+15550006021").await;
-    let (bob, bob_token) = server.register("+15550006022").await;
+    let (alice, alice_token) = server.register("u5550006021.10").await;
+    let (bob, bob_token) = server.register("u5550006022.10").await;
     let (bob2, _) = link(&server, &bob_token).await;
     server.admit(b"c", &[alice, bob, bob2]).await;
     let (status, _) = server

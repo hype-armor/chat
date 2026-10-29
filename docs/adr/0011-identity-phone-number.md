@@ -1,6 +1,6 @@
 # ADR-0011: Account identity: phone number
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0021 (usernames and invites)
 - **Date:** 2026-10-28
 - **Related requirements:** FR-ID-1, NFR-LEG-5
 

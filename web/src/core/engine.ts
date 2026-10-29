@@ -42,6 +42,7 @@ import type {
   ConnectionState,
   CoreEvent,
   DeviceInfo,
+  InviteOffer,
   LinkOffer,
   MemberInfo,
   SafetyNumber,
@@ -63,7 +64,7 @@ const LINK_TTL_MS = 10 * 60_000
 /** How long the approving device waits for the new one to register. */
 const LINK_APPROVAL_WAIT_MS = 2 * 60_000
 
-type Account = { phone: string; displayName: string; accountId: string; deviceId: string; token: string }
+type Account = { username: string; displayName: string; accountId: string; deviceId: string; token: string }
 
 type Conversation = {
   id: string
@@ -84,7 +85,7 @@ type Conversation = {
 }
 
 /** A contact resolved through the key directory, with one key package per device. */
-type Invitee = { phone: string; account: string; devices: string[]; keyPackages: Uint8Array[] }
+type Invitee = { username: string; account: string; devices: string[]; keyPackages: Uint8Array[] }
 
 /** An envelope waiting to be accepted by the server (FR-MSG-9). */
 type Outgoing = {
@@ -111,7 +112,7 @@ type PendingCommit = {
    * For commits that add people. Their welcome travels with the commit (the
    * server accepts both together, ADR-0017); this records who was invited.
    */
-  invitees?: { account: string; phone: string; devices: string[] }[]
+  invitees?: { account: string; username: string; devices: string[] }[]
 }
 
 /** An envelope that arrived before the welcome to its conversation. */
@@ -121,8 +122,8 @@ type State = {
   conversations: Record<string, Conversation>
   /** Account id (hex) → display name from their profile message. */
   names: Record<string, string>
-  /** Account id (hex) → phone number, for contacts this user looked up. */
-  phones: Record<string, string>
+  /** Account id (hex) → username number, for contacts this user looked up. */
+  usernames: Record<string, string>
   outbox: Outgoing[]
   early: Early[]
   /** Conversation id → accounts that proposed leaving, awaiting a commit. */
@@ -150,7 +151,7 @@ type State = {
 const emptyState = (): State => ({
   conversations: {},
   names: {},
-  phones: {},
+  usernames: {},
   outbox: [],
   early: [],
   leaving: {},
@@ -243,7 +244,7 @@ export class Engine {
       }))
     return {
       phase: 'ready',
-      me: { phone: this.account.phone, displayName: this.account.displayName || this.account.phone },
+      me: { username: this.account.username, displayName: this.account.displayName || this.account.username },
       connection: this.connection,
       conversations,
       alerts: this.state.alerts,
@@ -253,17 +254,21 @@ export class Engine {
 
   // ---- registration ------------------------------------------------------
 
-  async requestCode(phone: string) {
-    await api.requestCode(phone)
-    this.pending = new PendingClient()
+  /** Creates the account with this device as its first (ADR-0021). */
+  async signUp(username: string, displayName: string, invite?: string) {
+    this.pending ??= new PendingClient()
+    const reg = await api.register(username.trim(), invite?.trim() || undefined, toBase64(this.pending.publicKey()))
+    await this.register(reg, displayName)
   }
 
-  async verify(phone: string, code: string, displayName: string) {
-    // A reload between the two steps loses the pending key; a new one is fine
-    // because the public key is only sent now.
-    this.pending ??= new PendingClient()
-    const reg = await api.verify(phone, code, toBase64(this.pending.publicKey()))
-    await this.register(reg, displayName)
+  /** An invite link for someone to sign up with (ADR-0021). */
+  async createInvite(): Promise<InviteOffer> {
+    const { code, expires_in_days } = await api.createInvite(this.ready().account.token)
+    const link = `${self.location.origin}/#invite=${code}`
+    const qr = encodeQr(link)
+    const offer = { link, expiresInDays: expires_in_days, qrSize: qr.size, qrModules: Array.from(qr.modules) }
+    qr.free()
+    return offer
   }
 
   private async register(reg: Registered, displayName: string) {
@@ -272,7 +277,7 @@ export class Engine {
       this.pending = undefined
       this.notice = undefined
       this.account = {
-        phone: reg.phone,
+        username: reg.username,
         displayName,
         accountId: reg.account_id,
         deviceId: reg.device_id,
@@ -372,9 +377,9 @@ export class Engine {
    * Deletes the account and everything the server holds for it (FR-ID-9),
    * after leaving every group so other members' groups don't keep it.
    */
-  async deleteAccount(phone: string) {
+  async deleteAccount(username: string) {
     const { account, core } = this.ready()
-    if (phone.trim() !== account.phone) throw new Error("That isn't this account's phone number")
+    if (username.trim().toLowerCase() !== account.username) throw new Error("That isn't this account's username")
     if (this.connection !== 'online') throw new Error('You need to be online to delete your account')
     await this.exclusive(async () => {
       for (const conv of Object.values(this.state.conversations)) {
@@ -393,7 +398,7 @@ export class Engine {
       await this.persist()
       await this.flushOutbox(true)
     })
-    await api.deleteAccount(account.token, account.phone)
+    await api.deleteAccount(account.token, account.username)
     await this.signOut('Your account was deleted.')
   }
 
@@ -486,7 +491,7 @@ export class Engine {
       const pending: PendingCommit = {
         conversationId,
         commitHash: toBase64(added.commitHash),
-        invitees: [{ account: me, phone: account.phone, devices: invitee.devices }],
+        invitees: [{ account: me, username: account.username, devices: invitee.devices }],
       }
       const welcome = { envelope: added.welcome, recipients: invitee.devices }
       await this.sendCommit(pending, added.commit, existing, welcome)
@@ -502,7 +507,7 @@ export class Engine {
     const found = devices.filter((d) => packages.has(d))
     if (found.length === 0) return undefined
     return {
-      phone: account.phone,
+      username: account.username,
       account: this.myAccount(),
       devices: found,
       keyPackages: found.map((d) => fromBase64(packages.get(d)!)),
@@ -541,7 +546,7 @@ export class Engine {
     const sync: DeviceSync = {
       displayName: this.account!.displayName,
       names: this.state.names,
-      phones: this.state.phones,
+      usernames: this.state.usernames,
       blocked: this.state.blocked,
       conversations: Object.fromEntries(
         Object.values(this.state.conversations)
@@ -577,7 +582,7 @@ export class Engine {
     }
     if (sync.blocked) this.state.blocked = sync.blocked
     this.state.names = { ...sync.names, ...this.state.names }
-    this.state.phones = { ...sync.phones, ...this.state.phones }
+    this.state.usernames = { ...sync.usernames, ...this.state.usernames }
     for (const [id, meta] of Object.entries(sync.conversations)) {
       const target = this.state.conversations[id]
       if (target) {
@@ -786,7 +791,7 @@ export class Engine {
    * shares an accepted conversation with them.
    */
   private isKnown(account: string, except: string): boolean {
-    if (account === this.myAccount() || this.state.phones[account]) return true
+    if (account === this.myAccount() || this.state.usernames[account]) return true
     return Object.values(this.state.conversations).some(
       (c) => c.id !== except && !c.request && !c.self && c.peers.includes(account),
     )
@@ -893,10 +898,11 @@ export class Engine {
 
   // ---- conversations -------------------------------------------------------
 
-  async startChat(phone: string): Promise<string> {
+  async startChat(name: string): Promise<string> {
     const { account, core } = this.ready()
-    if (phone === account.phone) throw new Error("You can't start a chat with yourself")
-    const found = await api.lookup(account.token, phone)
+    const username = name.trim().toLowerCase()
+    if (username === account.username) throw new Error("You can't start a chat with yourself")
+    const found = await api.lookup(account.token, username)
     const peer = found.account_id.replaceAll('-', '')
     const existing = Object.values(this.state.conversations).find((c) => c.peers.length === 1 && c.peers[0] === peer)
     if (existing) return existing.id
@@ -912,7 +918,7 @@ export class Engine {
         randomId(),
       )
       const id = toHex(started.conversationId)
-      this.state.phones[peer] = phone
+      this.state.usernames[peer] = username
       this.state.conversations[id] = { id, peers: [peer], lastAt: Date.now() }
       await this.observeKeysIn(id)
       const welcomeId = randomId()
@@ -932,11 +938,11 @@ export class Engine {
   }
 
   /** Creates a group with everyone at once (no other member can race us). */
-  async createGroup(name: string, phones: string[]): Promise<string> {
+  async createGroup(name: string, usernames: string[]): Promise<string> {
     const { core } = this.ready()
     const groupName = name.trim().slice(0, 64)
     if (!groupName) throw new Error('Give the group a name')
-    const invitees = await this.resolve(phones)
+    const invitees = await this.resolve(usernames)
     if (invitees.length === 0) throw new Error('Add at least one other person')
     if (invitees.length + 1 > MAX_GROUP_MEMBERS) throw new Error(`Groups are limited to ${MAX_GROUP_MEMBERS} people`)
     const own = await this.otherOwnDevices()
@@ -948,7 +954,7 @@ export class Engine {
         randomId(),
       )
       const id = toHex(started.conversationId)
-      for (const i of invitees) this.state.phones[i.account] = i.phone
+      for (const i of invitees) this.state.usernames[i.account] = i.username
       const admins = [this.myAccount()]
       this.state.conversations[id] = {
         id,
@@ -978,13 +984,13 @@ export class Engine {
    * Adds people to an existing conversation. The commit must be accepted by
    * the server before it is applied locally, so this needs a connection.
    */
-  async addMembers(conversationId: string, phones: string[]) {
+  async addMembers(conversationId: string, usernames: string[]) {
     const { core } = this.ready()
     const conv = this.state.conversations[conversationId]
     if (!conv) throw new Error('Unknown conversation')
     if (this.connection !== 'online') throw new Error('You need to be online to add people')
     if (this.state.pendingCommit) throw new Error('Still finishing an earlier group change; try again shortly')
-    const invitees = (await this.resolve(phones)).filter((i) => !conv.peers.includes(i.account))
+    const invitees = (await this.resolve(usernames)).filter((i) => !conv.peers.includes(i.account))
     if (invitees.length === 0) throw new Error('Everyone listed is already in this conversation')
     if (conv.peers.length + invitees.length + 1 > MAX_GROUP_MEMBERS) {
       throw new Error(`Groups are limited to ${MAX_GROUP_MEMBERS} people`)
@@ -1003,7 +1009,7 @@ export class Engine {
       const pending: PendingCommit = {
         conversationId,
         commitHash: toBase64(added.commitHash),
-        invitees: invitees.map(({ account, phone, devices }) => ({ account, phone, devices })),
+        invitees: invitees.map(({ account, username, devices }) => ({ account, username, devices })),
       }
       const welcome = { envelope: added.welcome, recipients: invitees.flatMap((i) => i.devices) }
       throwUnlessAccepted(await this.sendCommit(pending, added.commit, existing, welcome), 'adding people')
@@ -1018,7 +1024,7 @@ export class Engine {
     const me = this.myAccount()
     return [me, ...conv.peers].map((account) => ({
       account,
-      name: account === me ? this.account!.displayName || this.account!.phone : this.nameOf(account),
+      name: account === me ? this.account!.displayName || this.account!.username : this.nameOf(account),
       isAdmin: (conv.admins ?? []).includes(account),
       isMe: account === me,
       verification: account === me ? undefined : this.verificationOf(account),
@@ -1504,7 +1510,7 @@ export class Engine {
     if (p.invitees && conv?.self) {
       this.queueDeviceSync(p.conversationId)
     } else if (p.invitees) {
-      for (const i of p.invitees) if (i.account !== this.myAccount()) this.state.phones[i.account] = i.phone
+      for (const i of p.invitees) if (i.account !== this.myAccount()) this.state.usernames[i.account] = i.username
       if (conv?.name) this.queueGroupInfo(p.conversationId, conv.name, conv.admins ?? [])
       this.queueProfile(p.conversationId)
     }
@@ -1532,16 +1538,18 @@ export class Engine {
     }
   }
 
-  /** Resolves phone numbers to accounts and claims a key package per device. */
-  private async resolve(phones: string[]): Promise<Invitee[]> {
+  /** Resolves username numbers to accounts and claims a key package per device. */
+  private async resolve(usernames: string[]): Promise<Invitee[]> {
     const { account } = this.ready()
-    const unique = [...new Set(phones.map((p) => p.trim()).filter(Boolean))].filter((p) => p !== account.phone)
+    const unique = [...new Set(usernames.map((p) => p.trim().toLowerCase()).filter(Boolean))].filter(
+      (p) => p !== account.username,
+    )
     const found = await Promise.all(
-      unique.map(async (phone) => {
+      unique.map(async (username) => {
         try {
-          return { phone, ...(await api.lookup(account.token, phone)) }
+          return { username, ...(await api.lookup(account.token, username)) }
         } catch (e) {
-          throw new Error(`${phone}: ${describeError(e)}`)
+          throw new Error(`${username}: ${describeError(e)}`)
         }
       }),
     )
@@ -1551,9 +1559,9 @@ export class Engine {
     )
     return found.map((f) => {
       const devices = f.device_ids.filter((d) => claimed.key_packages[d])
-      if (devices.length === 0) throw new Error(`${f.phone} has no keys available right now; try again later`)
+      if (devices.length === 0) throw new Error(`${f.username} has no keys available right now; try again later`)
       return {
-        phone: f.phone,
+        username: f.username,
         account: f.account_id.replaceAll('-', ''),
         devices: devices.map((d) => d.replaceAll('-', '')),
         keyPackages: devices.map((d) => fromBase64(claimed.key_packages[d])),
@@ -1622,7 +1630,7 @@ export class Engine {
   }
 
   private nameOf(account: string): string {
-    return this.state.names[account] ?? this.state.phones[account] ?? 'New contact'
+    return this.state.names[account] ?? this.state.usernames[account] ?? 'New contact'
   }
 
   private title(c: Conversation): string {

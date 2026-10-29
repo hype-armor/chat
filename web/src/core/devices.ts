@@ -47,8 +47,8 @@ export type DeviceSync = {
   displayName?: string
   /** Account id → display name. */
   names: Record<string, string>
-  /** Account id → phone number. */
-  phones: Record<string, string>
+  /** Account id → username number. */
+  usernames: Record<string, string>
   /** Conversation id → group name and admins. */
   conversations: Record<string, { name?: string; admins?: string[] }>
   /** Blocked account ids; the whole list, latest change wins (FR-ID-8). */
@@ -84,7 +84,7 @@ export function parseDeviceSync(bytes: Uint8Array): DeviceSync | undefined {
   return {
     displayName: typeof r.displayName === 'string' ? r.displayName.slice(0, 64) : undefined,
     names: strings(r.names),
-    phones: strings(r.phones),
+    usernames: strings(r.usernames),
     conversations,
     blocked: Array.isArray(r.blocked)
       ? r.blocked.filter((a): a is string => typeof a === 'string' && /^[0-9a-f]{32}$/.test(a))

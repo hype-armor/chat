@@ -298,10 +298,9 @@ pub async fn expire(db: &PgPool) -> Result<(), sqlx::Error> {
     for stmt in [
         "DELETE FROM queued_envelopes WHERE received_at < now() - interval '30 days'",
         "DELETE FROM key_packages WHERE expires_at < now()",
-        "DELETE FROM verification_codes WHERE expires_at < now()",
-        "DELETE FROM code_requests WHERE requested_at < now() - interval '1 day'",
         "DELETE FROM rate_limits WHERE window_start < now() - interval '2 days'",
         "DELETE FROM link_requests WHERE expires_at < now()",
+        "DELETE FROM invites WHERE expires_at < now()",
         "DELETE FROM reports WHERE created_at < now() - interval '90 days'",
     ] {
         sqlx::query(stmt).execute(db).await?;

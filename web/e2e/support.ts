@@ -1,41 +1,20 @@
 // Helpers for the messaging end-to-end tests (real chat-server).
-import { readFile } from 'node:fs/promises'
 import { type Browser, type Page, expect } from '@playwright/test'
 
-const SERVER_LOG = new URL('../../target/e2e-server.log', import.meta.url)
-
-export function randomPhone(): string {
-  return `+1555${String(Math.floor(Math.random() * 1e7)).padStart(7, '0')}`
+/** A fresh username for each test run, e.g. `u4821937.55`. */
+export function randomUsername(): string {
+  const digits = (n: number) => String(Math.floor(Math.random() * 10 ** n)).padStart(n, '0')
+  return `u${digits(7)}.${digits(2)}`
 }
 
-/**
- * Reads the code the development log sender wrote for `phone`; pass the
- * previous code when requesting another, to wait for the new log line.
- */
-export async function verificationCode(phone: string, previous?: string): Promise<string> {
-  for (let attempt = 0; attempt < 50; attempt++) {
-    const lines = (await readFile(SERVER_LOG, 'utf8').catch(() => '')).split('\n')
-    for (const line of lines.reverse()) {
-      if (!line.includes(phone)) continue
-      const fields = JSON.parse(line).fields
-      if (fields?.phone === phone && fields.code) {
-        if (fields.code !== previous) return fields.code
-        break
-      }
-    }
-    await new Promise((r) => setTimeout(r, 200))
-  }
-  throw new Error(`no verification code logged for ${phone}`)
-}
-
-export async function signUp(browser: Browser, name: string, phone: string): Promise<Page> {
+/** Signs up in a new browser context (the e2e server allows open sign-up). */
+export async function signUp(browser: Browser, name: string, username: string, invite?: string): Promise<Page> {
   const page = await (await browser.newContext()).newPage()
-  await page.goto('/')
+  await page.goto(invite ? `/#invite=${invite}` : '/')
+  // Username first: leaving the name field fills in a suggestion.
+  await page.getByLabel('Username').fill(username)
   await page.getByLabel('Your name').fill(name)
-  await page.getByLabel('Phone number').fill(phone)
-  await page.getByRole('button', { name: 'Send code' }).click()
-  await page.getByLabel('Verification code').fill(await verificationCode(phone))
-  await page.getByRole('button', { name: 'Verify' }).click()
+  await page.getByRole('button', { name: 'Sign up' }).click()
   await expect(page.getByRole('status')).toHaveText('online')
   return page
 }

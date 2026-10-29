@@ -15,7 +15,7 @@ messenger yet. Design docs: [`docs/`](docs/README.md).
 | `proto/` | Protobuf wire format (envelopes, WebSocket frames) |
 | `crates/chat-proto` | Rust types generated from `proto/` |
 | `crates/chat-core` | Client core: MLS (OpenMLS), envelopes, padding. Builds natively and to WebAssembly |
-| `crates/chat-server` | Server (Rust, axum): phone sign-up, key directory, authenticated WebSocket delivery queue ([API](docs/11-api.md)) |
+| `crates/chat-server` | Server (Rust, axum): username sign-up with invites, key directory, authenticated WebSocket delivery queue ([API](docs/11-api.md)) |
 | `web/` | Web client / PWA (TypeScript, React, Vite): sign-up, 1:1 chats; keys, storage and networking live in a Web Worker |
 | `deploy/docker` | Container images (server; web served by nginx with a strict CSP) |
 | `deploy/compose` | Local development stack |
@@ -43,8 +43,10 @@ cargo run -p chat-server        # server at http://localhost:8080 (uses DATABASE
 pnpm dev                        # web app at http://localhost:5173, proxies /v1 to :8080
 ```
 
-Verification codes are written to the server log in development (no SMS
-provider yet). Sign up in two browser profiles to chat with yourself.
+Sign-up needs an invite unless the server runs with
+`CHAT_REGISTRATION=open`. For development, set that, or create an invite
+with `cargo run -p chat-server -- create-invite http://localhost:5173`.
+Sign up in two browser profiles to chat with yourself.
 
 Web checks: `pnpm typecheck`, `pnpm test` (unit), `pnpm build`, then
 `pnpm --filter web e2e` (Playwright; set `PW_ALL_BROWSERS=1` to include

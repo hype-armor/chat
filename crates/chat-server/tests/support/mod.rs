@@ -2,19 +2,12 @@
 //! PostgreSQL: set DATABASE_URL (sqlx::test creates a fresh database per test).
 #![allow(dead_code)]
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::time::Duration;
 
 use axum::{body::Body, http::Request};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use chat_proto::v1::{Authenticate, ClientFrame, ServerFrame, client_frame, server_frame};
-use chat_server::{
-    AppState, router,
-    sms::{CodeSender, SendFuture},
-};
+use chat_server::{AppState, router};
 use futures_util::{SinkExt, StreamExt};
 use http_body_util::BodyExt;
 use prost::Message as _;
@@ -25,23 +18,8 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message};
 use tower::ServiceExt;
 use uuid::Uuid;
 
-/// Records codes instead of sending SMS.
-#[derive(Default)]
-pub struct CapturedCodes(Mutex<HashMap<String, String>>);
-
-impl CodeSender for CapturedCodes {
-    fn send<'a>(&'a self, phone: &'a str, code: &'a str) -> SendFuture<'a> {
-        self.0
-            .lock()
-            .unwrap()
-            .insert(phone.to_owned(), code.to_owned());
-        Box::pin(async { Ok(()) })
-    }
-}
-
 pub struct TestServer {
     pub state: AppState,
-    pub codes: Arc<CapturedCodes>,
     pub ws_url: String,
 }
 
@@ -67,8 +45,10 @@ impl TestServer {
         push: Option<chat_server::push::PushSender>,
         limits: chat_server::limits::Limits,
     ) -> Self {
-        let codes = Arc::new(CapturedCodes::default());
-        let mut state = AppState::new(Some(pool), codes.clone()).with_limits(limits);
+        // Open sign-up unless a test turns invites on (tests/invites.rs).
+        let mut state = AppState::new(Some(pool))
+            .with_open_registration(true)
+            .with_limits(limits);
         if let Some(push) = push {
             state = state.with_push(push);
         }
@@ -76,11 +56,7 @@ impl TestServer {
         let ws_url = format!("ws://{}/v1/ws", listener.local_addr().unwrap());
         let app = router(state.clone());
         tokio::spawn(async move { axum::serve(listener, app).await });
-        Self {
-            state,
-            codes,
-            ws_url,
-        }
+        Self { state, ws_url }
     }
 
     #[allow(dead_code)]
@@ -146,22 +122,13 @@ impl TestServer {
         .unwrap();
     }
 
-    pub fn last_code(&self, phone: &str) -> String {
-        self.codes.0.lock().unwrap()[phone].clone()
-    }
-
-    /// Registers a new device for `phone`; returns (device_id, token).
-    pub async fn register(&self, phone: &str) -> (Uuid, String) {
-        let (status, _) = self
-            .post("/v1/auth/request-code", None, json!({ "phone": phone }))
-            .await;
-        assert_eq!(status, 204);
-        let code = self.last_code(phone);
+    /// Signs up `username` (open registration); returns (device_id, token).
+    pub async fn register(&self, username: &str) -> (Uuid, String) {
         let (status, body) = self
             .post(
-                "/v1/auth/verify",
+                "/v1/register",
                 None,
-                json!({ "phone": phone, "code": code, "identity_key": STANDARD.encode(b"test-identity-key") }),
+                json!({ "username": username, "identity_key": STANDARD.encode(b"test-identity-key") }),
             )
             .await;
         assert_eq!(status, 200, "{body}");

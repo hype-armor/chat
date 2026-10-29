@@ -3,6 +3,7 @@ import type { CoreClient } from '../core/client'
 import type { AppView, ChatMessage, ConversationSummary, MemberInfo } from '../core/protocol'
 import { InstallBanner, StorageBanner } from './Banners'
 import { Devices } from './Devices'
+import { Invite } from './Invite'
 import { BlockedList, DeleteAccount, ReportForm } from './Safety'
 import { VerificationBadge, Verify } from './Verify'
 import { type NotificationState, enableNotifications, notificationState, refreshSubscription } from '../notifications'
@@ -30,7 +31,7 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
         <header className="bar">
           <div>
             <strong>{view.me.displayName}</strong>
-            <div className="muted small">{view.me.phone}</div>
+            <div className="muted small">{view.me.username}</div>
           </div>
           <span className={`connection ${view.connection}`} role="status">
             {view.connection}
@@ -47,6 +48,7 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
           </div>
         ))}
         <NotificationToggle core={core} />
+        <Invite core={core} />
         <Devices core={core} />
         <Privacy core={core} readReceipts={view.readReceipts} />
         <BlockedList core={core} />
@@ -172,28 +174,29 @@ function NotificationToggle({ core }: { core: CoreClient }) {
 }
 
 function NewChat({ core, onStarted }: { core: CoreClient; onStarted: (id: string) => void }) {
-  const [phone, setPhone] = useState('')
+  const [username, setUsername] = useState('')
   const { busy, error, run } = useAction()
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
     run(async () => {
-      onStarted(await core.startChat(phone.trim()))
-      setPhone('')
+      onStarted(await core.startChat(username.trim()))
+      setUsername('')
     })
   }
 
   return (
     <form className="new-chat" onSubmit={submit}>
       <label>
-        Contact's phone number
+        Contact's username
         <input
-          value={phone}
-          onChange={(e) => setPhone(e.target.value)}
-          type="tel"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
           required
-          placeholder="+15551234567"
-          pattern="\+[1-9][0-9]{7,14}"
+          placeholder="alex.27"
+          autoCapitalize="none"
+          autoComplete="off"
+          spellCheck={false}
         />
       </label>
       <button type="submit" disabled={busy}>
@@ -324,8 +327,8 @@ function GroupInfo({
   )
 }
 
-/** Splits a free-form list of phone numbers (commas, spaces or new lines). */
-export function parsePhones(text: string): string[] {
+/** Splits a free-form list of usernames (commas, spaces or new lines). */
+export function parseUsernames(text: string): string[] {
   return text.split(/[\s,;]+/).filter(Boolean)
 }
 
@@ -349,15 +352,15 @@ function useAction() {
 
 function NewGroup({ core, onCreated }: { core: CoreClient; onCreated: (id: string) => void }) {
   const [name, setName] = useState('')
-  const [phones, setPhones] = useState('')
+  const [usernames, setUsernames] = useState('')
   const { busy, error, run } = useAction()
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
     run(async () => {
-      onCreated(await core.createGroup(name, parsePhones(phones)))
+      onCreated(await core.createGroup(name, parseUsernames(usernames)))
       setName('')
-      setPhones('')
+      setUsernames('')
     })
   }
 
@@ -370,13 +373,13 @@ function NewGroup({ core, onCreated }: { core: CoreClient; onCreated: (id: strin
           <input value={name} onChange={(e) => setName(e.target.value)} required maxLength={64} />
         </label>
         <label>
-          Members' phone numbers
+          Members' usernames
           <textarea
-            value={phones}
-            onChange={(e) => setPhones(e.target.value)}
+            value={usernames}
+            onChange={(e) => setUsernames(e.target.value)}
             required
             rows={3}
-            placeholder={'+15551234567\n+15557654321'}
+            placeholder={'alex.27\nsam.04'}
           />
         </label>
         <button type="submit" disabled={busy}>
@@ -393,14 +396,14 @@ function NewGroup({ core, onCreated }: { core: CoreClient; onCreated: (id: strin
 }
 
 function AddPeople({ core, id, onDone }: { core: CoreClient; id: string; onDone: () => void }) {
-  const [phones, setPhones] = useState('')
+  const [usernames, setUsernames] = useState('')
   const { busy, error, run } = useAction()
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
     run(async () => {
-      await core.addMembers(id, parsePhones(phones))
-      setPhones('')
+      await core.addMembers(id, parseUsernames(usernames))
+      setUsernames('')
       onDone()
     })
   }
@@ -408,8 +411,15 @@ function AddPeople({ core, id, onDone }: { core: CoreClient; id: string; onDone:
   return (
     <form className="add-people" onSubmit={submit}>
       <label>
-        Phone numbers to add
-        <input value={phones} onChange={(e) => setPhones(e.target.value)} required placeholder="+15551234567" />
+        Usernames to add
+        <input
+          value={usernames}
+          onChange={(e) => setUsernames(e.target.value)}
+          required
+          placeholder="alex.27"
+          autoCapitalize="none"
+          spellCheck={false}
+        />
       </label>
       <button type="submit" disabled={busy}>
         Add

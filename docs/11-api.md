@@ -10,8 +10,12 @@ Authenticated endpoints need `Authorization: Bearer <device token>`.
 
 | Method & path | Auth | Body → Response |
 |---------------|------|-----------------|
-| `POST /v1/auth/request-code` | — | `{phone}` (E.164) → `204`. Sends a 6-digit code (10-minute expiry). Limits: 3 per 15 min and 10 per day per number → `429` |
-| `POST /v1/auth/verify` | — | `{phone, code, identity_key}` → `{account_id, device_id, token, phone}`. Creates the account on first use; each call registers a **new device** (max 10). 5 wrong attempts invalidate the code |
+| `POST /v1/register` | — | `{username, invite?, identity_key}` → `{account_id, device_id, token, username}` (ADR-0021). Creates the account and its first device. `username` is `name.NN` (3–20 letters, digits or `_` starting with a letter, a dot, 2–4 digits), stored lowercase: `400` if malformed, `409` if taken. `invite` is required unless the server runs with `CHAT_REGISTRATION=open`: `403` if missing, used or expired. More devices join by link (below) |
+| `POST /v1/invites` | ✓ | → `{code, expires_in_days}`: a single-use invite, valid 7 days, shared as `https://<host>/#invite=<code>`. At most 5 unused per account (`429`) |
+
+The operator creates the first invite on the server:
+`chat-server create-invite https://chat.example.com`. Invites are stored
+as hashes, and deleted when used, so who invited whom is not kept.
 
 The token is 32 random bytes; the server stores only its SHA-256 hash.
 Each device's coarse last-seen *day* is recorded on authentication.
@@ -20,7 +24,7 @@ Each device's coarse last-seen *day* is recorded on authentication.
 
 | Method & path | Auth | Body → Response |
 |---------------|------|-----------------|
-| `POST /v1/account/delete` | ✓ | `{phone}` (the account's number, typed again) → `204`; `400` if it doesn't match |
+| `POST /v1/account/delete` | ✓ | `{username}` (typed again) → `204`; `400` if it doesn't match |
 
 Deletes the account and, by cascade:
 - its devices and tokens;
@@ -45,7 +49,7 @@ escape reports.
 | `POST /v1/link/start` | — | → `{code}`: 16 random bytes, base64url, valid 10 minutes. The new device shows it as a QR code |
 | `POST /v1/link/approve` | ✓ | `{code}` → `204`; the new device will join this account. `404` unknown or expired, `409` already used |
 | `POST /v1/link/status` | ✓ | `{code}` → `{device_id}`, `null` until the new device has completed the link. Only the approving account sees it |
-| `POST /v1/link/complete` | — | `{code, identity_key}` → `{account_id, device_id, token, phone}`, like `verify`. `409` until approved; `404` unknown, expired or used. The new device polls this |
+| `POST /v1/link/complete` | — | `{code, identity_key}` → `{account_id, device_id, token, username}`, like `register`. `409` until approved; `404` unknown, expired or used. The new device polls this |
 | `GET /v1/devices` | ✓ | → `{devices: [{device_id, added_on, last_seen_on, current}]}`: this account's devices (days only), oldest first |
 | `POST /v1/devices/remove` | ✓ | `{device_id}` → `204`. Another device of this account: deletes it with its token, queue, key packages and memberships, and closes its WebSocket. `400` for the calling device itself |
 
@@ -58,7 +62,7 @@ each group. Welcomes must still go to existing devices.
 | Method & path | Auth | Body → Response |
 |---------------|------|-----------------|
 | `POST /v1/keys` | ✓ | `{key_packages: [b64]}` (1–100, ≤ 4 KiB each, ≤ 200 stored per device, 30-day expiry) → `204` |
-| `POST /v1/lookup` | ✓ | `{phone}` → `{account_id, device_ids}` or `404`. One number per call; no bulk lookup |
+| `POST /v1/lookup` | ✓ | `{username}` → `{account_id, device_ids}` or `404`. Exact username only; no search or bulk lookup |
 | `POST /v1/groups/epoch` | ✓ | `{group_id}` (b64) → `{epoch, last_commit_hash}` (b64 SHA-256 of the accepted commit's ciphertext) or `404` if no commit was recorded. Lets a client that lost the answer to its commit learn whether it was accepted |
 | `POST /v1/keys/claim` | ✓ | `{device_ids}` (1–200) → `{key_packages: {device_id: b64}}`. Each package is handed out once; devices with none left are omitted |
 | `GET /v1/keys/count` | ✓ | → `{available}`: this device's unused key packages with more than 3 days left before they expire |
@@ -158,9 +162,9 @@ across restarts and replicas. Exceeding one gives `429` (HTTP) or
 | `POST /v1/keys/claim` | 300 devices per hour | device |
 | Welcomes (first contacts) | 200 recipient devices per day | device |
 | Sends over the WebSocket | 600 per minute (token bucket, in memory) | device |
-| `POST /v1/auth/request-code` | 10 per hour | client IP |
-| `POST /v1/auth/request-code` | 50 per hour | first 5 characters of the number (country and area code) |
-| `POST /v1/auth/request-code` | 1000 per day | whole server |
+| `POST /v1/register` | 10 per hour | client IP |
+| `POST /v1/register` | 1000 per day | whole server |
+| `POST /v1/invites` | 10 per day (and 5 unused at once) | account |
 | `POST /v1/link/start` | 20 per hour | client IP |
 | `POST /v1/reports` | 20 per day | device |
 
@@ -181,5 +185,4 @@ windows older than two days, and reports older than 90 days.
 
 - Sealed sender: the server stores which devices belong to which
   conversation (ADR-0017).
-- A real SMS provider.
 - Multi-replica fan-out (PostgreSQL LISTEN/NOTIFY or Valkey pub/sub).

@@ -67,7 +67,7 @@ export function Verify({
   return (
     <section className="verify" aria-label={`Verify ${name}`}>
       <p>
-        Compare this number with {name}, in person or on a call. If it matches on both phones, your messages reach only
+        Compare this number with {name}, in person or on a call. If it matches on both devices, your messages reach only
         their devices.
       </p>
       {safety && (

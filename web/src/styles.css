@@ -576,3 +576,11 @@ button.danger {
 .banner.warning p {
   color: var(--danger);
 }
+
+/* Invites (ADR-0021) */
+.invite {
+  display: grid;
+  gap: 0.5rem;
+  justify-items: center;
+  margin: 0.75rem 0;
+}

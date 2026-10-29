@@ -1,4 +1,4 @@
-//! Abuse limits (FR-SAF-2, NFR-LEG-5).
+//! Abuse limits (FR-SAF-2).
 mod support;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -18,9 +18,9 @@ fn tight() -> Limits {
         claims_per_hour: 2,
         welcomes_per_day: 1,
         sends_per_minute: 2,
-        codes_per_ip_per_hour: 2,
-        codes_per_prefix_per_hour: 2,
-        codes_per_day: 100,
+        registrations_per_ip_per_hour: 2,
+        registrations_per_day: 100,
+        invites_per_day: 2,
         links_per_ip_per_hour: 2,
         reports_per_day: 2,
         trust_proxy_headers: true,
@@ -29,16 +29,9 @@ fn tight() -> Limits {
 
 #[sqlx::test]
 async fn lookups_and_claims_are_limited(pool: PgPool) {
-    let server = TestServer::start_with_limits(
-        pool,
-        Limits {
-            codes_per_prefix_per_hour: 50,
-            ..tight()
-        },
-    )
-    .await;
-    let (_, token) = server.register("+15550008001").await;
-    let target = json!({ "phone": "+15550008001" });
+    let server = TestServer::start_with_limits(pool, tight()).await;
+    let (_, token) = server.register("u5550008001.10").await;
+    let target = json!({ "username": "u5550008001.10" });
     for _ in 0..2 {
         assert_eq!(
             server
@@ -79,48 +72,34 @@ async fn lookups_and_claims_are_limited(pool: PgPool) {
 }
 
 #[sqlx::test]
-async fn verification_codes_are_limited_per_ip_and_prefix(pool: PgPool) {
+async fn sign_ups_are_limited_per_ip(pool: PgPool) {
     let server = TestServer::start_with_limits(pool, tight()).await;
-    let code = |phone: &str, ip: &str| {
-        let (phone, ip) = (phone.to_owned(), ip.to_owned());
+    let sign_up = |username: &str, ip: &str| {
+        let (username, ip) = (username.to_owned(), ip.to_owned());
         let server = &server;
         async move {
+            let body = json!({ "username": username, "identity_key": STANDARD.encode(b"k") });
             server
-                .post_with_headers(
-                    "/v1/auth/request-code",
-                    None,
-                    json!({ "phone": phone }),
-                    &[("x-forwarded-for", &ip)],
-                )
+                .post_with_headers("/v1/register", None, body, &[("x-forwarded-for", &ip)])
                 .await
                 .0
         }
     };
-    // Per IP: the third request from one address is refused.
-    assert_eq!(code("+447700900001", "203.0.113.7").await, 204);
-    assert_eq!(code("+33612345678", "203.0.113.7").await, 204);
-    assert_eq!(code("+4915112345678", "203.0.113.7").await, 429);
+    // The third sign-up from one address in an hour is refused.
+    assert_eq!(sign_up("ann.01", "203.0.113.7").await, 200);
+    assert_eq!(sign_up("ben.01", "203.0.113.7").await, 200);
+    assert_eq!(sign_up("cat.01", "203.0.113.7").await, 429);
     // Forged entries before the ingress's own do not help.
-    assert_eq!(code("+5511912345678", "192.0.2.1, 203.0.113.7").await, 429);
-    // Per prefix: many numbers in one range, from different addresses.
-    assert_eq!(code("+15559990001", "198.51.100.1").await, 204);
-    assert_eq!(code("+15559990002", "198.51.100.2").await, 204);
-    assert_eq!(code("+15559990003", "198.51.100.3").await, 429);
+    assert_eq!(sign_up("dee.01", "192.0.2.1, 203.0.113.7").await, 429);
+    assert_eq!(sign_up("eve.01", "198.51.100.1").await, 200);
 }
 
 #[sqlx::test]
 async fn sends_and_first_contacts_are_limited(pool: PgPool) {
-    let server = TestServer::start_with_limits(
-        pool,
-        Limits {
-            codes_per_prefix_per_hour: 50,
-            ..tight()
-        },
-    )
-    .await;
-    let (alice, alice_token) = server.register("+15550008011").await;
+    let server = TestServer::start_with_limits(pool, tight()).await;
+    let (alice, alice_token) = server.register("u5550008011.10").await;
     let mut contacts = Vec::new();
-    for phone in ["+15550008012", "+15550008013"] {
+    for phone in ["u5550008012.10", "u5550008013.10"] {
         let (dev, token) = server.register(phone).await;
         let kp = STANDARD.encode(Uuid::new_v4().as_bytes());
         server

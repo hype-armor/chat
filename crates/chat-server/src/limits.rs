@@ -28,11 +28,12 @@ pub struct Limits {
     /// Devices a device may welcome (first contact) per day.
     pub welcomes_per_day: i32,
     pub sends_per_minute: u32,
-    pub codes_per_ip_per_hour: i32,
-    /// Per phone-number prefix (country + area code), against SMS pumping.
-    pub codes_per_prefix_per_hour: i32,
-    /// Across the whole service.
-    pub codes_per_day: i32,
+    /// Sign-ups per client IP per hour (ADR-0021).
+    pub registrations_per_ip_per_hour: i32,
+    /// Sign-ups across the whole service per day.
+    pub registrations_per_day: i32,
+    /// Invites an account may create per day.
+    pub invites_per_day: i32,
     /// Device link codes per client IP per hour (ADR-0019).
     pub links_per_ip_per_hour: i32,
     /// User reports per device per day (FR-ID-8).
@@ -48,9 +49,9 @@ impl Default for Limits {
             claims_per_hour: 300,
             welcomes_per_day: 200,
             sends_per_minute: 600,
-            codes_per_ip_per_hour: 10,
-            codes_per_prefix_per_hour: 50,
-            codes_per_day: 1_000,
+            registrations_per_ip_per_hour: 10,
+            registrations_per_day: 1_000,
+            invites_per_day: 10,
             links_per_ip_per_hour: 20,
             reports_per_day: 20,
             trust_proxy_headers: false,
@@ -147,11 +148,6 @@ impl FromRequestParts<AppState> for ClientIp {
     }
 }
 
-/// The prefix used to group phone numbers for SMS-pumping limits.
-pub fn phone_prefix(phone: &str) -> &str {
-    &phone[..phone.len().min(5)]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,11 +159,5 @@ mod tests {
         assert!((0..3).all(|_| buckets.allow(device, 3)));
         assert!(!buckets.allow(device, 3));
         assert!(buckets.allow(Uuid::new_v4(), 3), "per device");
-    }
-
-    #[test]
-    fn prefixes() {
-        assert_eq!(phone_prefix("+15551234567"), "+1555");
-        assert_eq!(phone_prefix("+44"), "+44");
     }
 }

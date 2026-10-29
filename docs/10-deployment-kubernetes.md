@@ -66,8 +66,7 @@ regional map tiles).
 | Azure AKS (Free tier) | $0 (Standard SLA +$73) | ~$124 (F4s v2) | ~$27 | $0.087/GB after 100 GB | **~$160** | **~$212** | **~$360** |
 | AWS EKS | $73 | ~$130 (c7i.xlarge) | ~$31 | $0.09/GB after 100 GB | **~$245** | **~$300** | **~$450** |
 
-Not included, common to all: SMS verification (≈ $5–10/month at 100
-users), domain, and the external security audit (Phase 5, one-off and by
+Not included, common to all: domain, and the external security audit (Phase 5, one-off and by
 far the largest cost).
 
 **30-user scenario (Linode, k3s on a VM):** a shared 4 GB plan (2 vCPU,
@@ -118,10 +117,10 @@ cluster-wide: cert-manager, ingress/gateway controller, CloudNativePG operator
 - Pods run as non-root with a read-only root filesystem, all capabilities
   dropped, seccomp `RuntimeDefault`, and no service-account token mounted.
 - NetworkPolicy: only the ingress controller's namespace may reach our pods.
-- Secrets (database URL, LiveKit keys, VAPID key, SMS provider key) come from
+- Secrets (database URL, LiveKit keys, VAPID key) come from
   Kubernetes Secrets populated by a secret manager (External Secrets
   Operator or SOPS-encrypted manifests); never committed in plain text.
-- Logs contain no message content, phone numbers or IP addresses beyond
+- Logs contain no message content, usernames or IP addresses beyond
   what's needed to debug (NFR-OPS-1); log retention ≤ 14 days.
 - Images are rebuilt from pinned, reproducible sources and published by CI
   (supports the release transparency log in Phase 5).
@@ -146,8 +145,7 @@ Not legal advice; review with counsel before launch.
 
 | Topic | Implication |
 |-------|-------------|
-| Legal process (subpoenas, court orders, CLOUD Act) | Can compel only what we hold: account phone numbers, device public keys, push subscriptions, coarse last-seen day, queued ciphertext, and logs. Minimising these (NFR-SEC-5) limits exposure. Publish a transparency report |
-| SMS to US numbers | Application-to-person (A2P) SMS needs 10DLC registration or a verified toll-free number; providers' verification APIs (e.g., Twilio Verify) handle this |
+| Legal process (subpoenas, court orders, CLOUD Act) | Can compel only what we hold: usernames, device public keys, push subscriptions, coarse last-seen day, queued ciphertext, and logs. Minimising these (NFR-SEC-5) limits exposure. Publish a transparency report |
 | State privacy laws (CCPA/CPRA and similar) | Access, deletion and disclosure duties for server-held personal data (NFR-LEG-1) |
 | Children (COPPA) | Set a minimum age (13+) in the terms of service; don't knowingly collect data from younger users |
 | Encryption export (EAR) | Publicly available open-source encryption is generally outside EAR controls; confirm the classification (and any notification needed) with counsel |

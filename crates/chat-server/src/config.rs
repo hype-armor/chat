@@ -22,8 +22,11 @@ pub struct Config {
     pub metrics_bind: Option<SocketAddr>,
     /// Abuse limits. `CHAT_TRUST_PROXY_HEADERS=true` behind an ingress takes
     /// the client IP from `X-Forwarded-For`; each number can be overridden
-    /// with `CHAT_LIMIT_<FIELD>`, e.g. `CHAT_LIMIT_CODES_PER_IP_PER_HOUR`.
+    /// with `CHAT_LIMIT_<FIELD>`, e.g. `CHAT_LIMIT_REGISTRATIONS_PER_IP_PER_HOUR`.
     pub limits: Limits,
+    /// `CHAT_REGISTRATION`: `invite` (default) or `open` (development and
+    /// tests): whether sign-up needs an invite (ADR-0021).
+    pub open_registration: bool,
 }
 
 impl Config {
@@ -46,6 +49,11 @@ impl Config {
                 Err(_) => Some(SocketAddr::from(([0, 0, 0, 0], 9090))),
             },
             limits: limits_from_env()?,
+            open_registration: match std::env::var("CHAT_REGISTRATION").as_deref() {
+                Ok("open") => true,
+                Ok("invite") | Err(_) => false,
+                Ok(other) => anyhow::bail!("CHAT_REGISTRATION must be open or invite, not {other}"),
+            },
             vapid_subject: std::env::var("CHAT_VAPID_SUBJECT")
                 .unwrap_or_else(|_| "mailto:admin@localhost".to_owned()),
         })
@@ -59,12 +67,12 @@ fn limits_from_env() -> anyhow::Result<Limits> {
         claims_per_hour: limit_var("CLAIMS_PER_HOUR", d.claims_per_hour)?,
         welcomes_per_day: limit_var("WELCOMES_PER_DAY", d.welcomes_per_day)?,
         sends_per_minute: limit_var("SENDS_PER_MINUTE", d.sends_per_minute)?,
-        codes_per_ip_per_hour: limit_var("CODES_PER_IP_PER_HOUR", d.codes_per_ip_per_hour)?,
-        codes_per_prefix_per_hour: limit_var(
-            "CODES_PER_PREFIX_PER_HOUR",
-            d.codes_per_prefix_per_hour,
+        registrations_per_ip_per_hour: limit_var(
+            "REGISTRATIONS_PER_IP_PER_HOUR",
+            d.registrations_per_ip_per_hour,
         )?,
-        codes_per_day: limit_var("CODES_PER_DAY", d.codes_per_day)?,
+        registrations_per_day: limit_var("REGISTRATIONS_PER_DAY", d.registrations_per_day)?,
+        invites_per_day: limit_var("INVITES_PER_DAY", d.invites_per_day)?,
         links_per_ip_per_hour: limit_var("LINKS_PER_IP_PER_HOUR", d.links_per_ip_per_hour)?,
         reports_per_day: limit_var("REPORTS_PER_DAY", d.reports_per_day)?,
         trust_proxy_headers: std::env::var("CHAT_TRUST_PROXY_HEADERS").is_ok_and(|v| v == "true"),

@@ -1,16 +1,16 @@
 import { expect, test } from '@playwright/test'
-import { messages, openChat, randomPhone, signUp } from './support'
+import { messages, openChat, randomUsername, signUp } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
 test("a removed member's late message reaches nobody", async ({ browser, browserName }) => {
   test.skip(browserName === 'webkit', 'WebKit cannot reload while offline under Playwright')
-  const benPhone = randomPhone()
-  const ann = await signUp(browser, 'Ann', randomPhone())
-  const ben = await signUp(browser, 'Ben', benPhone)
+  const benUsername = randomUsername()
+  const ann = await signUp(browser, 'Ann', randomUsername())
+  const ben = await signUp(browser, 'Ben', benUsername)
   await ann.getByText('New group').click()
   await ann.getByLabel('Group name').fill('Club')
-  await ann.getByLabel("Members' phone numbers").fill(benPhone)
+  await ann.getByLabel("Members' usernames").fill(benUsername)
   await ann.getByRole('button', { name: 'Create group' }).click()
   await openChat(ben, /Club/)
 

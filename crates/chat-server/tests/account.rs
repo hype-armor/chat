@@ -8,12 +8,16 @@ use support::TestServer;
 #[sqlx::test]
 async fn deleting_an_account_removes_its_server_data(pool: PgPool) {
     let server = TestServer::start(pool).await;
-    let phone = "+15550004001";
-    let (alice, token) = server.register(phone).await;
-    let (bob, bob_token) = server.register("+15550004002").await;
+    let username = "alice.40";
+    let (alice, token) = server.register(username).await;
+    let (bob, bob_token) = server.register("u5550004002.10").await;
     server.admit(b"c", &[alice, bob]).await;
     let (_, me) = server
-        .post("/v1/lookup", Some(&bob_token), json!({ "phone": phone }))
+        .post(
+            "/v1/lookup",
+            Some(&bob_token),
+            json!({ "username": username }),
+        )
         .await;
     let report = json!({ "account_id": me["account_id"], "reason": "spam" });
     assert_eq!(
@@ -22,12 +26,12 @@ async fn deleting_an_account_removes_its_server_data(pool: PgPool) {
     );
     let mut ws = server.connect(&token).await;
 
-    // The phone number must be typed again.
+    // The username must be typed again.
     let (status, _) = server
         .post(
             "/v1/account/delete",
             Some(&token),
-            json!({ "phone": "+15550000000" }),
+            json!({ "username": "u5550000000.10" }),
         )
         .await;
     assert_eq!(status, 400);
@@ -35,25 +39,18 @@ async fn deleting_an_account_removes_its_server_data(pool: PgPool) {
         .post(
             "/v1/account/delete",
             Some(&token),
-            json!({ "phone": phone }),
+            json!({ "username": username }),
         )
         .await;
     assert_eq!(status, 204);
 
     let db = server.state.db.as_ref().unwrap();
-    for (table, column) in [
-        ("accounts", "phone_number"),
-        ("verification_codes", "phone_number"),
-        ("code_requests", "phone_number"),
-    ] {
-        let (n,): (i64,) =
-            sqlx::query_as(&format!("SELECT count(*) FROM {table} WHERE {column} = $1"))
-                .bind(phone)
-                .fetch_one(db)
-                .await
-                .unwrap();
-        assert_eq!(n, 0, "{table}");
-    }
+    let (n,): (i64,) = sqlx::query_as("SELECT count(*) FROM accounts WHERE username = $1")
+        .bind(username)
+        .fetch_one(db)
+        .await
+        .unwrap();
+    assert_eq!(n, 0, "accounts");
     for table in [
         "devices",
         "conversation_members",
@@ -79,9 +76,9 @@ async fn deleting_an_account_removes_its_server_data(pool: PgPool) {
         .unwrap();
     assert_eq!(reports, 0);
 
-    // Its token stops working and its socket closes; the number can sign up afresh.
+    // Its token stops working and its socket closes; the username is free again.
     assert_eq!(server.get("/v1/devices", Some(&token)).await.0, 401);
     assert!(ws.closed().await, "socket stays open");
-    let (again, _) = server.register(phone).await;
+    let (again, _) = server.register(username).await;
     assert_ne!(again, alice);
 }

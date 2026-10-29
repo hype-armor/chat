@@ -77,7 +77,7 @@ isolation or mDNS blocking might break this.
     ephemeral identities. It is private, but whether the person is who they
     say they are is unverified.
   - **Promote to contact** (FR-OFF-11): both users consent; they swap
-    long-term identity keys (and, optionally, phone numbers) inside the
+    long-term identity keys (and, optionally, usernames) inside the
     encrypted DM and compare a safety code.
 - **Broadcasts** (FR-OFF-12): signed by the sender's room identity, relayed
   across the room/mesh, and marked "unverified" unless signed by a contact.
@@ -165,7 +165,7 @@ use (another protocol to audit).
 | Threat | Mitigation |
 |--------|-----------|
 | Tracking via beacons / ephemeral IDs | Rotating tokens, a fresh room identity per room, MAC randomisation |
-| Spam/flooding by strangers (no phone verification offline) | Per-identity rate limits, small proof-of-work on broadcasts, hop/TTL limits, local block/mute, stranger media blurred and not auto-downloaded |
+| Spam/flooding by strangers (no verified identity offline) | Per-identity rate limits, small proof-of-work on broadcasts, hop/TTL limits, local block/mute, stranger media blurred and not auto-downloaded |
 | Impersonation of a contact | Contacts verified by long-term keys; strangers clearly labelled; promoting needs a safety-code comparison |
 | Fake "official" emergency broadcasts | Always marked unverified unless signed by a contact |
 | Sybil relays dropping messages | Multi-path spray, delivery receipts |

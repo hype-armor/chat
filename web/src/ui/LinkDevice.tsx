@@ -78,7 +78,7 @@ export function LinkThisDevice({ core, onCancel }: { core: CoreClient; onCancel:
         </p>
       )}
       <button type="button" className="link" onClick={onCancel}>
-        Sign up with a phone number instead
+        Sign up with a new account instead
       </button>
     </section>
   )

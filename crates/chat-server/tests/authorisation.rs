@@ -73,9 +73,9 @@ async fn claim(server: &TestServer, token: &str, devices: &[Uuid]) {
 #[sqlx::test]
 async fn only_members_send_and_receive(pool: PgPool) {
     let server = TestServer::start(pool).await;
-    let (alice, alice_token) = user(&server, "+15550007001").await;
-    let (bob, _) = user(&server, "+15550007002").await;
-    let (mallory, mallory_token) = user(&server, "+15550007003").await;
+    let (alice, alice_token) = user(&server, "u5550007001.10").await;
+    let (bob, _) = user(&server, "u5550007002.10").await;
+    let (mallory, mallory_token) = user(&server, "u5550007003.10").await;
     server.admit(b"conv", &[alice, bob]).await;
     let mut alice_ws = server.connect(&alice_token).await;
     let mut mallory_ws = server.connect(&mallory_token).await;
@@ -104,9 +104,9 @@ async fn only_members_send_and_receive(pool: PgPool) {
 #[sqlx::test]
 async fn welcomes_need_a_claimed_key_package(pool: PgPool) {
     let server = TestServer::start(pool).await;
-    let (alice, alice_token) = user(&server, "+15550007011").await;
-    let (bob, bob_token) = user(&server, "+15550007012").await;
-    let (_, mallory_token) = user(&server, "+15550007013").await;
+    let (alice, alice_token) = user(&server, "u5550007011.10").await;
+    let (bob, bob_token) = user(&server, "u5550007012.10").await;
+    let (_, mallory_token) = user(&server, "u5550007013.10").await;
     let mut alice_ws = server.connect(&alice_token).await;
 
     let welcome = || envelope(b"new-conv", ContentType::Welcome, 0);
@@ -139,9 +139,9 @@ async fn welcomes_need_a_claimed_key_package(pool: PgPool) {
 #[sqlx::test]
 async fn commit_and_welcome_are_accepted_together(pool: PgPool) {
     let server = TestServer::start(pool).await;
-    let (alice, alice_token) = user(&server, "+15550007021").await;
-    let (bob, bob_token) = user(&server, "+15550007022").await;
-    let (carol, carol_token) = user(&server, "+15550007023").await;
+    let (alice, alice_token) = user(&server, "u5550007021.10").await;
+    let (bob, bob_token) = user(&server, "u5550007022.10").await;
+    let (carol, carol_token) = user(&server, "u5550007023.10").await;
     server.admit(b"group", &[alice, bob]).await;
     let mut alice_ws = server.connect(&alice_token).await;
 

@@ -12,18 +12,17 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
   switch (request.type) {
     case 'view':
       return { type: 'view', view: engine.view() }
-    case 'requestCode':
-      await engine.requestCode(request.phone)
+    case 'signUp':
+      await engine.signUp(request.username, request.displayName, request.invite)
       return { type: 'ok' }
-    case 'verify':
-      await engine.verify(request.phone, request.code, request.displayName)
-      return { type: 'ok' }
+    case 'createInvite':
+      return { type: 'invite', offer: await engine.createInvite() }
     case 'startChat':
-      return { type: 'conversation', conversationId: await engine.startChat(request.phone) }
+      return { type: 'conversation', conversationId: await engine.startChat(request.username) }
     case 'createGroup':
-      return { type: 'conversation', conversationId: await engine.createGroup(request.name, request.phones) }
+      return { type: 'conversation', conversationId: await engine.createGroup(request.name, request.usernames) }
     case 'addMembers':
-      await engine.addMembers(request.conversationId, request.phones)
+      await engine.addMembers(request.conversationId, request.usernames)
       return { type: 'ok' }
     case 'pushKey':
       return { type: 'pushKey', key: await engine.pushKey() }
@@ -82,7 +81,7 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
       await engine.setReadReceipts(request.on)
       return { type: 'ok' }
     case 'deleteAccount':
-      await engine.deleteAccount(request.phone)
+      await engine.deleteAccount(request.username)
       return { type: 'ok' }
     case 'acceptRequest':
       await engine.acceptRequest(request.conversationId)

@@ -13,7 +13,6 @@
 //! non-zero when p95 is 1 s or more.
 
 use std::{
-    collections::HashMap,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -25,12 +24,7 @@ use chat_proto::{
         client_frame, server_frame,
     },
 };
-use chat_server::{
-    AppState,
-    limits::Limits,
-    router,
-    sms::{CodeSender, SendFuture},
-};
+use chat_server::{AppState, limits::Limits, router};
 use futures_util::{SinkExt, StreamExt};
 use prost::Message as _;
 use serde_json::{Value, json};
@@ -40,16 +34,6 @@ use uuid::Uuid;
 
 /// Padded size of a short text message (doc 05 padding buckets).
 const CIPHERTEXT_BYTES: usize = 256;
-
-#[derive(Default)]
-struct Codes(Mutex<HashMap<String, String>>);
-
-impl CodeSender for Codes {
-    fn send<'a>(&'a self, phone: &'a str, code: &'a str) -> SendFuture<'a> {
-        self.0.lock().unwrap().insert(phone.into(), code.into());
-        Box::pin(async { Ok(()) })
-    }
-}
 
 struct Args {
     users: usize,
@@ -95,14 +79,14 @@ struct Stats {
 async fn main() -> anyhow::Result<()> {
     let args = args();
     let db = chat_server::connect_db(&std::env::var("DATABASE_URL")?).await?;
-    let codes = Arc::new(Codes::default());
     let limits = Limits {
-        codes_per_ip_per_hour: i32::MAX,
-        codes_per_prefix_per_hour: i32::MAX,
-        codes_per_day: i32::MAX,
+        registrations_per_ip_per_hour: i32::MAX,
+        registrations_per_day: i32::MAX,
         ..Limits::default()
     };
-    let state = AppState::new(Some(db.clone()), codes.clone()).with_limits(limits);
+    let state = AppState::new(Some(db.clone()))
+        .with_open_registration(true)
+        .with_limits(limits);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     tokio::spawn(axum::serve(listener, router(state.clone())).into_future());
@@ -114,10 +98,9 @@ async fn main() -> anyhow::Result<()> {
     let started = Instant::now();
     let mut users = Vec::new();
     for chunk in (0..args.users).collect::<Vec<_>>().chunks(20) {
-        let batch = chunk.iter().map(|i| {
-            let phone = format!("+19{run:03}{i:07}");
-            register(&http, &base, &codes, phone)
-        });
+        let batch = chunk
+            .iter()
+            .map(|i| register(&http, &base, format!("l{run:03}{i:07}.10")));
         users.extend(futures_util::future::try_join_all(batch).await?);
     }
     println!(
@@ -232,18 +215,11 @@ fn conversation_id(run: u32, group: usize) -> Vec<u8> {
 async fn register(
     http: &reqwest::Client,
     base: &str,
-    codes: &Codes,
-    phone: String,
+    username: String,
 ) -> anyhow::Result<(Uuid, String)> {
-    http.post(format!("{base}/v1/auth/request-code"))
-        .json(&json!({ "phone": phone }))
-        .send()
-        .await?
-        .error_for_status()?;
-    let code = codes.0.lock().unwrap()[&phone].clone();
     let body: Value = http
-        .post(format!("{base}/v1/auth/verify"))
-        .json(&json!({ "phone": phone, "code": code, "identity_key": "bG9hZHRlc3Q=" }))
+        .post(format!("{base}/v1/register"))
+        .json(&json!({ "username": username, "identity_key": "bG9hZHRlc3Q=" }))
         .send()
         .await?
         .error_for_status()?

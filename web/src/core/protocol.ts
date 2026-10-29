@@ -35,7 +35,7 @@ export type AppView =
     }
   | {
       phase: 'ready'
-      me: { phone: string; displayName: string }
+      me: { username: string; displayName: string }
       connection: ConnectionState
       conversations: ConversationSummary[]
       /** New devices on this account that nobody here approved (ADR-0020). */
@@ -46,6 +46,9 @@ export type AppView =
 
 /** One of this account's devices (ADR-0019). */
 export type DeviceInfo = { id: string; addedOn: string; lastSeenOn?: string; current: boolean }
+
+/** An invite link to share, and the same as a QR code (ADR-0021). */
+export type InviteOffer = { link: string; expiresInDays: number; qrSize: number; qrModules: number[] }
 
 /** A link code to show on a new device: text for typing, QR modules for scanning. */
 export type LinkOffer = { code: string; qrSize: number; qrModules: number[] }
@@ -74,7 +77,7 @@ export type ChatMessage = {
   from: string
   /** A notice from this app (e.g. a safety number change), not a message. */
   kind?: 'notice'
-  /** Sender's display name (or phone), resolved when read. */
+  /** Sender's display name (or username), resolved when read. */
   fromName?: string
   text: string
   sentAt: number
@@ -93,11 +96,11 @@ export type BenchResult = { members: number; setupMs: number; commitMs: number; 
 
 export type CoreRequest =
   | { type: 'view' }
-  | { type: 'requestCode'; phone: string }
-  | { type: 'verify'; phone: string; code: string; displayName: string }
-  | { type: 'startChat'; phone: string }
-  | { type: 'createGroup'; name: string; phones: string[] }
-  | { type: 'addMembers'; conversationId: string; phones: string[] }
+  | { type: 'signUp'; username: string; displayName: string; invite?: string }
+  | { type: 'createInvite' }
+  | { type: 'startChat'; username: string }
+  | { type: 'createGroup'; name: string; usernames: string[] }
+  | { type: 'addMembers'; conversationId: string; usernames: string[] }
   | { type: 'members'; conversationId: string }
   | { type: 'pushKey' }
   | { type: 'enablePush'; subscription: PushSubscriptionJSON }
@@ -118,7 +121,7 @@ export type CoreRequest =
   | { type: 'verifyScanned'; conversationId: string; account: string; text: string }
   | { type: 'dismissAlert'; id: string }
   | { type: 'acceptRequest'; conversationId: string }
-  | { type: 'deleteAccount'; phone: string }
+  | { type: 'deleteAccount'; username: string }
   | { type: 'markRead'; conversationId: string }
   | { type: 'retryMessage'; conversationId: string; messageId: string }
   | { type: 'setReadReceipts'; on: boolean }
@@ -143,6 +146,7 @@ export type CoreResponseBody =
   | { type: 'members'; members: MemberInfo[] }
   | { type: 'pushKey'; key: string }
   | { type: 'link'; offer: LinkOffer }
+  | { type: 'invite'; offer: InviteOffer }
   | { type: 'devices'; devices: DeviceInfo[] }
   | { type: 'qr'; text?: string }
   | { type: 'safety'; safety: SafetyNumber }

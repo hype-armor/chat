@@ -17,7 +17,7 @@ revisited; do it with a new ADR that supersedes the old one.
 | [0008](0008-maps-maplibre-pmtiles.md) | Maps: MapLibre GL JS + Protomaps PMTiles | Accepted |
 | [0009](0009-federation-later.md) | No federation in v1; self-hosting supported | Accepted |
 | [0010](0010-backup-recovery-key.md) | Encrypted backup with user-held recovery key | Accepted |
-| [0011](0011-identity-phone-number.md) | Account identity: phone number | Accepted |
+| [0011](0011-identity-phone-number.md) | Account identity: phone number | Superseded by 0021 |
 | [0012](0012-licence.md) | Licence: AGPL-3.0-or-later (code), CC BY 4.0 (spec) | Accepted |
 | [0013](0013-native-wrappers.md) | Native wrappers: Capacitor (mobile), Tauri (desktop) | Accepted |
 | [0014](0014-kubernetes-us-hosting.md) | Run on Kubernetes, hosted in the United States | Accepted |
@@ -27,3 +27,4 @@ revisited; do it with a new ADR that supersedes the old one.
 | [0018](0018-pull-based-dev-deployment.md) | Pull-based continuous deployment to the dev cluster | Accepted |
 | [0019](0019-linked-devices.md) | Linked devices: server-approved link codes, MLS for everything else | Accepted |
 | [0020](0020-safety-numbers.md) | Safety numbers per pair of accounts; warnings on new device keys | Accepted |
+| [0021](0021-usernames-and-invites.md) | Usernames and invite-only sign-up (replaces phone numbers) | Accepted |

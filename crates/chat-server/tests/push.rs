@@ -101,8 +101,8 @@ async fn offline_devices_get_one_content_free_push(pool: PgPool) {
         .unwrap();
     assert_eq!(key["public_key"], public_key.as_str());
 
-    let (alice_dev, alice_token) = server.register("+15550006001").await;
-    let (bob, bob_token) = server.register("+15550006002").await;
+    let (alice_dev, alice_token) = server.register("u5550006001.10").await;
+    let (bob, bob_token) = server.register("u5550006002.10").await;
     server.admit(b"g", &[alice_dev, bob]).await;
     let sub = json!({ "endpoint": format!("{base}/push/bob"), "keys": { "p256dh": "BOB_P256DH", "auth": "BOB_AUTH" } });
     let (status, _) = server
@@ -142,8 +142,8 @@ async fn expired_subscriptions_are_deleted(pool: PgPool) {
     *service.status.lock().unwrap() = 410;
     let push = PushSender::generate("mailto:test@example.com".into(), true).unwrap();
     let server = TestServer::start_with_push(pool.clone(), Some(push)).await;
-    let (alice_dev, alice_token) = server.register("+15550006003").await;
-    let (bob, bob_token) = server.register("+15550006004").await;
+    let (alice_dev, alice_token) = server.register("u5550006003.10").await;
+    let (bob, bob_token) = server.register("u5550006004.10").await;
     server.admit(b"g", &[alice_dev, bob]).await;
     let sub =
         json!({ "endpoint": format!("{base}/push/bob"), "keys": { "p256dh": "k", "auth": "a" } });
@@ -176,7 +176,7 @@ async fn subscription_validation(pool: PgPool) {
     // Production config: only HTTPS endpoints.
     let push = PushSender::generate("mailto:test@example.com".into(), false).unwrap();
     let server = TestServer::start_with_push(pool, Some(push)).await;
-    let (_, token) = server.register("+15550006005").await;
+    let (_, token) = server.register("u5550006005.10").await;
     let http =
         json!({ "endpoint": "http://push.example.com/x", "keys": { "p256dh": "k", "auth": "a" } });
     let (status, _) = server
@@ -202,8 +202,8 @@ async fn silent_sends_do_not_push(pool: PgPool) {
     let (service, base) = FakePushService::start().await;
     let push = PushSender::generate("mailto:test@example.com".into(), true).unwrap();
     let server = TestServer::start_with_push(pool, Some(push)).await;
-    let (alice_dev, alice_token) = server.register("+15550006101").await;
-    let (bob, bob_token) = server.register("+15550006102").await;
+    let (alice_dev, alice_token) = server.register("u5550006101.10").await;
+    let (bob, bob_token) = server.register("u5550006102.10").await;
     server.admit(b"g", &[alice_dev, bob]).await;
     let sub =
         json!({ "endpoint": format!("{base}/push/bob"), "keys": { "p256dh": "P", "auth": "A" } });

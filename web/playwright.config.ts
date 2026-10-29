@@ -23,10 +23,11 @@ export default defineConfig({
             env: {
               CHAT_BIND: '127.0.0.1:8080',
               CHAT_LOG_FORMAT: 'json',
-              // Every test signs up from 127.0.0.1 with +1555 numbers.
-              CHAT_LIMIT_CODES_PER_IP_PER_HOUR: '100000',
-              CHAT_LIMIT_CODES_PER_PREFIX_PER_HOUR: '100000',
-              CHAT_LIMIT_CODES_PER_DAY: '100000',
+              // Tests sign up without invites, all from 127.0.0.1.
+              CHAT_REGISTRATION: 'open',
+              CHAT_LIMIT_REGISTRATIONS_PER_IP_PER_HOUR: '100000',
+              CHAT_LIMIT_REGISTRATIONS_PER_DAY: '100000',
+              CHAT_LIMIT_INVITES_PER_DAY: '100000',
               CHAT_LIMIT_LINKS_PER_IP_PER_HOUR: '100000',
             },
           },

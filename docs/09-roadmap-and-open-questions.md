@@ -7,7 +7,7 @@
 | Question | Answer | Where applied |
 |----------|--------|---------------|
 | Platforms | Web + PWA first | 01, 03, ADR-0004, ADR-0013 |
-| Identity | Phone number | 02 FR-ID-1, ADR-0011 |
+| Identity | Username + invite-only sign-up (was phone number) | 02 FR-ID-1, ADR-0021 |
 | Max group size | 50 (chat and calls) | 02 FR-MSG-3, FR-CALL-2 |
 | Offline scope | Contacts **and strangers** | 07 §3.3, FR-OFF-10..12 |
 | Technology | No restrictions — best fit | 08, ADRs 0001–0013 |
@@ -26,7 +26,7 @@
 | Phase | Scope | Exit criteria |
 |-------|-------|---------------|
 | **0. Spikes** | Scaffold in place (see repo README). (a) OpenMLS in WASM in all 3 browser engines, 50-member commit timing — *Chromium done: 17 ms on desktop*; (b) SQLite3MultipleCiphers on OPFS; (c) QR-paired WebRTC on a phone hotspot with no internet (iOS Safari PWA + Android Chrome), third peer joining via the mesh; (d) SFrame-encrypted 3-party call through LiveKit | All four demoed; ADRs confirmed or superseded |
-| **1. MVP messaging (web)** | *In progress: server delivery, web sign-up, 1:1 chats and groups (create, add people) done.* Deployed continuously to the dev k3s cluster. Phone sign-up, device keys, 1:1 + groups (MLS), Web Push, encrypted local DB, PWA install, device linking by QR | Internal dogfood; delivery p95 < 1 s |
+| **1. MVP messaging (web)** | *In progress: server delivery, web sign-up, 1:1 chats and groups (create, add people) done.* Deployed continuously to the dev k3s cluster. Username sign-up by invite, device keys, 1:1 + groups (MLS), Web Push, encrypted local DB, PWA install, device linking by QR | Internal dogfood; delivery p95 < 1 s |
 | **2. Media, location, backup** | Encrypted attachments, voice notes, one-shot + live location (foreground), encrypted backup | Feature-complete beta |
 | **3. Calling** | 1:1 P2P calls, then group calls via LiveKit with SFrame | Call success ≥ 99% |
 | **4. Local mode (Tier 1 offline)** | QR rooms, contacts + strangers, mesh relay, local calls, sync back online | Field test with 20+ devices |
@@ -38,7 +38,7 @@
 
 Worked in this order; tick items as their PRs merge.
 
-**Done:** phone sign-up, device keys and key directory; server delivery
+**Done:** sign-up (phone at first, usernames and invites since ADR-0021), device keys and key directory; server delivery
 (durable queue, ack/redelivery, one commit per epoch); 1:1 chats and groups
 up to 50 (create, add people); offline outbox; encrypted local storage
 surviving reloads; three-engine browser CI against a real server.
@@ -69,8 +69,8 @@ surviving reloads; three-engine browser CI against a real server.
     update banner (FR-PLAT-2/3).
 14. [x] Key-package replenishment driven by a server-reported count.
 15. [x] Retry and clear feedback for messages the server rejects.
-16. [ ] Real SMS provider behind `CodeSender` (needed for production, not
-    for dogfooding).
+16. [ ] ~~Real SMS provider~~ replaced by usernames and invite-only sign-up
+    (ADR-0021); no SMS anywhere.
 
 **Exit:** internal dogfood on the dev cluster; delivery p95 < 1 s.
 
@@ -92,7 +92,7 @@ Firefox and WebKit.
 | Browser storage eviction loses keys/history | High | Persistent storage request, install prompt, linked devices, encrypted backup |
 | Hotspot/LAN quirks break QR-paired WebRTC (client isolation, mDNS) | High | Phase 0 spike (c); fallback: the hotspot host relays for others |
 | No background execution on web (missed calls, live location pauses) | Medium | Honest UX; native wrappers in phase 6 |
-| Stranger spam/abuse offline (no phone verification) | Medium | Doc 07 §8 |
+| Stranger spam/abuse offline (no verified identity) | Medium | Doc 07 §8 |
 | SMS-pumping fraud and SMS cost | Medium | Rate limits, CAPTCHA/proof-of-work before sending codes, blocking premium-rate number ranges |
 | MLS ordering vs. offline | Medium | Membership frozen offline (ADR-0007) |
 | iOS Safari gaps (Web Push needs an installed PWA, WebRTC/encoded-transform quirks) | Medium | Feature detection; test in WebKit on every PR (Playwright) |

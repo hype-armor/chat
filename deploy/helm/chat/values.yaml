@@ -23,6 +23,10 @@ server:
   # Take the client IP (for per-IP limits) from the last X-Forwarded-For
   # entry. True when the server is only reachable through the ingress.
   trustProxyHeaders: true
+  # Sign-up: "invite" (an invite link is needed; ADR-0021) or "open"
+  # (development only). Create the first invite with:
+  #   kubectl -n chat exec deploy/chat-server -- chat-server create-invite https://<host>
+  registration: invite
   # Prometheus metrics on their own port (not routed by the ingress):
   # aggregate latency histograms and counters, no per-user labels.
   metrics:
