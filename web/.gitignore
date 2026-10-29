@@ -1,0 +1,6 @@
+node_modules
+dist
+dev-dist
+src/core/pkg
+test-results
+playwright-report

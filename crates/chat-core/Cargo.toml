@@ -1,0 +1,25 @@
+[package]
+name = "chat-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# Browser build: wasm-bindgen exports plus browser randomness sources.
+wasm = ["dep:wasm-bindgen", "dep:getrandom", "openmls/js"]
+
+[dependencies]
+chat-proto = { version = "0.1.0", path = "../chat-proto" }
+getrandom = { version = "0.2", features = ["js"], optional = true }
+openmls = "0.8.3"
+openmls_basic_credential = "0.5.0"
+openmls_rust_crypto = "0.5.1"
+prost = "0.14.4"
+thiserror = "2.0.21"
+wasm-bindgen = { version = "0.2.129", optional = true }
+

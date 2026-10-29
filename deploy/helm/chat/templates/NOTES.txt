@@ -1,0 +1,7 @@
+Chat {{ .Chart.AppVersion }} deployed as release "{{ .Release.Name }}".
+
+  Web app:   https://{{ .Values.host }}/
+  WebSocket: wss://{{ .Values.host }}/v1/ws
+
+The server reads DATABASE_URL from secret "{{ .Values.server.database.existingSecret }}"
+(key "{{ .Values.server.database.secretKey }}"); it must exist before pods become ready.

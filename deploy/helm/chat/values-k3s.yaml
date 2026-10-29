@@ -1,0 +1,16 @@
+# Overrides for a single-node k3s install (docs/10-deployment-kubernetes.md).
+# Use with: helm upgrade --install chat deploy/helm/chat -n chat \
+#             -f deploy/helm/chat/values-k3s.yaml --set host=chat.example.com
+ingress:
+  enabled: true
+  # k3s bundles Traefik as its ingress controller.
+  className: traefik
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+
+networkPolicy:
+  enabled: true
+  # k3s runs Traefik in kube-system; k3s enforces NetworkPolicy natively.
+  ingressNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: kube-system

@@ -1,0 +1,8 @@
+target
+**/node_modules
+web/dist
+web/dev-dist
+web/src/core/pkg
+web/test-results
+web/playwright-report
+.git

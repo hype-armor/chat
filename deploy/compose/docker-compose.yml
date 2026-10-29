@@ -1,0 +1,60 @@
+# Local development stack. Run from the repository root:
+#   docker compose -f deploy/compose/docker-compose.yml up --build
+# Production runs on Kubernetes (deploy/helm, docs/10-deployment-kubernetes.md).
+name: chat
+
+services:
+  server:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/server.Dockerfile
+    environment:
+      DATABASE_URL: postgres://chat:chat@postgres:5432/chat
+      CHAT_LOG_FORMAT: pretty
+    ports: ["8080:8080"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/web.Dockerfile
+    environment:
+      CSP_CONNECT_EXTRA: "ws://localhost:7880"
+    ports: ["8000:8080"]
+
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: chat
+      POSTGRES_PASSWORD: chat
+      POSTGRES_DB: chat
+    volumes: [postgres:/var/lib/postgresql]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chat"]
+      interval: 2s
+      retries: 30
+
+  valkey:
+    image: valkey/valkey:9.0-alpine
+
+  # S3-compatible object storage for encrypted attachments.
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.50
+    command: server -s3 -dir=/data
+    ports: ["8333:8333"]
+    volumes: [seaweedfs:/data]
+
+  # SFU for group calls; --dev uses the well-known devkey/secret pair.
+  livekit:
+    image: livekit/livekit-server:v1.13
+    command: --dev --bind 0.0.0.0
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "7882:7882/udp"
+
+volumes:
+  postgres:
+  seaweedfs:

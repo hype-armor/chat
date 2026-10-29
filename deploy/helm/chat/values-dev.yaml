@@ -1,0 +1,19 @@
+# Development / test install on k3s, layered on values-k3s.yaml:
+#   scripts/k3s-dev-deploy.sh   (builds images, imports them, installs)
+host: chat.test
+
+server:
+  image:
+    tag: dev
+    pullPolicy: Never       # images are imported into k3s, not pulled
+  logLevel: debug,chat_server=trace
+web:
+  image:
+    tag: dev
+    pullPolicy: Never
+  cspConnectExtra: "wss://rtc.chat.test"
+
+ingress:
+  annotations:
+    # Local CA from deploy/k3s/dev-ca.yaml; trust its root on test devices.
+    cert-manager.io/cluster-issuer: dev-ca
