@@ -9,7 +9,9 @@ Details and rationale in ADR-0024.
 
 1. Pre-process on device: photos are re-drawn on a canvas, which drops
    EXIF/GPS and all other metadata (FR-MED-8) and scales them to fit
-   2560 px. A JPEG thumbnail of at most 48 KB is made.
+   2560 px. A JPEG thumbnail of at most 48 KB is made. MP4/QuickTime clips
+   have their recorded location blanked; videos get a poster frame as the
+   thumbnail; voice notes are recorded in the app (Opus or AAC).
 2. Generate a random 256-bit key and seal the file with the **STREAM**
    construction over AES-256-GCM (RustCrypto `aead`, 64 KiB chunks) in the
    core worker, so large files are processed piece by piece.

@@ -78,6 +78,22 @@ export function isPhoto(mime: string): boolean {
   return /^image\/(jpeg|png|gif|webp|avif|bmp)$/.test(mime)
 }
 
+/** Played inline (audio and video elements run no script). */
+export function isPlayable(mime: string): boolean {
+  return /^(audio\/(webm|ogg|mp4|mpeg|aac|wav|x-m4a)|video\/(mp4|webm|quicktime))$/.test(mime)
+}
+
+/** What the UI thread learns about a clip before sending it (it can decode media; the worker can't). */
+export type MediaInfo = {
+  durationMs?: number
+  width?: number
+  height?: number
+  /** A JPEG frame for videos. */
+  thumbnail?: Uint8Array<ArrayBuffer>
+  /** Recorded in the app. */
+  voiceNote?: boolean
+}
+
 /** An image or file in a message (ADR-0024). */
 export type FileInfo = {
   name: string
@@ -88,6 +104,9 @@ export type FileInfo = {
   width?: number
   height?: number
   thumbnail?: Uint8Array<ArrayBuffer>
+  /** Audio and video. */
+  durationMs?: number
+  voiceNote?: boolean
 }
 
 export type ChatMessage = {
@@ -131,7 +150,7 @@ export type CoreRequest =
   | { type: 'leaveGroup'; conversationId: string }
   | { type: 'messages'; conversationId: string }
   | { type: 'sendText'; conversationId: string; text: string }
-  | { type: 'sendFile'; conversationId: string; file: File; caption: string }
+  | { type: 'sendFile'; conversationId: string; file: File; caption: string; media?: MediaInfo }
   | { type: 'openAttachment'; conversationId: string; messageId: string }
   | { type: 'startLink' }
   | { type: 'cancelLink' }

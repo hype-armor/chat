@@ -2,7 +2,8 @@
 // core worker; this only shows what it hands back.
 import { useEffect, useState } from 'react'
 import type { CoreClient } from '../core/client'
-import { type FileInfo, isPhoto } from '../core/protocol'
+import { type FileInfo, isPhoto, isPlayable } from '../core/protocol'
+import { formatDuration } from './media'
 
 export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -43,6 +44,8 @@ export function Attachment({
   file: FileInfo
 }) {
   const photo = isPhoto(file.mime)
+  const playable = isPlayable(file.mime)
+  const video = playable && file.mime.startsWith('video/')
   const [thumb] = useState(() => (file.thumbnail ? new Blob([file.thumbnail], { type: 'image/jpeg' }) : undefined))
   const [full, setFull] = useState<Blob>()
   const [busy, setBusy] = useState(false)
@@ -56,7 +59,7 @@ export function Attachment({
     setError(undefined)
     try {
       const blob = await core.openAttachment(conversationId, messageId)
-      if (photo) setFull(blob)
+      if (photo || playable) setFull(blob)
       return blob
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -71,9 +74,34 @@ export function Attachment({
   }
 
   const aspect = file.width && file.height ? `${file.width} / ${file.height}` : undefined
+  const label = file.voiceNote ? 'Voice note' : file.name
+  const duration = file.durationMs ? ` · ${formatDuration(file.durationMs)}` : ''
   return (
     <div className="attachment" data-testid="attachment">
-      {photo && (thumbUrl || fullUrl) ? (
+      {playable && fullUrl ? (
+        video ? (
+          <video src={fullUrl} controls autoPlay playsInline aria-label={label} style={{ aspectRatio: aspect }} />
+        ) : (
+          <audio src={fullUrl} controls autoPlay aria-label={label} />
+        )
+      ) : playable ? (
+        <button
+          type="button"
+          className={video && thumbUrl ? 'photo' : 'play'}
+          onClick={() => void open()}
+          disabled={busy}
+          aria-label={`Play ${label}`}
+        >
+          {video && thumbUrl ? (
+            <img src={thumbUrl} alt="" style={{ aspectRatio: aspect }} />
+          ) : (
+            <span>
+              ▶ {file.voiceNote ? '🎤 Voice note' : video ? `🎬 ${file.name}` : `🎵 ${file.name}`}
+              {duration}
+            </span>
+          )}
+        </button>
+      ) : photo && (thumbUrl || fullUrl) ? (
         <button
           type="button"
           className="photo"
@@ -87,10 +115,16 @@ export function Attachment({
         <span className="file-name">📎 {file.name}</span>
       )}
       <span className="small muted">
-        {formatSize(file.size)} ·{' '}
-        <button type="button" className="link small" onClick={() => void download()} disabled={busy}>
-          {busy ? 'Opening…' : photo ? 'Save' : 'Download'}
-        </button>
+        {formatSize(file.size)}
+        {video && thumbUrl && duration}
+        {!file.voiceNote && (
+          <>
+            {' · '}
+            <button type="button" className="link small" onClick={() => void download()} disabled={busy}>
+              {busy ? 'Opening…' : photo || playable ? 'Save' : 'Download'}
+            </button>
+          </>
+        )}
       </span>
       {error && (
         <span className="small error" role="alert">

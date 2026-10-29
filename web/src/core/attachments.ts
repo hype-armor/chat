@@ -12,7 +12,7 @@ const MAX_EDGE = 2560
 const THUMB_EDGE = 320
 const SMALL_THUMB_EDGE = 160
 /** Thumbnails travel inside the MLS message, so they stay small. */
-const MAX_THUMB_BYTES = 48 * 1024
+export const MAX_THUMB_BYTES = 48 * 1024
 
 /** Formats re-drawn on a canvas, which keeps only the pixels (FR-MED-8). */
 const REDRAWN = /^image\/(jpeg|png|webp|avif|bmp|heic|heif|tiff)$/
@@ -45,8 +45,28 @@ export function safeMime(mime: string): string {
 }
 
 /** Shown in the chat list and notifications. */
-export function attachmentLabel(mime: string, name: string): string {
-  return mime.startsWith('image/') ? 'Photo' : `File: ${name}`
+export function attachmentLabel(mime: string, name: string, voiceNote?: boolean): string {
+  if (voiceNote) return 'Voice note'
+  if (mime.startsWith('image/')) return 'Photo'
+  if (mime.startsWith('video/')) return 'Video'
+  if (mime.startsWith('audio/')) return 'Audio'
+  return `File: ${name}`
+}
+
+/** Clips longer than this are refused. */
+const MAX_DURATION_MS = 24 * 60 * 60_000
+/** Thumbnails travel inside the MLS message (see MAX_THUMB_BYTES). */
+export const MAX_RECEIVED_THUMB_BYTES = 64 * 1024
+
+/** A duration from a message or the UI, if it is plausible. */
+export function safeDuration(ms: number | undefined): number | undefined {
+  return ms !== undefined && Number.isFinite(ms) && ms > 0 && ms <= MAX_DURATION_MS ? Math.round(ms) : undefined
+}
+
+/** Pixel sizes from a message or the UI, if plausible. */
+export function safeSize(width?: number, height?: number): { width?: number; height?: number } {
+  const ok = (n?: number) => n !== undefined && Number.isInteger(n) && n > 0 && n <= 20_000
+  return ok(width) && ok(height) ? { width, height } : {}
 }
 
 /** `report.jpg` for a photo re-encoded from `report.png`. */

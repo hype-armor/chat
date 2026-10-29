@@ -11,6 +11,7 @@ import type {
   DeviceInfo,
   InviteOffer,
   LinkOffer,
+  MediaInfo,
   ResponseEnvelope,
   SafetyNumber,
   BlockedContact,
@@ -156,8 +157,8 @@ export class CoreClient {
 
   /** Re-sends a message that failed. */
   /** Sends a photo or file; `caption` may be empty. */
-  async sendFile(conversationId: string, file: File, caption: string) {
-    expect(await this.call({ type: 'sendFile', conversationId, file, caption }), 'ok')
+  async sendFile(conversationId: string, file: File, caption: string, media?: MediaInfo) {
+    expect(await this.call({ type: 'sendFile', conversationId, file, caption, media }), 'ok')
   }
 
   /** The decrypted file of a message. */
