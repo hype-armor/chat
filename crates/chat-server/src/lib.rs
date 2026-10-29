@@ -9,6 +9,7 @@ mod groups;
 mod hub;
 mod keys;
 pub mod limits;
+pub mod metrics;
 pub mod push;
 pub mod sms;
 mod ws;
@@ -33,6 +34,7 @@ pub struct AppState {
     pub push: Option<Arc<push::PushSender>>,
     pub limits: limits::Limits,
     pub send_buckets: Arc<limits::SendBuckets>,
+    pub metrics: Arc<metrics::Metrics>,
 }
 
 impl AppState {
@@ -44,6 +46,7 @@ impl AppState {
             push: None,
             limits: limits::Limits::default(),
             send_buckets: Arc::default(),
+            metrics: Arc::default(),
         }
     }
 

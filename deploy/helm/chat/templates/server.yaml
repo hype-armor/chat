@@ -15,6 +15,12 @@ spec:
     metadata:
       labels:
         {{- include "chat.selectorLabels" $component | nindent 8 }}
+      {{- if .Values.server.metrics.enabled }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.server.metrics.port | quote }}
+        prometheus.io/path: /metrics
+      {{- end }}
     spec:
       serviceAccountName: {{ include "chat.serviceAccountName" . }}
       securityContext:
@@ -34,6 +40,8 @@ spec:
               value: {{ .Values.server.logFormat | quote }}
             - name: RUST_LOG
               value: {{ .Values.server.logLevel | quote }}
+            - name: CHAT_METRICS_BIND
+              value: {{ if .Values.server.metrics.enabled }}{{ printf "0.0.0.0:%v" .Values.server.metrics.port | quote }}{{ else }}""{{ end }}
             - name: CHAT_TRUST_PROXY_HEADERS
               value: {{ .Values.server.trustProxyHeaders | quote }}
             - name: CHAT_VAPID_SUBJECT
@@ -56,6 +64,10 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+            {{- if .Values.server.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.server.metrics.port }}
+            {{- end }}
           livenessProbe:
             httpGet: { path: /healthz, port: http }
           readinessProbe:
@@ -78,3 +90,8 @@ spec:
     - name: http
       port: 80
       targetPort: http
+    {{- if .Values.server.metrics.enabled }}
+    - name: metrics
+      port: {{ .Values.server.metrics.port }}
+      targetPort: metrics
+    {{- end }}

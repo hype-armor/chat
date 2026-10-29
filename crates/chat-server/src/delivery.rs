@@ -105,15 +105,22 @@ pub async fn send(db: &PgPool, req: Send<'_>) -> Result<SendOutcome, ApiError> {
         .chain(welcome_recipients)
         .copied()
         .collect();
-    let (known,): (i64,) =
-        sqlx::query_as("SELECT count(DISTINCT device_id) FROM devices WHERE device_id = ANY($1)")
-            .bind(&all)
-            .fetch_one(&mut *tx)
-            .await?;
     let mut unique = all.clone();
     unique.sort_unstable();
     unique.dedup();
-    if known != unique.len() as i64 {
+    // Locking the recipients (in a fixed order, so concurrent sends cannot
+    // deadlock) serialises sends to the same device until commit. Their
+    // queue_ids then become visible in increasing order, which the
+    // connection's queue cursor relies on (`pending`): otherwise a send
+    // that took a lower id but committed later would be skipped.
+    let locked: Vec<(Uuid,)> = sqlx::query_as(
+        "SELECT device_id FROM devices WHERE device_id = ANY($1)
+         ORDER BY device_id FOR NO KEY UPDATE",
+    )
+    .bind(&unique)
+    .fetch_all(&mut *tx)
+    .await?;
+    if locked.len() != unique.len() {
         return Err(ApiError::BadRequest("unknown recipient device"));
     }
 
@@ -232,13 +239,18 @@ async fn enqueue(tx: &mut Tx<'_>, env: &Envelope, recipients: &[Uuid]) -> Result
 }
 
 /// Queued envelopes for a device after `after` (a queue cursor), oldest first.
-pub async fn pending(
-    db: &PgPool,
-    device: Uuid,
-    after: i64,
-) -> Result<Vec<(i64, Envelope)>, ApiError> {
-    let rows: Vec<(i64, Vec<u8>)> = sqlx::query_as(
-        "SELECT queue_id, envelope FROM queued_envelopes
+/// A queued envelope and how long it has waited, in seconds.
+pub struct Pending {
+    pub queue_id: i64,
+    pub envelope: Envelope,
+    pub waited: f64,
+}
+
+pub async fn pending(db: &PgPool, device: Uuid, after: i64) -> Result<Vec<Pending>, ApiError> {
+    let rows: Vec<(i64, Vec<u8>, f64)> = sqlx::query_as(
+        "SELECT queue_id, envelope,
+                EXTRACT(EPOCH FROM clock_timestamp() - received_at)::float8
+         FROM queued_envelopes
          WHERE recipient_device_id = $1 AND queue_id > $2 ORDER BY queue_id LIMIT $3",
     )
     .bind(device)
@@ -247,11 +259,13 @@ pub async fn pending(
     .fetch_all(db)
     .await?;
     rows.into_iter()
-        .map(|(id, bytes)| {
-            Ok((
-                id,
-                Envelope::decode(bytes.as_slice()).map_err(|e| ApiError::Internal(e.into()))?,
-            ))
+        .map(|(queue_id, bytes, waited)| {
+            Ok(Pending {
+                queue_id,
+                envelope: Envelope::decode(bytes.as_slice())
+                    .map_err(|e| ApiError::Internal(e.into()))?,
+                waited,
+            })
         })
         .collect()
 }

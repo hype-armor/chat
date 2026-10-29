@@ -380,3 +380,49 @@ async fn commit_survives_a_lost_reply(pool: PgPool) {
     }
     panic!("commit was not recorded");
 }
+
+/// Concurrent sends to one device must all reach its open connection, even
+/// when they commit out of queue order (the connection reads its queue
+/// with a cursor).
+#[sqlx::test]
+async fn concurrent_sends_all_reach_a_connected_device(pool: PgPool) {
+    const SENDERS: usize = 20;
+    const EACH: usize = 20;
+    let server = TestServer::start(pool).await;
+    let (bob, bob_token) = server.register("+15550007000").await;
+    let mut senders = Vec::new();
+    for i in 0..SENDERS {
+        let (dev, token) = server.register(&format!("+1555000{:04}", 7001 + i)).await;
+        senders.push((dev, token));
+    }
+    let mut members: Vec<Uuid> = senders.iter().map(|(d, _)| *d).collect();
+    members.push(bob);
+    server.admit(b"busy", &members).await;
+    let mut b = server.connect(&bob_token).await;
+
+    let mut tasks = Vec::new();
+    for (_, token) in &senders {
+        let mut client = server.connect(token).await;
+        tasks.push(tokio::spawn(async move {
+            for _ in 0..EACH {
+                let env = Envelope {
+                    version: PROTOCOL_VERSION,
+                    conversation_id: b"busy".to_vec(),
+                    epoch: 0,
+                    content_type: ContentType::Application.into(),
+                    ciphertext: b"x".to_vec(),
+                    message_id: message_id(),
+                };
+                assert!(send(&mut client, env, &[bob]).await.accepted);
+            }
+        }));
+    }
+    for t in tasks {
+        t.await.unwrap();
+    }
+    let mut received = std::collections::HashSet::new();
+    while received.len() < SENDERS * EACH {
+        let env = expect_delivery(&mut b).await;
+        received.insert(env.message_id);
+    }
+}

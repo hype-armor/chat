@@ -5,7 +5,7 @@
 //! Envelopes stay queued until the client acks them, so anything unacked
 //! is redelivered on the next connection.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::{
     extract::{
@@ -30,6 +30,7 @@ use crate::{
     error::ApiError,
     hub::Registration,
     limits,
+    metrics::ConnectionGuard,
 };
 
 /// Upper bound on one frame; attachments go to blob storage, not the socket.
@@ -50,6 +51,7 @@ pub async fn upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> Res
 struct Authed {
     device: Uuid,
     _registration: Registration,
+    _counted: ConnectionGuard,
     wake: mpsc::Receiver<()>,
     /// Highest queue_id sent on this connection.
     cursor: i64,
@@ -89,14 +91,14 @@ impl Session {
                         // Just authenticated: deliver the backlog. Later
                         // envelopes arrive through hub wake-ups.
                         if !was_authed && self.authed.is_some() {
-                            self.flush().await?;
+                            self.flush(false).await?;
                         }
                     }
                     Some(Ok(Message::Close(_))) | None => return Ok(()),
                     Some(Ok(_)) => {}
                     Some(Err(e)) => return Err(e),
                 },
-                Some(()) = recv_wake(&mut self.authed) => self.flush().await?,
+                Some(()) = recv_wake(&mut self.authed) => self.flush(true).await?,
                 () = &mut auth_deadline, if self.authed.is_none() => {
                     self.send(error(0, 401, "authentication timeout")).await?;
                     return Ok(());
@@ -130,7 +132,11 @@ impl Session {
             }
             (_, None) => Err(ApiError::Unauthorized("authenticate first")),
             (client_frame::Body::Send(send), Some(a)) => {
-                send_envelope(&self.state, &db, a.device, send).await
+                let start = Instant::now();
+                let result = send_envelope(&self.state, &db, a.device, send).await;
+                let status = result.as_ref().err().map(|e| e.status().as_u16());
+                self.state.metrics.observe_send(start.elapsed(), status);
+                result
             }
             (client_frame::Body::Ack(ack), Some(a)) => {
                 delivery::ack(&db, a.device, &ack.message_id)
@@ -159,6 +165,7 @@ impl Session {
         self.authed = Some(Authed {
             device,
             _registration: registration,
+            _counted: ConnectionGuard::new(&self.state.metrics.connections),
             wake,
             cursor: 0,
         });
@@ -167,8 +174,10 @@ impl Session {
         })))
     }
 
-    /// Sends every queued envelope this connection hasn't sent yet.
-    async fn flush(&mut self) -> SessionResult {
+    /// Sends every queued envelope this connection hasn't sent yet. `live`:
+    /// woken by a new envelope, so its wait counts as delivery latency (a
+    /// backlog after connecting does not).
+    async fn flush(&mut self, live: bool) -> SessionResult {
         let (Some(db), Some(authed)) = (self.state.db.clone(), self.authed.as_mut()) else {
             return Ok(());
         };
@@ -181,12 +190,17 @@ impl Session {
                 }
             };
             let full = batch.len() as i64 == delivery::BATCH;
-            for (queue_id, envelope) in batch {
-                authed.cursor = queue_id;
-                let frame = reply(0, server_frame::Body::Deliver(envelope));
+            let fetched = Instant::now();
+            for item in batch {
+                authed.cursor = item.queue_id;
+                let frame = reply(0, server_frame::Body::Deliver(item.envelope));
                 self.socket
                     .send(Message::Binary(frame.encode_to_vec().into()))
                     .await?;
+                if live {
+                    let waited = item.waited + fetched.elapsed().as_secs_f64();
+                    self.state.metrics.delivery_seconds.observe(waited);
+                }
             }
             if !full {
                 return Ok(());

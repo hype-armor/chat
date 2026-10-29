@@ -55,7 +55,8 @@ surviving reloads; three-engine browser CI against a real server.
 6. [x] Continuous deployment to the dev k3s cluster: build images, run
    `scripts/k3s-dev-deploy.sh` for real. Done as a pull-based timer on the
    host (ADR-0018); the owner installs it once (deploy/k3s/README.md).
-7. [ ] Measure delivery p95 < 1 s: load test plus basic server metrics.
+7. [x] Measure delivery p95 < 1 s: load test plus basic server metrics
+   (doc 12: p95 16 ms at 800 deliveries/s; Prometheus metrics on :9090).
 8. [ ] Device linking by QR (FR-ID-3/4): self-sync of sent messages, list
    and remove devices.
 9. [ ] Safety numbers / QR verification and key-change warnings (FR-ID-5/6).

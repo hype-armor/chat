@@ -23,6 +23,11 @@ server:
   # Take the client IP (for per-IP limits) from the last X-Forwarded-For
   # entry. True when the server is only reachable through the ingress.
   trustProxyHeaders: true
+  # Prometheus metrics on their own port (not routed by the ingress):
+  # aggregate latency histograms and counters, no per-user labels.
+  metrics:
+    enabled: true
+    port: 9090
   # Web Push (VAPID) key. Create one with `chat-server generate-vapid-key`
   # and store it in a Secret; without it a random key is used and push
   # subscriptions break whenever the pod restarts.
@@ -70,6 +75,10 @@ networkPolicy:
   ingressNamespaceSelector:
     matchLabels:
       kubernetes.io/metadata.name: ingress
+  # Namespace allowed to scrape the server's metrics port.
+  metricsNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: monitoring
 
 serviceAccount:
   create: true

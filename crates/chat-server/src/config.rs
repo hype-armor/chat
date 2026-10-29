@@ -17,6 +17,9 @@ pub struct Config {
     pub vapid_private_key: Option<String>,
     /// `CHAT_VAPID_SUBJECT`: contact for push services, e.g. `mailto:ops@example.com`.
     pub vapid_subject: String,
+    /// `CHAT_METRICS_BIND`, default `0.0.0.0:9090`; empty disables the
+    /// Prometheus endpoint. Not routed by the ingress.
+    pub metrics_bind: Option<SocketAddr>,
     /// Abuse limits. `CHAT_TRUST_PROXY_HEADERS=true` behind an ingress takes
     /// the client IP from `X-Forwarded-For`; each number can be overridden
     /// with `CHAT_LIMIT_<FIELD>`, e.g. `CHAT_LIMIT_CODES_PER_IP_PER_HOUR`.
@@ -37,6 +40,11 @@ impl Config {
             vapid_private_key: std::env::var("CHAT_VAPID_PRIVATE_KEY")
                 .ok()
                 .filter(|s| !s.is_empty()),
+            metrics_bind: match std::env::var("CHAT_METRICS_BIND") {
+                Ok(v) if v.is_empty() => None,
+                Ok(v) => Some(v.parse()?),
+                Err(_) => Some(SocketAddr::from(([0, 0, 0, 0], 9090))),
+            },
             limits: limits_from_env()?,
             vapid_subject: std::env::var("CHAT_VAPID_SUBJECT")
                 .unwrap_or_else(|_| "mailto:admin@localhost".to_owned()),

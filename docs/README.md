@@ -17,6 +17,7 @@ Architecture Decision Records (ADRs) under [`adr/`](adr/).
 | 09 | [Roadmap & Open Questions](09-roadmap-and-open-questions.md) | Phasing, milestones, and decisions we need from stakeholders |
 | 10 | [Deployment: Kubernetes](10-deployment-kubernetes.md) | Cluster layout, security baseline, US hosting notes |
 | 11 | [Server API](11-api.md) | REST endpoints and WebSocket protocol |
+| 12 | [Performance](12-performance.md) | Delivery latency load test, results and server metrics |
 | — | [ADR index](adr/README.md) | Decision log |
 
 ## Conventions
