@@ -1,4 +1,6 @@
-use chat_server::{AppState, Config, connect_db, router};
+use std::sync::Arc;
+
+use chat_server::{AppState, Config, connect_db, router, run_maintenance, sms::LogSender};
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
@@ -16,7 +18,11 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let db = match &config.database_url {
-        Some(url) => Some(connect_db(url).await?),
+        Some(url) => {
+            let db = connect_db(url).await?;
+            tokio::spawn(run_maintenance(db.clone()));
+            Some(db)
+        }
         None => {
             tracing::warn!("DATABASE_URL not set; running without a database");
             None
@@ -25,7 +31,9 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = TcpListener::bind(config.bind).await?;
     tracing::info!(addr = %config.bind, "listening");
-    axum::serve(listener, router(AppState { db }))
+    // Only the log sender exists so far; real SMS providers plug in here.
+    let state = AppState::new(db, Arc::new(LogSender));
+    axum::serve(listener, router(state))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())

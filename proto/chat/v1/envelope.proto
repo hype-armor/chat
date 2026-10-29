@@ -29,13 +29,16 @@ enum ContentType {
   CONTENT_TYPE_WELCOME = 3;
 }
 
-// Frames exchanged over the client <-> server WebSocket.
+// Frames exchanged over the client <-> server WebSocket. The first client
+// frame must be `authenticate`: browsers can't set headers on WebSocket
+// requests, and tokens in URLs end up in logs.
 message ClientFrame {
   uint64 request_id = 1;
   oneof body {
     SendEnvelope send = 2;
     Ack ack = 3;
     Ping ping = 4;
+    Authenticate authenticate = 5;
   }
 }
 
@@ -47,12 +50,25 @@ message ServerFrame {
     Envelope deliver = 3;
     Pong pong = 4;
     Error error = 5;
+    AuthResult auth_result = 6;
   }
+}
+
+message Authenticate {
+  // Device token from POST /v1/auth/verify.
+  string token = 1;
+}
+
+message AuthResult {
+  // 16-byte device UUID.
+  bytes device_id = 1;
 }
 
 message SendEnvelope {
   Envelope envelope = 1;
-  // Recipient device ids, resolved by the sender from group state.
+  // Recipient device ids (16-byte UUIDs), resolved by the sender from group
+  // state. For handshake messages, `envelope.epoch` is the epoch the commit
+  // was created in (before it is applied).
   repeated bytes recipient_devices = 2;
 }
 

@@ -15,7 +15,7 @@ messenger yet. Design docs: [`docs/`](docs/README.md).
 | `proto/` | Protobuf wire format (envelopes, WebSocket frames) |
 | `crates/chat-proto` | Rust types generated from `proto/` |
 | `crates/chat-core` | Client core: MLS (OpenMLS), envelopes, padding. Builds natively and to WebAssembly |
-| `crates/chat-server` | Server (Rust, axum): health checks, WebSocket endpoint, PostgreSQL migrations |
+| `crates/chat-server` | Server (Rust, axum): phone sign-up, key directory, authenticated WebSocket delivery queue ([API](docs/11-api.md)) |
 | `web/` | Web client / PWA (TypeScript, React, Vite); runs the core in a Web Worker |
 | `deploy/docker` | Container images (server; web served by nginx with a strict CSP) |
 | `deploy/compose` | Local development stack |
@@ -34,6 +34,8 @@ cargo install wasm-bindgen-cli --locked --version "$(scripts/wasm-bindgen-versio
 ```
 
 ```sh
+# Server tests need PostgreSQL; each test gets a fresh database.
+export DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres
 cargo test --workspace          # core + server tests
 scripts/build-wasm.sh           # core -> web/src/core/pkg
 pnpm install

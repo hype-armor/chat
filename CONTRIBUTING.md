@@ -8,7 +8,7 @@ contributing you agree your contributions are under the same licence.
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+DATABASE_URL=postgres://... cargo test --workspace   # needs PostgreSQL
 scripts/build-wasm.sh && pnpm typecheck && pnpm test && pnpm build
 pnpm --filter web e2e
 ```
