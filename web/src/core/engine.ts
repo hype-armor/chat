@@ -18,10 +18,14 @@ import { SecureStore } from './storage'
 
 const INITIAL_KEY_PACKAGES = 20
 const MAX_RECONNECT_MS = 30_000
+const MAX_GROUP_MEMBERS = 50
 
 type Account = { phone: string; displayName: string; accountId: string; deviceId: string; token: string }
 
-type Conversation = { id: string; peers: string[]; lastText?: string; lastAt: number }
+type Conversation = { id: string; peers: string[]; name?: string; lastText?: string; lastAt: number }
+
+/** A contact resolved through the key directory, with one key package per device. */
+type Invitee = { phone: string; account: string; devices: string[]; keyPackages: Uint8Array[] }
 
 /** An envelope waiting to be accepted by the server (FR-MSG-9). */
 type Outgoing = { messageId: string; conversationId: string; envelope: string; recipients: string[] }
@@ -75,7 +79,14 @@ export class Engine {
     if (!this.account) return { phase: 'signed-out' }
     const conversations = Object.values(this.state.conversations)
       .sort((a, b) => b.lastAt - a.lastAt)
-      .map((c) => ({ id: c.id, title: this.title(c), lastText: c.lastText, lastAt: c.lastAt }))
+      .map((c) => ({
+        id: c.id,
+        title: this.title(c),
+        isGroup: c.name !== undefined || c.peers.length > 1,
+        memberCount: c.peers.length + 1,
+        lastText: c.lastText,
+        lastAt: c.lastAt,
+      }))
     return {
       phase: 'ready',
       me: { phone: this.account.phone, displayName: this.account.displayName },
@@ -145,8 +156,90 @@ export class Engine {
     return id
   }
 
+  /** Creates a group with everyone at once (no other member can race us). */
+  async createGroup(name: string, phones: string[]): Promise<string> {
+    const { core } = this.ready()
+    const groupName = name.trim().slice(0, 64)
+    if (!groupName) throw new Error('Give the group a name')
+    const invitees = await this.resolve(phones)
+    if (invitees.length === 0) throw new Error('Add at least one other person')
+    if (invitees.length + 1 > MAX_GROUP_MEMBERS) throw new Error(`Groups are limited to ${MAX_GROUP_MEMBERS} people`)
+
+    const id = await this.exclusive(async () => {
+      const started = core.startConversation(invitees.flatMap((i) => i.keyPackages), randomId())
+      const id = toHex(started.conversationId)
+      for (const i of invitees) this.state.phones[i.account] = i.phone
+      this.state.conversations[id] = { id, peers: invitees.map((i) => i.account), name: groupName, lastAt: Date.now() }
+      this.state.outbox.push({
+        messageId: toHex(randomId()),
+        conversationId: id,
+        envelope: toBase64(started.welcome),
+        recipients: invitees.flatMap((i) => i.devices),
+      })
+      this.queueGroupInfo(id, groupName)
+      this.queueProfile(id)
+      await this.persist()
+      return id
+    })
+    this.emitView()
+    void this.flushOutbox()
+    return id
+  }
+
+  /**
+   * Adds people to an existing conversation. The commit must be accepted by
+   * the server before it is applied locally, so this needs a connection.
+   */
+  async addMembers(conversationId: string, phones: string[]) {
+    const { core } = this.ready()
+    const conv = this.state.conversations[conversationId]
+    if (!conv) throw new Error('Unknown conversation')
+    if (this.connection !== 'online') throw new Error('You need to be online to add people')
+    const invitees = (await this.resolve(phones)).filter((i) => !conv.peers.includes(i.account))
+    if (invitees.length === 0) throw new Error('Everyone listed is already in this conversation')
+    if (conv.peers.length + invitees.length + 1 > MAX_GROUP_MEMBERS) {
+      throw new Error(`Groups are limited to ${MAX_GROUP_MEMBERS} people`)
+    }
+
+    await this.exclusive(async () => {
+      // Queued messages were encrypted for the current epoch: send them first.
+      await this.flushOutbox(true)
+      const existing = this.recipients(conversationId)
+      const added = core.addMembers(
+        fromHex(conversationId),
+        invitees.flatMap((i) => i.keyPackages),
+        randomId(),
+        randomId(),
+      )
+      const result = await this.request((id) => encodeSend(id, added.commit, existing.map(fromHex)))
+      if (!(result?.kind === 'send_result' && result.accepted)) {
+        core.discardCommit(fromHex(conversationId))
+        throw new Error(
+          result?.epochConflict
+            ? 'Someone else changed the group at the same moment; try again'
+            : 'Could not add people right now; try again',
+        )
+      }
+      core.confirmCommit(fromHex(conversationId))
+      for (const i of invitees) this.state.phones[i.account] = i.phone
+      conv.peers.push(...invitees.map((i) => i.account))
+      this.state.outbox.push({
+        messageId: toHex(randomId()),
+        conversationId,
+        envelope: toBase64(added.welcome),
+        recipients: invitees.flatMap((i) => i.devices),
+      })
+      if (conv.name) this.queueGroupInfo(conversationId, conv.name)
+      this.queueProfile(conversationId)
+      await this.persist()
+    })
+    this.emitView()
+    void this.flushOutbox()
+  }
+
   async messages(conversationId: string): Promise<ChatMessage[]> {
-    return (await this.store.getJson<ChatMessage[]>(`messages:${conversationId}`)) ?? []
+    const list = (await this.store.getJson<ChatMessage[]>(`messages:${conversationId}`)) ?? []
+    return list.map((m) => (m.from === 'me' ? m : { ...m, fromName: this.nameOf(m.from) }))
   }
 
   async sendText(conversationId: string, text: string) {
@@ -245,8 +338,23 @@ export class Engine {
       const [replacement] = this.core!.keyPackages(1) as Uint8Array[]
       api.uploadKeyPackages(this.account!.token, [toBase64(replacement)]).catch((e) => console.warn(e))
       this.emitView()
+    } else if (event.kind === 'epoch') {
+      const conv = this.state.conversations[conversationId]
+      if (!conv) return
+      const me = toHex(this.core!.identity())
+      const peers = (this.core!.members(event.conversationId) as Uint8Array[])
+        .filter((m) => toHex(m) !== me)
+        .map((m) => splitIdentity(m).account)
+      // Introduce ourselves to anyone new.
+      if (peers.some((p) => !conv.peers.includes(p))) this.queueProfile(conversationId)
+      conv.peers = [...new Set(peers)]
+      this.emitView()
     } else if (event.kind === 'message') {
       const from = splitIdentity(event.sender).account
+      if (event.groupName !== undefined && this.state.conversations[conversationId]) {
+        this.state.conversations[conversationId].name = event.groupName.slice(0, 64)
+        this.emitView()
+      }
       if (event.displayName !== undefined) {
         this.state.names[from] = event.displayName.slice(0, 64)
         this.emitView()
@@ -263,8 +371,11 @@ export class Engine {
     }
   }
 
-  /** Sends queued envelopes in order, one at a time. */
-  private async flushOutbox() {
+  /**
+   * Sends queued envelopes in order, one at a time. `locked` is set when the
+   * caller already holds the exclusive lock.
+   */
+  private async flushOutbox(locked = false) {
     if (this.flushing || this.connection !== 'online') return
     this.flushing = true
     try {
@@ -276,11 +387,12 @@ export class Engine {
         if (!result) return // disconnected: retry after reconnecting
         const ok = result.kind === 'send_result' && result.accepted
         if (!ok) console.warn('send rejected', result.errorCode, result.errorMessage)
-        await this.exclusive(async () => {
+        const settle = async () => {
           this.state.outbox.shift()
           await this.setStatus(item.conversationId, item.messageId, ok ? 'sent' : 'failed')
           await this.persist()
-        })
+        }
+        await (locked ? settle() : this.exclusive(settle))
       }
     } finally {
       this.flushing = false
@@ -298,6 +410,43 @@ export class Engine {
   }
 
   // ---- helpers ---------------------------------------------------------------
+
+  /** Resolves phone numbers to accounts and claims a key package per device. */
+  private async resolve(phones: string[]): Promise<Invitee[]> {
+    const { account } = this.ready()
+    const unique = [...new Set(phones.map((p) => p.trim()).filter(Boolean))].filter((p) => p !== account.phone)
+    const found = await Promise.all(
+      unique.map(async (phone) => {
+        try {
+          return { phone, ...(await api.lookup(account.token, phone)) }
+        } catch (e) {
+          throw new Error(`${phone}: ${describeError(e)}`)
+        }
+      }),
+    )
+    const claimed = await api.claim(account.token, found.flatMap((f) => f.device_ids))
+    return found.map((f) => {
+      const devices = f.device_ids.filter((d) => claimed.key_packages[d])
+      if (devices.length === 0) throw new Error(`${f.phone} has no keys available right now; try again later`)
+      return {
+        phone: f.phone,
+        account: f.account_id.replaceAll('-', ''),
+        devices: devices.map((d) => d.replaceAll('-', '')),
+        keyPackages: devices.map((d) => fromBase64(claimed.key_packages[d])),
+      }
+    })
+  }
+
+  private queueGroupInfo(conversationId: string, name: string) {
+    const messageId = randomId()
+    const envelope = this.core!.sendGroupInfo(fromHex(conversationId), name, Date.now(), messageId)
+    this.state.outbox.push({
+      messageId: toHex(messageId),
+      conversationId,
+      envelope: toBase64(envelope),
+      recipients: this.recipients(conversationId),
+    })
+  }
 
   private queueProfile(conversationId: string) {
     const messageId = randomId()
@@ -318,9 +467,12 @@ export class Engine {
       .map((m) => toHex(splitIdentity(m).device))
   }
 
+  private nameOf(account: string): string {
+    return this.state.names[account] ?? this.state.phones[account] ?? 'New contact'
+  }
+
   private title(c: Conversation): string {
-    const names = c.peers.map((p) => this.state.names[p] ?? this.state.phones[p] ?? 'New contact')
-    return names.join(', ') || 'Just you'
+    return c.name ?? (c.peers.map((p) => this.nameOf(p)).join(', ') || 'Just you')
   }
 
   private async appendMessage(conversationId: string, message: ChatMessage) {

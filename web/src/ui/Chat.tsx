@@ -28,6 +28,7 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
           </span>
         </header>
         <NewChat core={core} onStarted={setSelected} />
+        <NewGroup core={core} onCreated={setSelected} />
         <nav aria-label="Conversations">
           <ul className="conversations">
             {view.conversations.map((c) => (
@@ -51,6 +52,8 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
           core={core}
           id={conversation.id}
           title={conversation.title}
+          isGroup={conversation.isGroup}
+          memberCount={conversation.memberCount}
           onBack={() => setSelected(undefined)}
         />
       ) : (
@@ -62,21 +65,14 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
 
 function NewChat({ core, onStarted }: { core: CoreClient; onStarted: (id: string) => void }) {
   const [phone, setPhone] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string>()
+  const { busy, error, run } = useAction()
 
-  const submit = async (e: FormEvent) => {
+  const submit = (e: FormEvent) => {
     e.preventDefault()
-    setBusy(true)
-    setError(undefined)
-    try {
+    run(async () => {
       onStarted(await core.startChat(phone.trim()))
       setPhone('')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setBusy(false)
-    }
+    })
   }
 
   return (
@@ -104,7 +100,121 @@ function NewChat({ core, onStarted }: { core: CoreClient; onStarted: (id: string
   )
 }
 
-function Conversation({ core, id, title, onBack }: { core: CoreClient; id: string; title: string; onBack: () => void }) {
+/** Splits a free-form list of phone numbers (commas, spaces or new lines). */
+export function parsePhones(text: string): string[] {
+  return text.split(/[\s,;]+/).filter(Boolean)
+}
+
+/** Runs an async action with busy and error state for a form. */
+function useAction() {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+  const run = async (action: () => Promise<void>) => {
+    setBusy(true)
+    setError(undefined)
+    try {
+      await action()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return { busy, error, run }
+}
+
+function NewGroup({ core, onCreated }: { core: CoreClient; onCreated: (id: string) => void }) {
+  const [name, setName] = useState('')
+  const [phones, setPhones] = useState('')
+  const { busy, error, run } = useAction()
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    run(async () => {
+      onCreated(await core.createGroup(name, parsePhones(phones)))
+      setName('')
+      setPhones('')
+    })
+  }
+
+  return (
+    <details className="new-group">
+      <summary>New group</summary>
+      <form onSubmit={submit}>
+        <label>
+          Group name
+          <input value={name} onChange={(e) => setName(e.target.value)} required maxLength={64} />
+        </label>
+        <label>
+          Members' phone numbers
+          <textarea
+            value={phones}
+            onChange={(e) => setPhones(e.target.value)}
+            required
+            rows={3}
+            placeholder={'+15551234567\n+15557654321'}
+          />
+        </label>
+        <button type="submit" disabled={busy}>
+          Create group
+        </button>
+        {error && (
+          <p role="alert" className="error">
+            {error}
+          </p>
+        )}
+      </form>
+    </details>
+  )
+}
+
+function AddPeople({ core, id, onDone }: { core: CoreClient; id: string; onDone: () => void }) {
+  const [phones, setPhones] = useState('')
+  const { busy, error, run } = useAction()
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    run(async () => {
+      await core.addMembers(id, parsePhones(phones))
+      setPhones('')
+      onDone()
+    })
+  }
+
+  return (
+    <form className="add-people" onSubmit={submit}>
+      <label>
+        Phone numbers to add
+        <input value={phones} onChange={(e) => setPhones(e.target.value)} required placeholder="+15551234567" />
+      </label>
+      <button type="submit" disabled={busy}>
+        Add
+      </button>
+      {error && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
+    </form>
+  )
+}
+
+function Conversation({
+  core,
+  id,
+  title,
+  isGroup,
+  memberCount,
+  onBack,
+}: {
+  core: CoreClient
+  id: string
+  title: string
+  isGroup: boolean
+  memberCount: number
+  onBack: () => void
+}) {
+  const [adding, setAdding] = useState(false)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [draft, setDraft] = useState('')
   const end = useRef<HTMLDivElement>(null)
@@ -143,10 +253,16 @@ function Conversation({ core, id, title, onBack }: { core: CoreClient; id: strin
           ←
         </button>
         <h2>{title}</h2>
+        {isGroup && <span className="muted small">{memberCount} people</span>}
+        <button type="button" className="link" onClick={() => setAdding((v) => !v)}>
+          {adding ? 'Cancel' : 'Add people'}
+        </button>
       </header>
+      {adding && <AddPeople core={core} id={id} onDone={() => setAdding(false)} />}
       <ol className="messages">
         {messages.map((m) => (
           <li key={m.id} className={m.from === 'me' ? 'mine' : 'theirs'} data-testid="message">
+            {isGroup && m.from !== 'me' && <span className="sender small">{m.fromName}</span>}
             <span className="text">{m.text}</span>
             <span className="meta small">
               {new Date(m.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}

@@ -63,6 +63,14 @@ export class CoreClient {
     return expect(await this.call({ type: 'startChat', phone }), 'conversation').conversationId
   }
 
+  async createGroup(name: string, phones: string[]): Promise<string> {
+    return expect(await this.call({ type: 'createGroup', name, phones }), 'conversation').conversationId
+  }
+
+  async addMembers(conversationId: string, phones: string[]) {
+    expect(await this.call({ type: 'addMembers', conversationId, phones }), 'ok')
+  }
+
   async messages(conversationId: string): Promise<ChatMessage[]> {
     return expect(await this.call({ type: 'messages', conversationId }), 'messages').messages
   }

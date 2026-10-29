@@ -1,8 +1,8 @@
 //! JavaScript bindings used by the web client's core worker.
 
 use chat_proto::v1::{
-    Ack, Authenticate, ClientFrame, Content, Envelope, Ping, Profile, SendEnvelope, ServerFrame,
-    Text, client_frame, content, server_frame,
+    Ack, Authenticate, ClientFrame, Content, Envelope, GroupInfo, Ping, Profile, SendEnvelope,
+    ServerFrame, Text, client_frame, content, server_frame,
 };
 use js_sys::{Array, Uint8Array};
 use prost::Message;
@@ -143,6 +143,14 @@ pub struct StartedView {
     pub welcome: Vec<u8>,
 }
 
+#[wasm_bindgen(getter_with_clone)]
+pub struct AddedView {
+    /// Encoded handshake `Envelope` for the existing members.
+    pub commit: Vec<u8>,
+    /// Encoded welcome `Envelope` for the new devices.
+    pub welcome: Vec<u8>,
+}
+
 /// A received envelope, flattened for JavaScript. `kind` is one of
 /// `message`, `joined`, `epoch`, `ignored`.
 #[wasm_bindgen]
@@ -159,6 +167,8 @@ pub struct EventView {
     pub text: Option<String>,
     #[wasm_bindgen(getter_with_clone, js_name = displayName)]
     pub display_name: Option<String>,
+    #[wasm_bindgen(getter_with_clone, js_name = groupName)]
+    pub group_name: Option<String>,
 }
 
 impl EventView {
@@ -170,6 +180,7 @@ impl EventView {
             sent_at_ms: 0.0,
             text: None,
             display_name: None,
+            group_name: None,
         }
     }
 }
@@ -212,6 +223,54 @@ impl CoreClient {
         Ok(bytes_array(
             self.inner.members(conversation_id).map_err(js_err)?,
         ))
+    }
+
+    /// Stages adding devices; see `Client::add_members`. Returns encoded
+    /// commit and welcome envelopes.
+    #[wasm_bindgen(js_name = addMembers)]
+    pub fn add_members(
+        &mut self,
+        conversation_id: &[u8],
+        key_packages: &Array,
+        commit_id: Vec<u8>,
+        welcome_id: Vec<u8>,
+    ) -> Result<AddedView, JsError> {
+        let kps = array_bytes(key_packages);
+        let refs: Vec<&[u8]> = kps.iter().map(Vec::as_slice).collect();
+        let added = self
+            .inner
+            .add_members(conversation_id, &refs, commit_id, welcome_id)
+            .map_err(js_err)?;
+        Ok(AddedView {
+            commit: added.commit.encode_to_vec(),
+            welcome: added.welcome.encode_to_vec(),
+        })
+    }
+
+    #[wasm_bindgen(js_name = confirmCommit)]
+    pub fn confirm_commit(&mut self, conversation_id: &[u8]) -> Result<(), JsError> {
+        self.inner.confirm_commit(conversation_id).map_err(js_err)
+    }
+
+    #[wasm_bindgen(js_name = discardCommit)]
+    pub fn discard_commit(&mut self, conversation_id: &[u8]) -> Result<(), JsError> {
+        self.inner.discard_commit(conversation_id).map_err(js_err)
+    }
+
+    #[wasm_bindgen(js_name = sendGroupInfo)]
+    pub fn send_group_info(
+        &mut self,
+        conversation_id: &[u8],
+        name: String,
+        sent_at_ms: f64,
+        message_id: Vec<u8>,
+    ) -> Result<Vec<u8>, JsError> {
+        self.send(
+            conversation_id,
+            sent_at_ms,
+            content::Body::GroupInfo(GroupInfo { name }),
+            message_id,
+        )
     }
 
     #[wasm_bindgen(js_name = startConversation)]
@@ -280,6 +339,7 @@ impl CoreClient {
                 match content.body {
                     Some(content::Body::Text(t)) => view.text = Some(t.body),
                     Some(content::Body::Profile(p)) => view.display_name = Some(p.display_name),
+                    Some(content::Body::GroupInfo(g)) => view.group_name = Some(g.name),
                     None => view.kind = "ignored".to_owned(),
                 }
                 view

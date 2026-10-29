@@ -13,6 +13,11 @@ use crate::{Error, Result, mls_err};
 /// OpenMLS ships one (NFR-SEC-4).
 pub const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
 
+/// Past epochs whose keys are kept, so messages sent just before a
+/// membership change (and delivered after it) still decrypt. A small
+/// forward-secrecy trade-off: those few epochs' keys live a little longer.
+const MAX_PAST_EPOCHS: usize = 5;
+
 /// Exporter label for group-call frame keys (docs/05-media-and-calling.md §4).
 const CALL_KEY_LABEL: &str = "chat call sframe";
 
@@ -194,6 +199,7 @@ impl Conversation {
         let config = MlsGroupCreateConfig::builder()
             .ciphersuite(CIPHERSUITE)
             .use_ratchet_tree_extension(true)
+            .max_past_epochs(MAX_PAST_EPOCHS)
             .build();
         let group = MlsGroup::new(
             &device.provider,
@@ -214,6 +220,7 @@ impl Conversation {
         };
         let config = MlsGroupJoinConfig::builder()
             .use_ratchet_tree_extension(true)
+            .max_past_epochs(MAX_PAST_EPOCHS)
             .build();
         let group = StagedWelcome::new_from_welcome(&device.provider, &config, welcome, None)
             .map_err(mls_err)?
@@ -249,7 +256,23 @@ impl Conversation {
             .collect()
     }
 
+    /// Adds members and applies the commit at once. Only safe when nobody
+    /// else can commit concurrently, e.g. a group no one has joined yet.
     pub fn add_members(
+        &mut self,
+        device: &Device,
+        key_packages: &[&[u8]],
+    ) -> Result<MembershipChange> {
+        let change = self.stage_add_members(device, key_packages)?;
+        self.merge_pending_commit(device)?;
+        Ok(change)
+    }
+
+    /// Creates an add-members commit without applying it. Send the commit,
+    /// then call [`Self::merge_pending_commit`] if the delivery service
+    /// accepts it, or [`Self::clear_pending_commit`] if another commit won
+    /// the epoch (docs/03-architecture.md §5.3).
+    pub fn stage_add_members(
         &mut self,
         device: &Device,
         key_packages: &[&[u8]],
@@ -262,15 +285,26 @@ impl Conversation {
             .group
             .add_members(&device.provider, &device.signer, &key_packages)
             .map_err(mls_err)?;
-        // Merging immediately assumes the delivery service accepts the
-        // commit; real clients wait for its ack (docs/03-architecture.md §5.3).
-        self.group
-            .merge_pending_commit(&device.provider)
-            .map_err(mls_err)?;
         Ok(MembershipChange {
             commit: commit.tls_serialize_detached().map_err(mls_err)?,
             welcome: welcome.tls_serialize_detached().map_err(mls_err)?,
         })
+    }
+
+    pub fn has_pending_commit(&self) -> bool {
+        self.group.pending_commit().is_some()
+    }
+
+    pub fn merge_pending_commit(&mut self, device: &Device) -> Result<()> {
+        self.group
+            .merge_pending_commit(&device.provider)
+            .map_err(mls_err)
+    }
+
+    pub fn clear_pending_commit(&mut self, device: &Device) -> Result<()> {
+        self.group
+            .clear_pending_commit(device.provider.storage())
+            .map_err(mls_err)
     }
 
     /// Rotates this device's leaf key (post-compromise security).
@@ -425,6 +459,49 @@ mod tests {
         assert_eq!(
             b.receive(&bob, &ct).unwrap(),
             app(b"alice", b"after restart")
+        );
+    }
+
+    #[test]
+    fn staged_commit_applies_only_when_merged() {
+        let (alice, mut a, bob, mut b) = pair();
+        let carol = Device::new(b"carol").unwrap();
+        let epoch = a.epoch();
+
+        // Rejected by the delivery service: discard, nothing changes.
+        a.stage_add_members(&alice, &[&carol.key_package().unwrap()])
+            .unwrap();
+        assert!(a.has_pending_commit());
+        a.clear_pending_commit(&alice).unwrap();
+        assert!(!a.has_pending_commit());
+        assert_eq!((a.epoch(), a.member_count()), (epoch, 2));
+
+        // Accepted: merge locally; Bob applies the same commit.
+        let change = a
+            .stage_add_members(&alice, &[&carol.key_package().unwrap()])
+            .unwrap();
+        a.merge_pending_commit(&alice).unwrap();
+        assert_eq!(
+            b.receive(&bob, &change.commit).unwrap(),
+            Received::EpochChanged(a.epoch())
+        );
+        let mut c = Conversation::join(&carol, &change.welcome).unwrap();
+        assert_eq!(b.member_count(), 3);
+        let ct = b.encrypt(&bob, b"hi carol").unwrap();
+        assert_eq!(c.receive(&carol, &ct).unwrap(), app(b"bob", b"hi carol"));
+        let ct = c.encrypt(&carol, b"hi all").unwrap();
+        assert_eq!(a.receive(&alice, &ct).unwrap(), app(b"carol", b"hi all"));
+    }
+
+    #[test]
+    fn message_from_the_previous_epoch_still_decrypts() {
+        let (alice, mut a, bob, mut b) = pair();
+        let in_flight = b.encrypt(&bob, b"sent before the commit").unwrap();
+        let commit = a.self_update(&alice).unwrap();
+        b.receive(&bob, &commit).unwrap();
+        assert_eq!(
+            a.receive(&alice, &in_flight).unwrap(),
+            app(b"bob", b"sent before the commit")
         );
     }
 
