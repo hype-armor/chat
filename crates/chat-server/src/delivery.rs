@@ -26,7 +26,7 @@ pub enum SendOutcome {
     EpochConflict,
 }
 
-pub fn parse_recipients(raw: &[Vec<u8>]) -> Result<Vec<Uuid>, ApiError> {
+pub fn parse_recipients(raw: &[Vec<u8>], allow_empty: bool) -> Result<Vec<Uuid>, ApiError> {
     let mut ids = raw
         .iter()
         .map(|b| {
@@ -36,7 +36,7 @@ pub fn parse_recipients(raw: &[Vec<u8>]) -> Result<Vec<Uuid>, ApiError> {
         .collect::<Result<Vec<_>, _>>()?;
     ids.sort_unstable();
     ids.dedup();
-    if ids.is_empty() || ids.len() > MAX_RECIPIENTS {
+    if (ids.is_empty() && !allow_empty) || ids.len() > MAX_RECIPIENTS {
         return Err(ApiError::BadRequest("send to 1 to 500 devices"));
     }
     Ok(ids)
@@ -63,23 +63,91 @@ fn validate(env: &Envelope) -> Result<ContentType, ApiError> {
     }
 }
 
-/// Stores one queue entry per recipient device. Handshake messages are
-/// accepted only if they build on the group's current epoch, so every
-/// member applies the same sequence of commits.
-pub async fn send(
-    db: &PgPool,
-    env: &Envelope,
-    recipients: &[Uuid],
-) -> Result<SendOutcome, ApiError> {
+/// One send request (ADR-0017).
+pub struct Send<'a> {
+    pub sender: Uuid,
+    pub envelope: &'a Envelope,
+    pub recipients: &'a [Uuid],
+    /// A welcome accepted together with a commit that adds members.
+    pub welcome: Option<(&'a Envelope, &'a [Uuid])>,
+}
+
+/// Welcomes may only go to devices whose key packages the sender claimed
+/// recently, i.e. people it looked up.
+const CLAIM_VALID_DAYS: i32 = 7;
+
+/// Stores one queue entry per recipient device, after checking the send is
+/// allowed:
+/// - a welcome may start a new conversation (the sender becomes its first
+///   member) or come from a member, and only reaches devices the sender
+///   claimed key packages for; its recipients become members;
+/// - every other envelope must come from a member and go to members;
+/// - handshake messages are accepted only if they build on the group's
+///   current epoch, so every member applies the same sequence of commits.
+pub async fn send(db: &PgPool, req: Send<'_>) -> Result<SendOutcome, ApiError> {
+    let env = req.envelope;
     let content_type = validate(env)?;
+    if let Some((welcome, _)) = req.welcome
+        && (content_type != ContentType::Handshake
+            || validate(welcome)? != ContentType::Welcome
+            || welcome.conversation_id != env.conversation_id)
+    {
+        return Err(ApiError::BadRequest(
+            "a welcome can only accompany a commit for the same conversation",
+        ));
+    }
+    let welcome_recipients = req.welcome.map_or(&[][..], |(_, r)| r);
     let mut tx = db.begin().await?;
 
-    let (known,): (i64,) = sqlx::query_as("SELECT count(*) FROM devices WHERE device_id = ANY($1)")
-        .bind(recipients)
+    let all: Vec<Uuid> = req
+        .recipients
+        .iter()
+        .chain(welcome_recipients)
+        .copied()
+        .collect();
+    let (known,): (i64,) =
+        sqlx::query_as("SELECT count(DISTINCT device_id) FROM devices WHERE device_id = ANY($1)")
+            .bind(&all)
+            .fetch_one(&mut *tx)
+            .await?;
+    let mut unique = all.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    if known != unique.len() as i64 {
+        return Err(ApiError::BadRequest("unknown recipient device"));
+    }
+
+    let conversation = &env.conversation_id;
+    let (sender_is_member, conversation_exists): (bool, bool) = sqlx::query_as(
+        "SELECT bool_or(device_id = $2) IS TRUE, count(*) > 0
+         FROM conversation_members WHERE conversation_id = $1",
+    )
+    .bind(conversation)
+    .bind(req.sender)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    if content_type == ContentType::Welcome {
+        if conversation_exists && !sender_is_member {
+            return Err(ApiError::Forbidden("not a member of this conversation"));
+        }
+        require_claims(&mut tx, req.sender, req.recipients).await?;
+        add_members(&mut tx, conversation, &[req.sender]).await?;
+        add_members(&mut tx, conversation, req.recipients).await?;
+    } else {
+        if !sender_is_member {
+            return Err(ApiError::Forbidden("not a member of this conversation"));
+        }
+        let (members,): (i64,) = sqlx::query_as(
+            "SELECT count(*) FROM conversation_members WHERE conversation_id = $1 AND device_id = ANY($2)",
+        )
+        .bind(conversation)
+        .bind(req.recipients)
         .fetch_one(&mut *tx)
         .await?;
-    if known != recipients.len() as i64 {
-        return Err(ApiError::BadRequest("unknown recipient device"));
+        if members != req.recipients.len() as i64 {
+            return Err(ApiError::Forbidden("recipient is not in this conversation"));
+        }
     }
 
     if content_type == ContentType::Handshake {
@@ -92,7 +160,7 @@ pub async fn send(
              WHERE group_epochs.epoch = $2
              RETURNING epoch",
         )
-        .bind(&env.conversation_id)
+        .bind(conversation)
         .bind(epoch)
         .bind(Sha256::digest(&env.ciphertext).to_vec())
         .fetch_optional(&mut *tx)
@@ -102,6 +170,54 @@ pub async fn send(
         }
     }
 
+    if let Some((welcome, recipients)) = req.welcome {
+        require_claims(&mut tx, req.sender, recipients).await?;
+        add_members(&mut tx, conversation, recipients).await?;
+        enqueue(&mut tx, welcome, recipients).await?;
+    }
+    enqueue(&mut tx, env, req.recipients).await?;
+    tx.commit().await?;
+    Ok(SendOutcome::Accepted)
+}
+
+type Tx<'a> = sqlx::Transaction<'a, sqlx::Postgres>;
+
+async fn require_claims(tx: &mut Tx<'_>, sender: Uuid, devices: &[Uuid]) -> Result<(), ApiError> {
+    let (claimed,): (i64,) = sqlx::query_as(
+        "SELECT count(*) FROM key_package_claims
+         WHERE claimer_device_id = $1 AND claimed_device_id = ANY($2)
+           AND claimed_at > now() - make_interval(days => $3)",
+    )
+    .bind(sender)
+    .bind(devices)
+    .bind(CLAIM_VALID_DAYS)
+    .fetch_one(&mut **tx)
+    .await?;
+    if claimed != devices.len() as i64 {
+        return Err(ApiError::Forbidden(
+            "welcomes can only go to devices whose keys you claimed",
+        ));
+    }
+    Ok(())
+}
+
+async fn add_members(
+    tx: &mut Tx<'_>,
+    conversation: &[u8],
+    devices: &[Uuid],
+) -> Result<(), ApiError> {
+    sqlx::query(
+        "INSERT INTO conversation_members (conversation_id, device_id)
+         SELECT $1, d FROM UNNEST($2::uuid[]) AS d ON CONFLICT DO NOTHING",
+    )
+    .bind(conversation)
+    .bind(devices)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn enqueue(tx: &mut Tx<'_>, env: &Envelope, recipients: &[Uuid]) -> Result<(), ApiError> {
     sqlx::query(
         "INSERT INTO queued_envelopes (recipient_device_id, message_id, envelope)
          SELECT d, $2, $3 FROM UNNEST($1::uuid[]) AS d
@@ -110,10 +226,9 @@ pub async fn send(
     .bind(recipients)
     .bind(&env.message_id)
     .bind(env.encode_to_vec())
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
-    tx.commit().await?;
-    Ok(SendOutcome::Accepted)
+    Ok(())
 }
 
 /// Queued envelopes for a device after `after` (a queue cursor), oldest first.

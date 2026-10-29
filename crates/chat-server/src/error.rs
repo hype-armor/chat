@@ -9,6 +9,7 @@ use axum::{
 pub enum ApiError {
     BadRequest(&'static str),
     Unauthorized(&'static str),
+    Forbidden(&'static str),
     NotFound(&'static str),
     TooManyRequests(&'static str),
     /// No database configured or reachable.
@@ -21,6 +22,7 @@ impl ApiError {
         match self {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+            Self::Forbidden(_) => StatusCode::FORBIDDEN,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
             Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
@@ -31,6 +33,7 @@ impl ApiError {
     pub fn message(&self) -> &'static str {
         match self {
             Self::BadRequest(m)
+            | Self::Forbidden(m)
             | Self::Unauthorized(m)
             | Self::NotFound(m)
             | Self::TooManyRequests(m) => m,

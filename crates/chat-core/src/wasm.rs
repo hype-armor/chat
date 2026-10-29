@@ -495,6 +495,27 @@ pub fn encode_send(
     let send = SendEnvelope {
         envelope: Some(envelope),
         recipient_devices: array_bytes(recipients),
+        ..Default::default()
+    };
+    Ok(client_frame(request_id, client_frame::Body::Send(send)))
+}
+
+/// A commit plus the welcome for the members it adds; the server accepts
+/// both together (ADR-0017).
+#[wasm_bindgen(js_name = encodeSendWithWelcome)]
+pub fn encode_send_with_welcome(
+    request_id: u32,
+    commit: &[u8],
+    recipients: &Array,
+    welcome: &[u8],
+    welcome_recipients: &Array,
+) -> Result<Vec<u8>, JsError> {
+    let decode = |bytes: &[u8]| Envelope::decode(bytes).map_err(|e| JsError::new(&e.to_string()));
+    let send = SendEnvelope {
+        envelope: Some(decode(commit)?),
+        recipient_devices: array_bytes(recipients),
+        welcome: Some(decode(welcome)?),
+        welcome_recipients: array_bytes(welcome_recipients),
     };
     Ok(client_frame(request_id, client_frame::Body::Send(send)))
 }

@@ -72,6 +72,7 @@ async fn send(client: &mut Client, to: Uuid) {
         .request(client_frame::Body::Send(SendEnvelope {
             envelope: Some(message(b"g")),
             recipient_devices: vec![to.as_bytes().to_vec()],
+            ..Default::default()
         }))
         .await;
     assert!(matches!(reply.body, Some(server_frame::Body::SendResult(r)) if r.accepted));
@@ -95,8 +96,9 @@ async fn offline_devices_get_one_content_free_push(pool: PgPool) {
         .unwrap();
     assert_eq!(key["public_key"], public_key.as_str());
 
-    let (_, alice_token) = server.register("+15550006001").await;
+    let (alice_dev, alice_token) = server.register("+15550006001").await;
     let (bob, bob_token) = server.register("+15550006002").await;
+    server.admit(b"g", &[alice_dev, bob]).await;
     let sub = json!({ "endpoint": format!("{base}/push/bob"), "keys": { "p256dh": "BOB_P256DH", "auth": "BOB_AUTH" } });
     let (status, _) = server
         .post("/v1/push/subscription", Some(&bob_token), sub)
@@ -135,8 +137,9 @@ async fn expired_subscriptions_are_deleted(pool: PgPool) {
     *service.status.lock().unwrap() = 410;
     let push = PushSender::generate("mailto:test@example.com".into(), true).unwrap();
     let server = TestServer::start_with_push(pool.clone(), Some(push)).await;
-    let (_, alice_token) = server.register("+15550006003").await;
+    let (alice_dev, alice_token) = server.register("+15550006003").await;
     let (bob, bob_token) = server.register("+15550006004").await;
+    server.admit(b"g", &[alice_dev, bob]).await;
     let sub =
         json!({ "endpoint": format!("{base}/push/bob"), "keys": { "p256dh": "k", "auth": "a" } });
     server

@@ -47,6 +47,13 @@ deliveries have `request_id = 0`.
      winning commit, and retries.
    - `PROPOSAL` envelopes (e.g. a member leaving, ADR-0016) are delivered
      without epoch ordering; another member later commits them.
+   - **Authorisation (ADR-0017):** non-welcome envelopes must come from a
+     member of the conversation and go to members (`403` otherwise). A
+     `WELCOME` may start a new conversation or come from a member, and only
+     reaches devices whose key packages the sender claimed in the last 7
+     days. Its recipients become members.
+   - A commit that adds members sets `welcome` and `welcome_recipients`; the
+     server accepts commit and welcome in one transaction.
    - Limits: ciphertext ≤ 128 KiB, ids ≤ 64 bytes, ≤ 500 recipients, frame
      ≤ 256 KiB. Attachments go to blob storage (Phase 2), not the socket.
 5. **Ping** → **Pong** at the application level. The server also sends
@@ -78,8 +85,8 @@ key packages and codes, and code-request logs older than a day.
 
 ## Not yet implemented
 
-- Sealed sender and send authorisation: any authenticated device can
-  currently send to any device id.
+- Sealed sender: the server stores which devices belong to which
+  conversation (ADR-0017).
 - Per-device rate limits on lookup/claim (Valkey), device removal, account
   deletion, a real SMS provider.
 - Multi-replica fan-out (PostgreSQL LISTEN/NOTIFY or Valkey pub/sub).

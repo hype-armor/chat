@@ -89,6 +89,19 @@ impl TestServer {
         (status, json)
     }
 
+    /// Makes devices members of a conversation directly (test setup).
+    pub async fn admit(&self, conversation: &[u8], devices: &[Uuid]) {
+        sqlx::query(
+            "INSERT INTO conversation_members (conversation_id, device_id)
+             SELECT $1, d FROM UNNEST($2::uuid[]) AS d ON CONFLICT DO NOTHING",
+        )
+        .bind(conversation)
+        .bind(devices)
+        .execute(self.state.db.as_ref().unwrap())
+        .await
+        .unwrap();
+    }
+
     pub fn last_code(&self, phone: &str) -> String {
         self.codes.0.lock().unwrap()[phone].clone()
     }
