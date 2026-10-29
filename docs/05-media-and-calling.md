@@ -5,21 +5,25 @@
 ## 1. Attachments
 
 ### Pipeline (sender)
-1. Pre-process on device: strip EXIF/GPS (FR-MED-8), transcode/compress
-   per quality setting, generate thumbnail/blurhash.
-2. Generate a random 256-bit key; encrypt with a **chunked streaming AEAD**
-   (e.g., AES-256-GCM or ChaCha20-Poly1305 per chunk with chunk index in
-   nonce/AD) so large files can be streamed, resumed, and seeked.
-3. Pad ciphertext to a size bucket to hide exact length.
+Details and rationale in ADR-0024.
+
+1. Pre-process on device: photos are re-drawn on a canvas, which drops
+   EXIF/GPS and all other metadata (FR-MED-8) and scales them to fit
+   2560 px. A JPEG thumbnail of at most 48 KB is made.
+2. Generate a random 256-bit key and seal the file with the **STREAM**
+   construction over AES-256-GCM (RustCrypto `aead`, 64 KiB chunks) in the
+   core worker, so large files are processed piece by piece.
+3. Pad the plaintext to a Padmé size (≤ 12% larger) to hide the exact length.
 4. Upload the ciphertext to the server, which streams it into object
-   storage (ADR-0023; not pre-signed URLs). Encryption runs in the core
-   worker using streams, so large files never sit fully in memory.
-5. Send a regular E2EE message carrying `{blob_id, key, ciphertext_hash,
-   mime, size, dimensions/duration, encrypted thumbnail}`.
+   storage (ADR-0023; not pre-signed URLs).
+5. Send a regular E2EE message carrying `{blob_id, key, ciphertext SHA-256,
+   mime, name, size, dimensions, thumbnail, caption}`.
 
 ### Receiver
-Download (through the server, ADR-0023), verify hash, decrypt chunk-wise, cache locally
-encrypted.
+Download (through the server, ADR-0023), verify the SHA-256 and every chunk,
+decrypt chunk-wise. The sealed blob is kept on the device, so opening it
+again needs no download. Only raster photos are shown inline; other types
+are offered as downloads.
 
 ### Group fan-out
 Upload **once**; the key goes into one group message. No per-recipient

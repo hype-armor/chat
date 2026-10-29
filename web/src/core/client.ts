@@ -155,6 +155,16 @@ export class CoreClient {
   }
 
   /** Re-sends a message that failed. */
+  /** Sends a photo or file; `caption` may be empty. */
+  async sendFile(conversationId: string, file: File, caption: string) {
+    expect(await this.call({ type: 'sendFile', conversationId, file, caption }), 'ok')
+  }
+
+  /** The decrypted file of a message. */
+  async openAttachment(conversationId: string, messageId: string): Promise<Blob> {
+    return expect(await this.call({ type: 'openAttachment', conversationId, messageId }), 'file').blob
+  }
+
   async retryMessage(conversationId: string, messageId: string) {
     expect(await this.call({ type: 'retryMessage', conversationId, messageId }), 'ok')
   }

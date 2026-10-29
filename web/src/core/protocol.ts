@@ -73,6 +73,23 @@ export type ReportReason = 'spam' | 'harassment' | 'other'
 
 export type BlockedContact = { account: string; name: string }
 
+/** Shown inline as photos; everything else is offered as a download. */
+export function isPhoto(mime: string): boolean {
+  return /^image\/(jpeg|png|gif|webp|avif|bmp)$/.test(mime)
+}
+
+/** An image or file in a message (ADR-0024). */
+export type FileInfo = {
+  name: string
+  mime: string
+  /** Bytes. */
+  size: number
+  /** Images: pixel size and a small JPEG preview. */
+  width?: number
+  height?: number
+  thumbnail?: Uint8Array<ArrayBuffer>
+}
+
 export type ChatMessage = {
   id: string
   /** 'me' or the sender's account id (hex); empty for notices. */
@@ -91,6 +108,8 @@ export type ChatMessage = {
   seen?: boolean
   /** Why it wasn't sent ('failed' only). */
   error?: string
+  /** An image or file; `text` is then its caption. */
+  file?: FileInfo
 }
 
 export type CoreStatus = { version: string; selfTest: boolean }
@@ -112,6 +131,8 @@ export type CoreRequest =
   | { type: 'leaveGroup'; conversationId: string }
   | { type: 'messages'; conversationId: string }
   | { type: 'sendText'; conversationId: string; text: string }
+  | { type: 'sendFile'; conversationId: string; file: File; caption: string }
+  | { type: 'openAttachment'; conversationId: string; messageId: string }
   | { type: 'startLink' }
   | { type: 'cancelLink' }
   | { type: 'approveLink'; text: string }
@@ -149,6 +170,7 @@ export type CoreResponseBody =
   | { type: 'ok' }
   | { type: 'conversation'; conversationId: string }
   | { type: 'messages'; messages: ChatMessage[] }
+  | { type: 'file'; blob: Blob }
   | { type: 'members'; members: MemberInfo[] }
   | { type: 'pushKey'; key: string }
   | { type: 'link'; offer: LinkOffer }

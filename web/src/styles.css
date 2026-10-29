@@ -597,3 +597,31 @@ button.danger {
   gap: 0.75rem;
   align-items: center;
 }
+
+.attachment {
+  display: grid;
+  gap: 0.25rem;
+  justify-items: start;
+}
+
+.attachment .photo {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+}
+
+.attachment .photo:disabled {
+  cursor: default;
+}
+
+.attachment img {
+  display: block;
+  width: min(16rem, 60vw);
+  height: auto;
+  border-radius: 0.5rem;
+}
+
+.attachment img[data-full='true'] {
+  width: min(28rem, 70vw);
+}

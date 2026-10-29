@@ -1,15 +1,16 @@
 //! JavaScript bindings used by the web client's core worker.
 
 use chat_proto::v1::{
-    Ack, Authenticate, ClientFrame, Content, ContentType, DeviceSync, Envelope, GroupInfo, Ping,
-    Profile, Receipt, SendEnvelope, ServerFrame, Text, client_frame, content, receipt,
-    server_frame,
+    Ack, Attachment, Authenticate, ClientFrame, Content, ContentType, DeviceSync, Envelope,
+    GroupInfo, Ping, Profile, Receipt, SendEnvelope, ServerFrame, Text, client_frame, content,
+    receipt, server_frame,
 };
 use js_sys::{Array, Uint8Array};
 use prost::Message;
 use wasm_bindgen::prelude::*;
 
 use crate::{
+    attachment::{Opener, Sealer},
     client::{Client, Event},
     mls::{Conversation, Device, PendingDevice, Received},
 };
@@ -203,6 +204,8 @@ pub struct EventView {
     /// Receipted message ids, 16 bytes each, concatenated.
     #[wasm_bindgen(getter_with_clone, js_name = receiptIds)]
     pub receipt_ids: Vec<u8>,
+    #[wasm_bindgen(getter_with_clone)]
+    pub attachment: Option<AttachmentView>,
 }
 
 impl EventView {
@@ -219,8 +222,173 @@ impl EventView {
             device_sync: None,
             receipt_kind: None,
             receipt_ids: Vec::new(),
+            attachment: None,
         }
     }
+}
+
+/// An `Attachment` message body (ADR-0024).
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct AttachmentView {
+    #[wasm_bindgen(getter_with_clone, js_name = blobId)]
+    pub blob_id: Vec<u8>,
+    #[wasm_bindgen(getter_with_clone)]
+    pub key: Vec<u8>,
+    #[wasm_bindgen(getter_with_clone)]
+    pub digest: Vec<u8>,
+    pub size: f64,
+    #[wasm_bindgen(getter_with_clone)]
+    pub mime: String,
+    #[wasm_bindgen(getter_with_clone)]
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+    #[wasm_bindgen(getter_with_clone)]
+    pub thumbnail: Vec<u8>,
+    #[wasm_bindgen(getter_with_clone)]
+    pub caption: String,
+}
+
+#[wasm_bindgen]
+impl AttachmentView {
+    #[wasm_bindgen(constructor)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        blob_id: Vec<u8>,
+        key: Vec<u8>,
+        digest: Vec<u8>,
+        size: f64,
+        mime: String,
+        name: String,
+        width: u32,
+        height: u32,
+        thumbnail: Vec<u8>,
+        caption: String,
+    ) -> AttachmentView {
+        AttachmentView {
+            blob_id,
+            key,
+            digest,
+            size,
+            mime,
+            name,
+            width,
+            height,
+            thumbnail,
+            caption,
+        }
+    }
+}
+
+impl From<Attachment> for AttachmentView {
+    fn from(a: Attachment) -> Self {
+        Self {
+            blob_id: a.blob_id,
+            key: a.key,
+            digest: a.digest,
+            size: a.size as f64,
+            mime: a.mime,
+            name: a.name,
+            width: a.width,
+            height: a.height,
+            thumbnail: a.thumbnail,
+            caption: a.caption,
+        }
+    }
+}
+
+impl From<AttachmentView> for Attachment {
+    fn from(a: AttachmentView) -> Self {
+        Self {
+            blob_id: a.blob_id,
+            key: a.key,
+            digest: a.digest,
+            size: a.size as u64,
+            mime: a.mime,
+            name: a.name,
+            width: a.width,
+            height: a.height,
+            thumbnail: a.thumbnail,
+            caption: a.caption,
+        }
+    }
+}
+
+/// Encrypts a file piece by piece for upload (ADR-0024).
+#[wasm_bindgen]
+pub struct AttachmentSealer {
+    inner: Option<Sealer>,
+}
+
+/// What `AttachmentSealer.finish` returns.
+#[wasm_bindgen]
+pub struct SealedView {
+    /// The last ciphertext bytes.
+    #[wasm_bindgen(getter_with_clone)]
+    pub tail: Vec<u8>,
+    pub size: f64,
+    #[wasm_bindgen(getter_with_clone)]
+    pub digest: Vec<u8>,
+}
+
+#[wasm_bindgen]
+impl AttachmentSealer {
+    /// `key`: 32 random bytes.
+    #[wasm_bindgen(constructor)]
+    pub fn new(key: &[u8]) -> Result<AttachmentSealer, JsError> {
+        Ok(Self {
+            inner: Some(Sealer::new(key).map_err(js_err)?),
+        })
+    }
+
+    pub fn push(&mut self, data: &[u8]) -> Result<Vec<u8>, JsError> {
+        let sealer = self.inner.as_mut().ok_or(JsError::new("sealer finished"))?;
+        sealer.push(data).map_err(js_err)
+    }
+
+    pub fn finish(&mut self) -> Result<SealedView, JsError> {
+        let sealer = self.inner.take().ok_or(JsError::new("sealer finished"))?;
+        let sealed = sealer.finish().map_err(js_err)?;
+        Ok(SealedView {
+            tail: sealed.tail,
+            size: sealed.size as f64,
+            digest: sealed.digest,
+        })
+    }
+}
+
+/// Decrypts and checks a downloaded file piece by piece (ADR-0024).
+#[wasm_bindgen]
+pub struct AttachmentOpener {
+    inner: Option<Opener>,
+}
+
+#[wasm_bindgen]
+impl AttachmentOpener {
+    #[wasm_bindgen(constructor)]
+    pub fn new(key: &[u8], size: f64, digest: &[u8]) -> Result<AttachmentOpener, JsError> {
+        Ok(Self {
+            inner: Some(Opener::new(key, size as u64, digest).map_err(js_err)?),
+        })
+    }
+
+    pub fn push(&mut self, data: &[u8]) -> Result<Vec<u8>, JsError> {
+        let opener = self.inner.as_mut().ok_or(JsError::new("opener finished"))?;
+        opener.push(data).map_err(js_err)
+    }
+
+    /// The last plaintext bytes; throws unless the whole file checks out.
+    pub fn finish(&mut self) -> Result<Vec<u8>, JsError> {
+        let opener = self.inner.take().ok_or(JsError::new("opener finished"))?;
+        opener.finish().map_err(js_err)
+    }
+}
+
+/// Ciphertext size of a file of `len` bytes, padding included.
+#[wasm_bindgen(js_name = sealedLength)]
+pub fn sealed_length(len: f64) -> f64 {
+    crate::attachment::sealed_len(len as u64) as f64
 }
 
 #[wasm_bindgen]
@@ -418,6 +586,23 @@ impl CoreClient {
         )
     }
 
+    /// Returns the encoded `Envelope`.
+    #[wasm_bindgen(js_name = sendAttachment)]
+    pub fn send_attachment(
+        &mut self,
+        conversation_id: &[u8],
+        attachment: &AttachmentView,
+        sent_at_ms: f64,
+        message_id: Vec<u8>,
+    ) -> Result<Vec<u8>, JsError> {
+        self.send(
+            conversation_id,
+            sent_at_ms,
+            content::Body::Attachment(attachment.clone().into()),
+            message_id,
+        )
+    }
+
     #[wasm_bindgen(js_name = sendProfile)]
     pub fn send_profile(
         &mut self,
@@ -497,6 +682,7 @@ impl CoreClient {
                         view.group_admins = g.admins.concat();
                     }
                     Some(content::Body::DeviceSync(d)) => view.device_sync = Some(d.state),
+                    Some(content::Body::Attachment(a)) => view.attachment = Some(a.into()),
                     Some(content::Body::Receipt(r)) => {
                         view.receipt_kind =
                             Some(u8::from(r.kind == i32::from(receipt::Kind::Read)));
