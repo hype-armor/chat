@@ -8,6 +8,8 @@ import type {
   CoreRequest,
   CoreResponseBody,
   CoreStatus,
+  DeviceInfo,
+  LinkOffer,
   ResponseEnvelope,
 } from './protocol'
 import workerUrl from './worker.ts?worker&url'
@@ -106,6 +108,33 @@ export class CoreClient {
 
   async sendText(conversationId: string, text: string) {
     expect(await this.call({ type: 'sendText', conversationId, text }), 'ok')
+  }
+
+  /** New device: a code to show; the view turns 'ready' once approved. */
+  async startLink(): Promise<LinkOffer> {
+    return expect(await this.call({ type: 'startLink' }), 'link').offer
+  }
+
+  async cancelLink() {
+    expect(await this.call({ type: 'cancelLink' }), 'ok')
+  }
+
+  /** Signed-in device: approves a scanned or typed code and adds the device. */
+  async approveLink(text: string) {
+    expect(await this.call({ type: 'approveLink', text }), 'ok')
+  }
+
+  async devices(): Promise<DeviceInfo[]> {
+    return expect(await this.call({ type: 'devices' }), 'devices').devices
+  }
+
+  async removeDevice(id: string) {
+    expect(await this.call({ type: 'removeDevice', id }), 'ok')
+  }
+
+  /** Reads a QR code from an RGBA camera frame, in the worker. */
+  async decodeQr(rgba: Uint8Array, width: number, height: number): Promise<string | undefined> {
+    return expect(await this.call({ type: 'decodeQr', rgba, width, height }), 'qr').text
   }
 
   async status(): Promise<CoreStatus> {

@@ -18,13 +18,23 @@ export type ConversationSummary = {
 
 export type AppView =
   | { phase: 'loading' }
-  | { phase: 'signed-out' }
+  | {
+      phase: 'signed-out'
+      /** Why the last session ended, e.g. this device was removed. */
+      notice?: string
+    }
   | {
       phase: 'ready'
       me: { phone: string; displayName: string }
       connection: ConnectionState
       conversations: ConversationSummary[]
     }
+
+/** One of this account's devices (ADR-0019). */
+export type DeviceInfo = { id: string; addedOn: string; lastSeenOn?: string; current: boolean }
+
+/** A link code to show on a new device: text for typing, QR modules for scanning. */
+export type LinkOffer = { code: string; qrSize: number; qrModules: number[] }
 
 export type MemberInfo = { account: string; name: string; isAdmin: boolean; isMe: boolean }
 
@@ -58,6 +68,12 @@ export type CoreRequest =
   | { type: 'leaveGroup'; conversationId: string }
   | { type: 'messages'; conversationId: string }
   | { type: 'sendText'; conversationId: string; text: string }
+  | { type: 'startLink' }
+  | { type: 'cancelLink' }
+  | { type: 'approveLink'; text: string }
+  | { type: 'devices' }
+  | { type: 'removeDevice'; id: string }
+  | { type: 'decodeQr'; rgba: Uint8Array; width: number; height: number }
   | { type: 'status' }
   | { type: 'bench'; members: number }
 
@@ -68,6 +84,9 @@ export type CoreResponseBody =
   | { type: 'messages'; messages: ChatMessage[] }
   | { type: 'members'; members: MemberInfo[] }
   | { type: 'pushKey'; key: string }
+  | { type: 'link'; offer: LinkOffer }
+  | { type: 'devices'; devices: DeviceInfo[] }
+  | { type: 'qr'; text?: string }
   | { type: 'status'; status: CoreStatus }
   | { type: 'bench'; result: BenchResult }
   | { type: 'error'; message: string }

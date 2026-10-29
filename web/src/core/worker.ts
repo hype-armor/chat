@@ -1,6 +1,6 @@
 // The core worker: hosts the engine (keys, storage, network) off the UI
 // thread (docs/03-architecture.md §3).
-import { GroupBench, core_version, self_test } from './pkg/chat_core.js'
+import { GroupBench, core_version, decodeQr, self_test } from './pkg/chat_core.js'
 import { Engine, describeError } from './engine'
 import type { CoreEvent, CoreResponseBody, RequestEnvelope } from './protocol'
 
@@ -49,6 +49,21 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
     case 'sendText':
       await engine.sendText(request.conversationId, request.text)
       return { type: 'ok' }
+    case 'startLink':
+      return { type: 'link', offer: await engine.startLink() }
+    case 'cancelLink':
+      engine.cancelLink()
+      return { type: 'ok' }
+    case 'approveLink':
+      await engine.approveLink(request.text)
+      return { type: 'ok' }
+    case 'devices':
+      return { type: 'devices', devices: await engine.devices() }
+    case 'removeDevice':
+      await engine.removeDevice(request.id)
+      return { type: 'ok' }
+    case 'decodeQr':
+      return { type: 'qr', text: decodeQr(request.rgba, request.width, request.height) }
     case 'status':
       return { type: 'status', status: { version: core_version(), selfTest: self_test() } }
     case 'bench': {

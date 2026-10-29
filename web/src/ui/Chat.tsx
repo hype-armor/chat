@@ -1,6 +1,7 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react'
 import type { CoreClient } from '../core/client'
 import type { AppView, ChatMessage, ConversationSummary, MemberInfo } from '../core/protocol'
+import { Devices } from './Devices'
 import { type NotificationState, enableNotifications, notificationState, refreshSubscription } from '../notifications'
 
 type Ready = Extract<AppView, { phase: 'ready' }>
@@ -29,6 +30,7 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
           </span>
         </header>
         <NotificationToggle core={core} />
+        <Devices core={core} />
         <NewChat core={core} onStarted={setSelected} />
         <NewGroup core={core} onCreated={setSelected} />
         <nav aria-label="Conversations">

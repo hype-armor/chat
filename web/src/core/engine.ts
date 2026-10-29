@@ -11,11 +11,13 @@ import init, {
   encodeAuthenticate,
   encodeSend,
   encodeSendWithWelcome,
+  encodeQr,
 } from './pkg/chat_core.js'
-import { ApiError, api, fromBase64, toBase64 } from './api'
+import { ApiError, type Registered, api, fromBase64, toBase64 } from './api'
 import { type CommitOutcome, RATE_LIMITED, commitWasAccepted, retryDelay, throwUnlessAccepted } from './commits'
 import { RecentIds, fromHex, makeIdentity, plain, randomId, splitIdentity, toHex } from './ids'
-import type { AppView, ChatMessage, ConnectionState, CoreEvent, MemberInfo } from './protocol'
+import { type DeviceSync, deviceHex, linkText, ownDevicePlan, parseDeviceSync, parseLinkCode } from './devices'
+import type { AppView, ChatMessage, ConnectionState, CoreEvent, DeviceInfo, LinkOffer, MemberInfo } from './protocol'
 import { acceptsGroupInfo, designatedCommitter, parseAdmins } from './roles'
 import { SecureStore } from './storage'
 
@@ -24,6 +26,11 @@ const MAX_RECONNECT_MS = 30_000
 const MAX_GROUP_MEMBERS = 50
 /** Envelopes held for conversations not yet joined (see `onDeliver`). */
 const MAX_EARLY = 200
+/** Link codes live 10 minutes on the server (ADR-0019). */
+const LINK_POLL_MS = 2_000
+const LINK_TTL_MS = 10 * 60_000
+/** How long the approving device waits for the new one to register. */
+const LINK_APPROVAL_WAIT_MS = 2 * 60_000
 
 type Account = { phone: string; displayName: string; accountId: string; deviceId: string; token: string }
 
@@ -35,6 +42,8 @@ type Conversation = {
   admins?: string[]
   /** 'left' or 'removed': history stays readable, sending is disabled. */
   status?: 'left' | 'removed'
+  /** The account's private conversation of its own devices (ADR-0019); hidden. */
+  self?: boolean
   lastText?: string
   lastAt: number
 }
@@ -76,9 +85,23 @@ type State = {
   leaving: Record<string, string[]>
   pendingCommit?: PendingCommit
   seen: string[]
+  /** This account's devices (hex), from the server (ADR-0019). */
+  myDevices: string[]
+  /** Group metadata from another own device, for conversations not joined yet. */
+  syncedMeta: DeviceSync['conversations']
 }
 
-const emptyState = (): State => ({ conversations: {}, names: {}, phones: {}, outbox: [], early: [], leaving: {}, seen: [] })
+const emptyState = (): State => ({
+  conversations: {},
+  names: {},
+  phones: {},
+  outbox: [],
+  early: [],
+  leaving: {},
+  seen: [],
+  myDevices: [],
+  syncedMeta: {},
+})
 
 export class Engine {
   private store!: SecureStore
@@ -96,6 +119,13 @@ export class Engine {
   /** Consecutive rate-limited sends, and the timer for the next attempt. */
   private limitedSends = 0
   private retryTimer?: ReturnType<typeof setTimeout>
+  /** Pending own-device reconciliation (see `syncOwnDevices`). */
+  private syncTimer?: ReturnType<typeof setTimeout>
+  /** Sync runs, one after another (a caller may need the next one to finish). */
+  private syncChain: Promise<void> = Promise.resolve()
+  /** The link code this (signed-out) device is waiting on. */
+  private linkCode?: string
+  private notice?: string
 
   /** Serialises every mutation of core state and storage. */
   private lock: Promise<unknown> = Promise.resolve()
@@ -118,8 +148,9 @@ export class Engine {
 
   view(): AppView {
     if (!this.store) return { phase: 'loading' }
-    if (!this.account) return { phase: 'signed-out' }
+    if (!this.account) return { phase: 'signed-out', notice: this.notice }
     const conversations = Object.values(this.state.conversations)
+      .filter((c) => !c.self)
       .sort((a, b) => b.lastAt - a.lastAt)
       .map((c) => ({
         id: c.id,
@@ -133,7 +164,7 @@ export class Engine {
       }))
     return {
       phase: 'ready',
-      me: { phone: this.account.phone, displayName: this.account.displayName },
+      me: { phone: this.account.phone, displayName: this.account.displayName || this.account.phone },
       connection: this.connection,
       conversations,
     }
@@ -151,10 +182,21 @@ export class Engine {
     // because the public key is only sent now.
     this.pending ??= new PendingClient()
     const reg = await api.verify(phone, code, toBase64(this.pending.publicKey()))
+    await this.register(reg, displayName)
+  }
+
+  private async register(reg: Registered, displayName: string) {
     await this.exclusive(async () => {
       this.core = this.pending!.intoClient(makeIdentity(reg.account_id, reg.device_id))
       this.pending = undefined
-      this.account = { phone, displayName, accountId: reg.account_id, deviceId: reg.device_id, token: reg.token }
+      this.notice = undefined
+      this.account = {
+        phone: reg.phone,
+        displayName,
+        accountId: reg.account_id,
+        deviceId: reg.device_id,
+        token: reg.token,
+      }
       this.state = emptyState()
       const packages = this.core.keyPackages(INITIAL_KEY_PACKAGES) as Uint8Array[]
       await this.persist()
@@ -163,6 +205,277 @@ export class Engine {
     })
     this.connect()
     this.emitView()
+  }
+
+  // ---- linked devices (ADR-0019) ---------------------------------------------
+
+  /**
+   * On a new device: gets a link code to show, then waits in the background
+   * until a signed-in device approves it and registers this device.
+   */
+  async startLink(): Promise<LinkOffer> {
+    if (this.account) throw new Error('Already signed in')
+    const { code } = await api.linkStart()
+    this.pending ??= new PendingClient()
+    this.linkCode = code
+    void this.awaitLink(code, Date.now() + LINK_TTL_MS)
+    const qr = encodeQr(linkText(code))
+    const offer = { code, qrSize: qr.size, qrModules: Array.from(qr.modules) }
+    qr.free()
+    return offer
+  }
+
+  cancelLink() {
+    this.linkCode = undefined
+  }
+
+  private async awaitLink(code: string, until: number) {
+    while (this.linkCode === code && Date.now() < until) {
+      await new Promise((resolve) => setTimeout(resolve, LINK_POLL_MS))
+      if (this.linkCode !== code || !this.pending) return
+      try {
+        const reg = await api.linkComplete(code, toBase64(this.pending.publicKey()))
+        this.linkCode = undefined
+        // No name until the first DeviceSync from another device brings it;
+        // until then this device introduces itself to no one.
+        await this.register(reg, '')
+        return
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 409) continue // not approved yet
+        if (e instanceof ApiError && e.status === 404) return // expired
+        console.warn('link polling failed', e)
+      }
+    }
+  }
+
+  /**
+   * On a signed-in device: approves a scanned or typed link code, waits for
+   * the new device to register, then adds it to every conversation.
+   */
+  async approveLink(text: string) {
+    const { account } = this.ready()
+    const code = parseLinkCode(text)
+    if (!code) throw new Error("That isn't a link code from this app")
+    if (this.connection !== 'online') throw new Error('You need to be online to link a device')
+    await api.linkApprove(account.token, code)
+    const until = Date.now() + LINK_APPROVAL_WAIT_MS
+    while (Date.now() < until) {
+      const { device_id } = await api.linkStatus(account.token, code)
+      if (device_id) {
+        await this.syncOwnDevices()
+        return
+      }
+      await new Promise((resolve) => setTimeout(resolve, LINK_POLL_MS))
+    }
+    throw new Error('The new device did not finish linking; try again')
+  }
+
+  async devices(): Promise<DeviceInfo[]> {
+    const { devices } = await api.devices(this.ready().account.token)
+    return devices.map((d) => ({
+      id: d.device_id,
+      addedOn: d.added_on,
+      lastSeenOn: d.last_seen_on ?? undefined,
+      current: d.current,
+    }))
+  }
+
+  /** Removes another of this account's devices, then from every group. */
+  async removeDevice(id: string) {
+    await api.removeDevice(this.ready().account.token, id)
+    await this.syncOwnDevices()
+  }
+
+  /** Called when the server no longer knows this device (it was removed). */
+  private async signOut(notice: string) {
+    this.account = undefined
+    this.core = undefined
+    this.state = emptyState()
+    this.notice = notice
+    const ws = this.ws
+    this.ws = undefined
+    ws?.close()
+    await this.store.clear()
+    this.setConnection('offline')
+  }
+
+  /** Runs `syncOwnDevices` soon, coalescing bursts (e.g. many joins). */
+  private scheduleSync() {
+    clearTimeout(this.syncTimer)
+    this.syncTimer = setTimeout(() => void this.syncOwnDevices(), 500)
+  }
+
+  /**
+   * Keeps this account's devices in each of its groups (ADR-0019): adds
+   * missing ones, removes deleted ones, and creates the self conversation.
+   */
+  private syncOwnDevices(): Promise<void> {
+    const run = this.syncChain.then(() => this.runSync())
+    this.syncChain = run.catch(() => undefined)
+    return run
+  }
+
+  private async runSync() {
+    if (!this.account || this.connection !== 'online') return
+    try {
+      const { devices } = await api.devices(this.account.token)
+      const mine = devices.map((d) => deviceHex(d.device_id))
+      this.state.myDevices = mine
+      const thisDevice = deviceHex(this.account.deviceId)
+      const hasSelf = Object.values(this.state.conversations).some((c) => c.self && !c.status)
+      // The oldest device creates it; duplicates from races are tolerated.
+      if (!hasSelf && mine.length > 1 && mine[0] === thisDevice) await this.createSelfConversation(mine)
+      for (const id of Object.keys(this.state.conversations)) {
+        try {
+          await this.reconcileDevices(id, mine)
+        } catch (e) {
+          console.warn('updating devices in a conversation failed', e)
+        }
+      }
+    } catch (e) {
+      console.warn('device sync failed', e)
+    }
+    this.emitView()
+  }
+
+  private async reconcileDevices(conversationId: string, mine: string[]) {
+    const { account, core } = this.ready()
+    const conv = this.state.conversations[conversationId]
+    if (!conv || conv.status || this.state.pendingCommit) return
+    const me = this.myAccount()
+    const members = (core.members(fromHex(conversationId)) as Uint8Array[]).map((m) => {
+      const { account, device } = splitIdentity(m)
+      return { account, device: toHex(device) }
+    })
+    const plan = ownDevicePlan(members, me, deviceHex(account.deviceId), mine)
+    if (!plan) return
+    if (plan.stale.length > 0) {
+      await this.exclusive(async () => {
+        if (this.state.pendingCommit || this.connection !== 'online') return
+        await this.flushOutbox(true)
+        const everyone = this.recipients(conversationId)
+        const staged = core.removeMembers(
+          fromHex(conversationId),
+          plan.stale.map((d) => fromHex(me + d)),
+          randomId(),
+        )
+        const pending: PendingCommit = { conversationId, commitHash: toBase64(staged.commitHash) }
+        await this.sendCommit(pending, staged.commit, everyone)
+      })
+      return // anything missing is added on the next pass
+    }
+    if (plan.missing.length === 0) return
+    const invitee = await this.ownInvitee(plan.missing)
+    if (!invitee) return
+    await this.exclusive(async () => {
+      if (this.state.pendingCommit || this.connection !== 'online') return
+      await this.flushOutbox(true)
+      const existing = this.recipients(conversationId)
+      const added = core.addMembers(fromHex(conversationId), invitee.keyPackages, randomId(), randomId())
+      const pending: PendingCommit = {
+        conversationId,
+        commitHash: toBase64(added.commitHash),
+        invitees: [{ account: me, phone: account.phone, devices: invitee.devices }],
+      }
+      const welcome = { envelope: added.welcome, recipients: invitee.devices }
+      await this.sendCommit(pending, added.commit, existing, welcome)
+    })
+  }
+
+  /** Claims key packages for some of this account's devices (hex ids). */
+  private async ownInvitee(devices: string[]): Promise<Invitee | undefined> {
+    const { account } = this.ready()
+    if (devices.length === 0) return undefined
+    const claimed = await api.claim(account.token, devices)
+    const packages = new Map(Object.entries(claimed.key_packages).map(([id, kp]) => [deviceHex(id), kp]))
+    const found = devices.filter((d) => packages.has(d))
+    if (found.length === 0) return undefined
+    return {
+      phone: account.phone,
+      account: this.myAccount(),
+      devices: found,
+      keyPackages: found.map((d) => fromBase64(packages.get(d)!)),
+    }
+  }
+
+  /** This account's other devices, for new conversations. */
+  private async otherOwnDevices(): Promise<Invitee | undefined> {
+    const thisDevice = deviceHex(this.ready().account.deviceId)
+    return this.ownInvitee(this.state.myDevices.filter((d) => d !== thisDevice))
+  }
+
+  private async createSelfConversation(mine: string[]) {
+    const thisDevice = deviceHex(this.ready().account.deviceId)
+    const invitee = await this.ownInvitee(mine.filter((d) => d !== thisDevice))
+    if (!invitee) return
+    await this.exclusive(async () => {
+      const started = this.core!.startConversation(invitee.keyPackages, randomId())
+      const id = toHex(started.conversationId)
+      this.state.conversations[id] = { id, peers: [], self: true, lastAt: Date.now() }
+      this.state.outbox.push({
+        messageId: toHex(randomId()),
+        conversationId: id,
+        envelope: toBase64(started.welcome),
+        recipients: invitee.devices,
+      })
+      this.queueDeviceSync(id)
+      await this.persist()
+    })
+    void this.flushOutbox()
+  }
+
+  /** Shares names and group metadata with this account's other devices. */
+  private queueDeviceSync(selfId: string) {
+    const sync: DeviceSync = {
+      displayName: this.account!.displayName,
+      names: this.state.names,
+      phones: this.state.phones,
+      conversations: Object.fromEntries(
+        Object.values(this.state.conversations)
+          .filter((c) => !c.self && !c.status)
+          .map((c) => [c.id, { name: c.name, admins: c.admins }]),
+      ),
+    }
+    const messageId = randomId()
+    const envelope = this.core!.sendDeviceSync(
+      fromHex(selfId),
+      new TextEncoder().encode(JSON.stringify(sync)),
+      Date.now(),
+      messageId,
+    )
+    this.state.outbox.push({
+      messageId: toHex(messageId),
+      conversationId: selfId,
+      envelope: toBase64(envelope),
+      recipients: this.recipients(selfId),
+    })
+  }
+
+  /** Applies a `DeviceSync` from another of this account's devices. */
+  private async applyDeviceSync(conversationId: string, bytes: Uint8Array) {
+    const sync = parseDeviceSync(bytes)
+    const conv = this.state.conversations[conversationId]
+    if (!sync || !conv) return
+    conv.self = true
+    conv.peers = []
+    if (sync.displayName && this.account) {
+      this.account.displayName = sync.displayName
+      await this.store.putJson('account', this.account)
+    }
+    this.state.names = { ...sync.names, ...this.state.names }
+    this.state.phones = { ...sync.phones, ...this.state.phones }
+    for (const [id, meta] of Object.entries(sync.conversations)) {
+      const target = this.state.conversations[id]
+      if (target) this.applyMeta(target, meta)
+      else this.state.syncedMeta[id] = meta
+    }
+    for (const c of Object.values(this.state.conversations)) this.emit({ type: 'messages', conversationId: c.id })
+    this.emitView()
+  }
+
+  private applyMeta(conv: Conversation, meta: { name?: string; admins?: string[] }) {
+    if (conv.name === undefined && meta.name) conv.name = meta.name
+    if ((conv.admins ?? []).length === 0 && meta.admins?.length) conv.admins = meta.admins
   }
 
   // ---- conversations -------------------------------------------------------
@@ -178,9 +491,13 @@ export class Engine {
     const claimed = await api.claim(account.token, found.device_ids)
     const devices = Object.keys(claimed.key_packages)
     if (devices.length === 0) throw new Error('This contact has no keys available right now; try again later')
+    const own = await this.otherOwnDevices()
 
     const id = await this.exclusive(async () => {
-      const started = core.startConversation(devices.map((d) => fromBase64(claimed.key_packages[d])), randomId())
+      const started = core.startConversation(
+        [...devices.map((d) => fromBase64(claimed.key_packages[d])), ...(own?.keyPackages ?? [])],
+        randomId(),
+      )
       const id = toHex(started.conversationId)
       this.state.phones[peer] = phone
       this.state.conversations[id] = { id, peers: [peer], lastAt: Date.now() }
@@ -189,7 +506,7 @@ export class Engine {
         messageId: toHex(welcomeId),
         conversationId: id,
         envelope: toBase64(started.welcome),
-        recipients: devices.map((d) => d.replaceAll('-', '')),
+        recipients: [...devices.map(deviceHex), ...(own?.devices ?? [])],
       })
       this.queueProfile(id)
       await this.persist()
@@ -208,9 +525,11 @@ export class Engine {
     const invitees = await this.resolve(phones)
     if (invitees.length === 0) throw new Error('Add at least one other person')
     if (invitees.length + 1 > MAX_GROUP_MEMBERS) throw new Error(`Groups are limited to ${MAX_GROUP_MEMBERS} people`)
+    const own = await this.otherOwnDevices()
+    const everyone = own ? [...invitees, own] : invitees
 
     const id = await this.exclusive(async () => {
-      const started = core.startConversation(invitees.flatMap((i) => i.keyPackages), randomId())
+      const started = core.startConversation(everyone.flatMap((i) => i.keyPackages), randomId())
       const id = toHex(started.conversationId)
       for (const i of invitees) this.state.phones[i.account] = i.phone
       const admins = [this.myAccount()]
@@ -225,7 +544,7 @@ export class Engine {
         messageId: toHex(randomId()),
         conversationId: id,
         envelope: toBase64(started.welcome),
-        recipients: invitees.flatMap((i) => i.devices),
+        recipients: everyone.flatMap((i) => i.devices),
       })
       this.queueGroupInfo(id, groupName, admins)
       this.queueProfile(id)
@@ -281,7 +600,7 @@ export class Engine {
     const me = this.myAccount()
     return [me, ...conv.peers].map((account) => ({
       account,
-      name: account === me ? this.account!.displayName : this.nameOf(account),
+      name: account === me ? this.account!.displayName || this.account!.phone : this.nameOf(account),
       isAdmin: (conv.admins ?? []).includes(account),
       isMe: account === me,
     }))
@@ -403,6 +722,7 @@ export class Engine {
     ws.onopen = () => ws.send(plain(encodeAuthenticate(this.requestId(), this.account!.token)))
     ws.onmessage = (event) => this.onFrame(decodeServerFrame(new Uint8Array(event.data as ArrayBuffer)))
     ws.onclose = () => {
+      if (this.ws !== ws) return // replaced or signed out
       this.ws = undefined
       for (const resolve of this.waiters.values()) resolve(undefined)
       this.waiters.clear()
@@ -420,6 +740,7 @@ export class Engine {
         // Queued before any delivery handler, so it settles first.
         void this.exclusive(() => this.resolvePendingCommit()).then(() => {
           this.commitDepartures()
+          this.scheduleSync()
           return this.flushOutbox()
         })
         return
@@ -431,6 +752,9 @@ export class Engine {
         if (waiter) {
           this.waiters.delete(frame.requestId)
           waiter(frame)
+        } else if (frame.kind === 'error' && frame.errorCode === 401 && this.connection !== 'online') {
+          // Our token was refused: another device removed this one.
+          void this.signOut('This device was removed from your account.')
         } else if (frame.kind === 'error') {
           console.warn(`server error ${frame.errorCode}: ${frame.errorMessage}`)
         }
@@ -504,11 +828,14 @@ export class Engine {
   private async apply(event: ReturnType<CoreClient['receive']>, messageId: string) {
     const conversationId = toHex(event.conversationId)
     if (event.kind === 'joined') {
-      const me = toHex(this.core!.identity())
-      const peers = (this.core!.members(event.conversationId) as Uint8Array[])
-        .filter((m) => toHex(m) !== me)
-        .map((m) => splitIdentity(m).account)
-      this.state.conversations[conversationId] = { id: conversationId, peers, lastAt: Date.now() }
+      const conv: Conversation = { id: conversationId, peers: this.peersOf(conversationId), lastAt: Date.now() }
+      const meta = this.state.syncedMeta[conversationId]
+      if (meta) {
+        this.applyMeta(conv, meta)
+        delete this.state.syncedMeta[conversationId]
+      }
+      this.state.conversations[conversationId] = conv
+      this.scheduleSync()
       this.queueProfile(conversationId)
       // Joining consumed one of our key packages; publish a replacement.
       const [replacement] = this.core!.keyPackages(1) as Uint8Array[]
@@ -520,28 +847,45 @@ export class Engine {
     } else if (event.kind === 'epoch') {
       const conv = this.state.conversations[conversationId]
       if (!conv) return
-      const me = toHex(this.core!.identity())
-      const peers = (this.core!.members(event.conversationId) as Uint8Array[])
-        .filter((m) => toHex(m) !== me)
-        .map((m) => splitIdentity(m).account)
+      const peers = this.peersOf(conversationId)
       if (!this.core!.isActive(event.conversationId)) {
         // A commit removed us (or committed our own departure).
         conv.status ??= 'removed'
         this.emitView()
         return
       }
+      if (conv.self) return
       // Introduce ourselves to anyone new.
       if (peers.some((p) => !conv.peers.includes(p))) this.queueProfile(conversationId)
-      conv.peers = [...new Set(peers)]
+      conv.peers = peers
       this.emitView()
     } else if (event.kind === 'proposal') {
       // A member asked to leave; the designated member commits it once this
       // envelope is stored (see `commitProposalsIfDue`).
       const leaver = splitIdentity(event.sender).account
       this.state.leaving[conversationId] = [...new Set([...(this.state.leaving[conversationId] ?? []), leaver])]
+      const conv = this.state.conversations[conversationId]
+      if (leaver === this.myAccount() && conv && !conv.status) {
+        // Left from another of our devices: follow (ADR-0019).
+        const messageId = randomId()
+        const proposal = this.core!.leave(event.conversationId, messageId)
+        this.state.outbox.push({
+          messageId: toHex(messageId),
+          conversationId,
+          envelope: toBase64(proposal),
+          recipients: this.recipients(conversationId),
+        })
+        conv.status = 'left'
+        this.emitView()
+      }
     } else if (event.kind === 'message') {
       const from = splitIdentity(event.sender).account
       const conv = this.state.conversations[conversationId]
+      const mine = from === this.myAccount()
+      if (event.deviceSync !== undefined) {
+        if (mine) await this.applyDeviceSync(conversationId, event.deviceSync)
+        return
+      }
       if (event.groupName !== undefined && conv && acceptsGroupInfo(conv.admins, from)) {
         if (event.groupName) conv.name = event.groupName.slice(0, 64)
         const admins = parseAdmins(event.groupAdmins)
@@ -549,7 +893,7 @@ export class Engine {
         this.emitView()
       }
       if (conv?.status && event.text !== undefined) return // no longer in the group
-      if (event.displayName !== undefined) {
+      if (event.displayName !== undefined && !mine) {
         this.state.names[from] = event.displayName.slice(0, 64)
         this.emitView()
         // Sender names are resolved when messages are read: refresh lists.
@@ -558,12 +902,13 @@ export class Engine {
         }
       }
       if (event.text !== undefined) {
+        // Sent from another of our devices: show it as ours.
         await this.appendMessage(conversationId, {
           id: messageId,
-          from,
+          from: mine ? 'me' : from,
           text: event.text,
           sentAt: event.sentAtMs,
-          status: 'received',
+          status: mine ? 'sent' : 'received',
         })
       }
     }
@@ -664,8 +1009,10 @@ export class Engine {
     this.core!.confirmCommit(fromHex(p.conversationId))
     if (conv) conv.peers = this.peersOf(p.conversationId)
     if (!this.core!.hasPendingProposals(fromHex(p.conversationId))) delete this.state.leaving[p.conversationId]
-    if (p.invitees) {
-      for (const i of p.invitees) this.state.phones[i.account] = i.phone
+    if (p.invitees && conv?.self) {
+      this.queueDeviceSync(p.conversationId)
+    } else if (p.invitees) {
+      for (const i of p.invitees) if (i.account !== this.myAccount()) this.state.phones[i.account] = i.phone
       if (conv?.name) this.queueGroupInfo(p.conversationId, conv.name, conv.admins ?? [])
       this.queueProfile(p.conversationId)
     }
@@ -737,6 +1084,7 @@ export class Engine {
   }
 
   private queueProfile(conversationId: string) {
+    if (!this.account!.displayName) return // linked device still waiting for its name
     const messageId = randomId()
     const envelope = this.core!.sendProfile(fromHex(conversationId), this.account!.displayName, Date.now(), messageId)
     this.state.outbox.push({

@@ -9,8 +9,8 @@ export class ApiError extends Error {
   }
 }
 
-async function get<T>(path: string): Promise<T> {
-  const res = await fetch(path)
+async function get<T>(path: string, token?: string): Promise<T> {
+  const res = await fetch(path, token ? { headers: { authorization: `Bearer ${token}` } } : undefined)
   const json = await res.json().catch(() => undefined)
   if (!res.ok) throw new ApiError(res.status, json?.error ?? `request failed (${res.status})`)
   return json as T
@@ -26,7 +26,9 @@ async function post<T>(path: string, body: unknown, token?: string): Promise<T> 
   return json as T
 }
 
-export type Registered = { account_id: string; device_id: string; token: string }
+export type Registered = { account_id: string; device_id: string; token: string; phone: string }
+
+export type ServerDevice = { device_id: string; added_on: string; last_seen_on: string | null; current: boolean }
 
 export const api = {
   requestCode: (phone: string) => post<void>('/v1/auth/request-code', { phone }),
@@ -42,6 +44,13 @@ export const api = {
   unsubscribePush: (token: string) => post<void>('/v1/push/unsubscribe', {}, token),
   groupEpoch: (token: string, groupId: string) =>
     post<{ epoch: number; last_commit_hash: string }>('/v1/groups/epoch', { group_id: groupId }, token),
+  devices: (token: string) => get<{ devices: ServerDevice[] }>('/v1/devices', token),
+  removeDevice: (token: string, deviceId: string) => post<void>('/v1/devices/remove', { device_id: deviceId }, token),
+  linkStart: () => post<{ code: string }>('/v1/link/start', {}),
+  linkApprove: (token: string, code: string) => post<void>('/v1/link/approve', { code }, token),
+  linkStatus: (token: string, code: string) => post<{ device_id: string | null }>('/v1/link/status', { code }, token),
+  linkComplete: (code: string, identityKey: string) =>
+    post<Registered>('/v1/link/complete', { code, identity_key: identityKey }),
   claim: (token: string, deviceIds: string[]) =>
     post<{ key_packages: Record<string, string> }>('/v1/keys/claim', { device_ids: deviceIds }, token),
 }
