@@ -141,7 +141,10 @@ flowchart LR
 Clients keep the commit *pending* until the server accepts it, then apply
 it and send the welcome; on an epoch conflict they discard it and retry.
 Members keep keys for the last 5 epochs so messages sent just before a
-commit still decrypt.
+commit still decrypt. Existing members may react to a commit (e.g. send
+their profile) before the adder's welcome reaches the server, so a new
+member's device holds envelopes for conversations it hasn't joined yet and
+replays them once the welcome arrives.
 
 **Known gap:** if the connection drops after the server accepted a commit
 but before the client saw the acceptance, the client discards a commit the

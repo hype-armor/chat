@@ -19,6 +19,8 @@ import { SecureStore } from './storage'
 const INITIAL_KEY_PACKAGES = 20
 const MAX_RECONNECT_MS = 30_000
 const MAX_GROUP_MEMBERS = 50
+/** Envelopes held for conversations not yet joined (see `onDeliver`). */
+const MAX_EARLY = 200
 
 type Account = { phone: string; displayName: string; accountId: string; deviceId: string; token: string }
 
@@ -30,6 +32,9 @@ type Invitee = { phone: string; account: string; devices: string[]; keyPackages:
 /** An envelope waiting to be accepted by the server (FR-MSG-9). */
 type Outgoing = { messageId: string; conversationId: string; envelope: string; recipients: string[] }
 
+/** An envelope that arrived before the welcome to its conversation. */
+type Early = { conversationId: string; messageId: string; envelope: string }
+
 type State = {
   conversations: Record<string, Conversation>
   /** Account id (hex) → display name from their profile message. */
@@ -37,10 +42,11 @@ type State = {
   /** Account id (hex) → phone number, for contacts this user looked up. */
   phones: Record<string, string>
   outbox: Outgoing[]
+  early: Early[]
   seen: string[]
 }
 
-const emptyState = (): State => ({ conversations: {}, names: {}, phones: {}, outbox: [], seen: [] })
+const emptyState = (): State => ({ conversations: {}, names: {}, phones: {}, outbox: [], early: [], seen: [] })
 
 export class Engine {
   private store!: SecureStore
@@ -292,7 +298,7 @@ export class Engine {
         void this.flushOutbox()
         return
       case 'deliver':
-        void this.onDeliver(frame.envelope, frame.messageId)
+        void this.onDeliver(frame)
         return
       default: {
         const waiter = this.waiters.get(frame.requestId)
@@ -306,15 +312,20 @@ export class Engine {
     }
   }
 
-  private async onDeliver(envelope: Uint8Array, messageId: Uint8Array) {
+  private async onDeliver(frame: ServerFrameView) {
+    const { envelope, messageId } = frame
     await this.exclusive(async () => {
       const id = toHex(messageId)
       if (!this.recent.has(id)) {
-        try {
-          await this.apply(this.core!.receive(envelope), id)
-        } catch (e) {
-          // Undecryptable input must not block the queue forever.
-          console.warn('dropping envelope that could not be processed', e)
+        const conversationId = toHex(frame.conversationId)
+        if (!frame.welcome && !this.state.conversations[conversationId]) {
+          // When someone adds us, other members can react to the commit
+          // (e.g. send their profile) before the adder's welcome reaches the
+          // server. Hold such envelopes until we join.
+          this.state.early.push({ conversationId, messageId: id, envelope: toBase64(envelope) })
+          if (this.state.early.length > MAX_EARLY) this.state.early.shift()
+        } else {
+          await this.process(envelope, id)
         }
         this.recent.add(id)
         await this.persist()
@@ -323,6 +334,15 @@ export class Engine {
     // Ack only after the result is stored (docs/11-api.md).
     this.ws?.send(plain(encodeAck(0, messageId)))
     void this.flushOutbox()
+  }
+
+  private async process(envelope: Uint8Array, messageId: string) {
+    try {
+      await this.apply(this.core!.receive(envelope), messageId)
+    } catch (e) {
+      // Undecryptable input must not block the queue forever.
+      console.warn('dropping envelope that could not be processed', e)
+    }
   }
 
   private async apply(event: ReturnType<CoreClient['receive']>, messageId: string) {
@@ -338,6 +358,9 @@ export class Engine {
       const [replacement] = this.core!.keyPackages(1) as Uint8Array[]
       api.uploadKeyPackages(this.account!.token, [toBase64(replacement)]).catch((e) => console.warn(e))
       this.emitView()
+      const early = this.state.early.filter((e) => e.conversationId === conversationId)
+      this.state.early = this.state.early.filter((e) => e.conversationId !== conversationId)
+      for (const e of early) await this.process(fromBase64(e.envelope), e.messageId)
     } else if (event.kind === 'epoch') {
       const conv = this.state.conversations[conversationId]
       if (!conv) return
@@ -358,6 +381,10 @@ export class Engine {
       if (event.displayName !== undefined) {
         this.state.names[from] = event.displayName.slice(0, 64)
         this.emitView()
+        // Sender names are resolved when messages are read: refresh lists.
+        for (const c of Object.values(this.state.conversations)) {
+          if (c.peers.includes(from)) this.emit({ type: 'messages', conversationId: c.id })
+        }
       }
       if (event.text !== undefined) {
         await this.appendMessage(conversationId, {

@@ -1,8 +1,8 @@
 //! JavaScript bindings used by the web client's core worker.
 
 use chat_proto::v1::{
-    Ack, Authenticate, ClientFrame, Content, Envelope, GroupInfo, Ping, Profile, SendEnvelope,
-    ServerFrame, Text, client_frame, content, server_frame,
+    Ack, Authenticate, ClientFrame, Content, ContentType, Envelope, GroupInfo, Ping, Profile,
+    SendEnvelope, ServerFrame, Text, client_frame, content, server_frame,
 };
 use js_sys::{Array, Uint8Array};
 use prost::Message;
@@ -428,6 +428,11 @@ pub struct ServerFrameView {
     pub envelope: Vec<u8>,
     #[wasm_bindgen(getter_with_clone, js_name = messageId)]
     pub message_id: Vec<u8>,
+    /// Conversation of a delivered envelope.
+    #[wasm_bindgen(getter_with_clone, js_name = conversationId)]
+    pub conversation_id: Vec<u8>,
+    /// Whether a delivered envelope is an MLS welcome.
+    pub welcome: bool,
     pub accepted: bool,
     #[wasm_bindgen(js_name = epochConflict)]
     pub epoch_conflict: bool,
@@ -446,6 +451,8 @@ pub fn decode_server_frame(bytes: &[u8]) -> Result<ServerFrameView, JsError> {
         device_id: Vec::new(),
         envelope: Vec::new(),
         message_id: Vec::new(),
+        conversation_id: Vec::new(),
+        welcome: false,
         accepted: false,
         epoch_conflict: false,
         error_code: 0,
@@ -459,6 +466,8 @@ pub fn decode_server_frame(bytes: &[u8]) -> Result<ServerFrameView, JsError> {
         Some(server_frame::Body::Deliver(env)) => {
             view.kind = "deliver".to_owned();
             view.message_id = env.message_id.clone();
+            view.conversation_id = env.conversation_id.clone();
+            view.welcome = env.content_type == i32::from(ContentType::Welcome);
             view.envelope = env.encode_to_vec();
         }
         Some(server_frame::Body::SendResult(r)) => {
