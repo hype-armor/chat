@@ -273,6 +273,7 @@ pub async fn expire(db: &PgPool) -> Result<(), sqlx::Error> {
         "DELETE FROM key_packages WHERE expires_at < now()",
         "DELETE FROM verification_codes WHERE expires_at < now()",
         "DELETE FROM code_requests WHERE requested_at < now() - interval '1 day'",
+        "DELETE FROM rate_limits WHERE window_start < now() - interval '2 days'",
     ] {
         sqlx::query(stmt).execute(db).await?;
     }

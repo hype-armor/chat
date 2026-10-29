@@ -34,6 +34,8 @@ spec:
               value: {{ .Values.server.logFormat | quote }}
             - name: RUST_LOG
               value: {{ .Values.server.logLevel | quote }}
+            - name: CHAT_TRUST_PROXY_HEADERS
+              value: {{ .Values.server.trustProxyHeaders | quote }}
             - name: CHAT_VAPID_SUBJECT
               value: {{ .Values.server.vapid.subject | quote }}
             {{- with .Values.server.vapid.existingSecret }}

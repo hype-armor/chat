@@ -13,7 +13,7 @@ import init, {
   encodeSendWithWelcome,
 } from './pkg/chat_core.js'
 import { ApiError, api, fromBase64, toBase64 } from './api'
-import { type CommitOutcome, commitWasAccepted, throwUnlessAccepted } from './commits'
+import { type CommitOutcome, RATE_LIMITED, commitWasAccepted, retryDelay, throwUnlessAccepted } from './commits'
 import { RecentIds, fromHex, makeIdentity, plain, randomId, splitIdentity, toHex } from './ids'
 import type { AppView, ChatMessage, ConnectionState, CoreEvent, MemberInfo } from './protocol'
 import { acceptsGroupInfo, designatedCommitter, parseAdmins } from './roles'
@@ -93,6 +93,9 @@ export class Engine {
   private waiters = new Map<number, (frame: ServerFrameView | undefined) => void>()
   private reconnectMs = 1000
   private flushing = false
+  /** Consecutive rate-limited sends, and the timer for the next attempt. */
+  private limitedSends = 0
+  private retryTimer?: ReturnType<typeof setTimeout>
 
   /** Serialises every mutation of core state and storage. */
   private lock: Promise<unknown> = Promise.resolve()
@@ -580,6 +583,13 @@ export class Engine {
           encodeSend(id, fromBase64(item.envelope), item.recipients.map(fromHex)),
         )
         if (!result) return // disconnected: retry after reconnecting
+        if (result.kind === 'error' && result.errorCode === RATE_LIMITED) {
+          // Keep the message queued and try again later, in order.
+          clearTimeout(this.retryTimer)
+          this.retryTimer = setTimeout(() => void this.flushOutbox(), retryDelay(this.limitedSends++))
+          return
+        }
+        this.limitedSends = 0
         const ok = result.kind === 'send_result' && result.accepted
         if (!ok) console.warn('send rejected', result.errorCode, result.errorMessage)
         const settle = async () => {
@@ -644,6 +654,7 @@ export class Engine {
       return 'accepted'
     }
     this.core!.discardCommit(id)
+    if (result.kind === 'error' && result.errorCode === RATE_LIMITED) return 'limited'
     return result.epochConflict ? 'conflict' : 'rejected'
   }
 

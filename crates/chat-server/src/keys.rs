@@ -11,6 +11,7 @@ use crate::{
     AppState,
     auth::{AuthDevice, db, valid_phone},
     error::ApiError,
+    limits,
 };
 
 const MAX_KEY_PACKAGE_BYTES: usize = 4096;
@@ -91,6 +92,9 @@ pub async fn claim(
     if req.device_ids.is_empty() || req.device_ids.len() > MAX_CLAIM {
         return Err(ApiError::BadRequest("claim for 1 to 200 devices"));
     }
+    let amount = req.device_ids.len() as i32;
+    let key = format!("claim:{claimer}");
+    limits::take(db, &key, amount, state.limits.claims_per_hour, limits::HOUR).await?;
     let rows: Vec<(Uuid, Vec<u8>)> = sqlx::query_as(
         // Oldest unexpired package per device; SKIP LOCKED lets concurrent
         // claims for the same device each take a different package.
@@ -138,13 +142,16 @@ pub struct Account {
 /// Finds one contact by phone number. No bulk lookup (docs/04 §4).
 pub async fn lookup(
     State(state): State<AppState>,
-    AuthDevice(_): AuthDevice,
+    AuthDevice(device): AuthDevice,
     Json(req): Json<Lookup>,
 ) -> Result<Json<Account>, ApiError> {
     let db = db(&state)?;
     if !valid_phone(&req.phone) {
         return Err(ApiError::BadRequest("phone must be in E.164 format"));
     }
+    // Contact discovery must not be an enumeration oracle (docs/04 §4).
+    let key = format!("lookup:{device}");
+    limits::take(db, &key, 1, state.limits.lookups_per_hour, limits::HOUR).await?;
     let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
         "SELECT a.account_id, d.device_id FROM accounts a
          JOIN devices d USING (account_id) WHERE a.phone_number = $1 ORDER BY d.created_at",

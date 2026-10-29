@@ -15,8 +15,8 @@ use axum::{
     response::Response,
 };
 use chat_proto::v1::{
-    AuthResult, ClientFrame, Error, Pong, SendEnvelope, SendResult, ServerFrame, client_frame,
-    server_frame,
+    AuthResult, ClientFrame, ContentType, Error, Pong, SendEnvelope, SendResult, ServerFrame,
+    client_frame, server_frame,
 };
 use prost::Message as _;
 use sqlx::PgPool;
@@ -29,6 +29,7 @@ use crate::{
     delivery::{self, SendOutcome},
     error::ApiError,
     hub::Registration,
+    limits,
 };
 
 /// Upper bound on one frame; attachments go to blob storage, not the socket.
@@ -208,6 +209,12 @@ async fn send_envelope(
     sender: Uuid,
     send: SendEnvelope,
 ) -> Result<Option<server_frame::Body>, ApiError> {
+    if !state
+        .send_buckets
+        .allow(sender, state.limits.sends_per_minute)
+    {
+        return Err(ApiError::TooManyRequests("sending too fast; slow down"));
+    }
     let envelope = send
         .envelope
         .ok_or(ApiError::BadRequest("missing envelope"))?;
@@ -218,6 +225,17 @@ async fn send_envelope(
         Some(_) => delivery::parse_recipients(&send.welcome_recipients, false)?,
         None => Vec::new(),
     };
+    // First contacts (welcomes) are the spam vector: cap them per day.
+    let first_contacts = if envelope.content_type == i32::from(ContentType::Welcome) {
+        recipients.len()
+    } else {
+        welcome_recipients.len()
+    };
+    if first_contacts > 0 {
+        let key = format!("welcome:{sender}");
+        let limit = state.limits.welcomes_per_day;
+        limits::take(db, &key, first_contacts as i32, limit, limits::DAY).await?;
+    }
     let outcome = delivery::send(
         db,
         delivery::Send {
