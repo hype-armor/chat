@@ -145,16 +145,19 @@ pub struct StartedView {
 
 /// A received envelope, flattened for JavaScript. `kind` is one of
 /// `message`, `joined`, `epoch`, `ignored`.
-#[wasm_bindgen(getter_with_clone)]
+#[wasm_bindgen]
 pub struct EventView {
+    #[wasm_bindgen(getter_with_clone)]
     pub kind: String,
-    #[wasm_bindgen(js_name = conversationId)]
+    #[wasm_bindgen(getter_with_clone, js_name = conversationId)]
     pub conversation_id: Vec<u8>,
+    #[wasm_bindgen(getter_with_clone)]
     pub sender: Vec<u8>,
     #[wasm_bindgen(js_name = sentAtMs)]
     pub sent_at_ms: f64,
+    #[wasm_bindgen(getter_with_clone)]
     pub text: Option<String>,
-    #[wasm_bindgen(js_name = displayName)]
+    #[wasm_bindgen(getter_with_clone, js_name = displayName)]
     pub display_name: Option<String>,
 }
 
@@ -352,23 +355,25 @@ pub fn encode_ping(request_id: u32) -> Vec<u8> {
 
 /// A decoded `ServerFrame`. `kind` is one of `auth`, `deliver`,
 /// `send_result`, `pong`, `error`, `empty`.
-#[wasm_bindgen(getter_with_clone)]
+#[wasm_bindgen]
 pub struct ServerFrameView {
     #[wasm_bindgen(js_name = requestId)]
     pub request_id: u32,
+    #[wasm_bindgen(getter_with_clone)]
     pub kind: String,
-    #[wasm_bindgen(js_name = deviceId)]
+    #[wasm_bindgen(getter_with_clone, js_name = deviceId)]
     pub device_id: Vec<u8>,
     /// Encoded `Envelope` for `deliver`.
+    #[wasm_bindgen(getter_with_clone)]
     pub envelope: Vec<u8>,
-    #[wasm_bindgen(js_name = messageId)]
+    #[wasm_bindgen(getter_with_clone, js_name = messageId)]
     pub message_id: Vec<u8>,
     pub accepted: bool,
     #[wasm_bindgen(js_name = epochConflict)]
     pub epoch_conflict: bool,
     #[wasm_bindgen(js_name = errorCode)]
     pub error_code: u32,
-    #[wasm_bindgen(js_name = errorMessage)]
+    #[wasm_bindgen(getter_with_clone, js_name = errorMessage)]
     pub error_message: String,
 }
 
