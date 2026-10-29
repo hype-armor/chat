@@ -91,6 +91,10 @@ deliveries have `request_id = 0`.
      days. Its recipients become members.
    - A commit that adds members sets `welcome` and `welcome_recipients`; the
      server accepts commit and welcome in one transaction.
+   - `silent: true` sends no Web Push to offline recipients. The web client
+     uses it for delivery and read receipts, which are ordinary encrypted
+     MLS messages to the conversation; the server learns only that the
+     envelope is silent.
    - Limits: ciphertext ≤ 128 KiB, ids ≤ 64 bytes, ≤ 500 recipients, frame
      ≤ 256 KiB. Attachments go to blob storage (Phase 2), not the socket.
 5. **Ping** → **Pong** at the application level. The server also sends

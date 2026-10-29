@@ -78,6 +78,9 @@ message SendEnvelope {
   // sees the commit (ADR-0017).
   Envelope welcome = 3;
   repeated bytes welcome_recipients = 4;
+  // No Web Push for offline recipients (e.g. receipts): nothing a person
+  // needs to be told about.
+  bool silent = 5;
 }
 
 message SendResult {

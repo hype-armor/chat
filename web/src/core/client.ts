@@ -153,6 +153,15 @@ export class CoreClient {
     expect(await this.call({ type: 'verifyScanned', conversationId, account, text }), 'ok')
   }
 
+  /** The user has seen this conversation's messages. */
+  async markRead(conversationId: string) {
+    expect(await this.call({ type: 'markRead', conversationId }), 'ok')
+  }
+
+  async setReadReceipts(on: boolean) {
+    expect(await this.call({ type: 'setReadReceipts', on }), 'ok')
+  }
+
   /** Deletes the account and all its server data; `phone` confirms it. */
   async deleteAccount(phone: string) {
     expect(await this.call({ type: 'deleteAccount', phone }), 'ok')

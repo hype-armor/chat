@@ -68,10 +68,15 @@ fn message(to_group: &[u8]) -> Envelope {
 }
 
 async fn send(client: &mut Client, to: Uuid) {
+    send_with(client, to, false).await
+}
+
+async fn send_with(client: &mut Client, to: Uuid, silent: bool) {
     let reply = client
         .request(client_frame::Body::Send(SendEnvelope {
             envelope: Some(message(b"g")),
             recipient_devices: vec![to.as_bytes().to_vec()],
+            silent,
             ..Default::default()
         }))
         .await;
@@ -190,4 +195,30 @@ async fn subscription_validation(pool: PgPool) {
         .post("/v1/push/unsubscribe", Some(&token), json!({}))
         .await;
     assert_eq!(status, 204);
+}
+
+#[sqlx::test]
+async fn silent_sends_do_not_push(pool: PgPool) {
+    let (service, base) = FakePushService::start().await;
+    let push = PushSender::generate("mailto:test@example.com".into(), true).unwrap();
+    let server = TestServer::start_with_push(pool, Some(push)).await;
+    let (alice_dev, alice_token) = server.register("+15550006101").await;
+    let (bob, bob_token) = server.register("+15550006102").await;
+    server.admit(b"g", &[alice_dev, bob]).await;
+    let sub =
+        json!({ "endpoint": format!("{base}/push/bob"), "keys": { "p256dh": "P", "auth": "A" } });
+    server
+        .post("/v1/push/subscription", Some(&bob_token), sub)
+        .await;
+
+    // A receipt for offline Bob is queued but wakes nothing.
+    let mut alice = server.connect(&alice_token).await;
+    send_with(&mut alice, bob, true).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(service.count(), 0);
+    send_with(&mut alice, bob, false).await;
+    assert!(
+        eventually(|| service.count() == 1).await,
+        "a real message still pushes"
+    );
 }

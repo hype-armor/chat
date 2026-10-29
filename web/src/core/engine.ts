@@ -18,6 +18,7 @@ import { ApiError, type Registered, api, fromBase64, toBase64 } from './api'
 import { type CommitOutcome, RATE_LIMITED, commitWasAccepted, retryDelay, throwUnlessAccepted } from './commits'
 import { RecentIds, fromHex, makeIdentity, plain, randomId, splitIdentity, toHex } from './ids'
 import { type DeviceSync, deviceHex, linkText, ownDevicePlan, parseDeviceSync, parseLinkCode } from './devices'
+import { applyReceipt, splitIds } from './receipts'
 import { type KeyBook, observeKeys, scannedMatches, verification, verifyText } from './keys'
 import type {
   AppView,
@@ -57,6 +58,8 @@ type Conversation = {
   self?: boolean
   /** Started by someone this user has no connection to, until accepted (FR-SAF-3). */
   request?: boolean
+  /** Received messages not yet seen. */
+  unread?: number
   lastText?: string
   lastAt: number
 }
@@ -65,7 +68,14 @@ type Conversation = {
 type Invitee = { phone: string; account: string; devices: string[]; keyPackages: Uint8Array[] }
 
 /** An envelope waiting to be accepted by the server (FR-MSG-9). */
-type Outgoing = { messageId: string; conversationId: string; envelope: string; recipients: string[] }
+type Outgoing = {
+  messageId: string
+  conversationId: string
+  envelope: string
+  recipients: string[]
+  /** No Web Push for offline recipients (receipts). */
+  silent?: boolean
+}
 
 /**
  * A commit sent to the server whose answer was lost (the connection
@@ -112,6 +122,8 @@ type State = {
   alerts: { id: string; text: string }[]
   /** Blocked account ids (FR-ID-8); their messages are dropped. */
   blocked: string[]
+  /** Whether to send read receipts (FR-MSG-5); delivery receipts always go. */
+  readReceipts: boolean
 }
 
 const emptyState = (): State => ({
@@ -129,6 +141,7 @@ const emptyState = (): State => ({
   expectedOwn: [],
   alerts: [],
   blocked: [],
+  readReceipts: true,
 })
 
 export class Engine {
@@ -154,6 +167,9 @@ export class Engine {
   /** The link code this (signed-out) device is waiting on. */
   private linkCode?: string
   private notice?: string
+  /** Receipts to send, per conversation, batched (see `queueReceipt`). */
+  private receipts = new Map<string, { delivered: string[]; read: string[] }>()
+  private receiptTimer?: ReturnType<typeof setTimeout>
 
   /** Serialises every mutation of core state and storage. */
   private lock: Promise<unknown> = Promise.resolve()
@@ -190,6 +206,7 @@ export class Engine {
         peer: c.name === undefined && c.peers.length === 1 ? c.peers[0] : undefined,
         blocked: c.name === undefined && c.peers.length === 1 && this.state.blocked.includes(c.peers[0]),
         request: c.request ?? false,
+        unread: c.unread ?? 0,
         verification: c.name === undefined && c.peers.length === 1 ? this.verificationOf(c.peers[0]) : undefined,
         lastText: c.lastText,
         lastAt: c.lastAt,
@@ -200,6 +217,7 @@ export class Engine {
       connection: this.connection,
       conversations,
       alerts: this.state.alerts,
+      readReceipts: this.state.readReceipts,
     }
   }
 
@@ -546,6 +564,88 @@ export class Engine {
     if ((conv.admins ?? []).length === 0 && meta.admins?.length) conv.admins = meta.admins
   }
 
+  // ---- receipts (FR-MSG-5) -------------------------------------------------
+
+  /** Marks received messages seen; sends read receipts if enabled. */
+  async markRead(conversationId: string) {
+    const conv = this.state.conversations[conversationId]
+    if (!conv) return
+    const list = await this.messages(conversationId)
+    const unseen = list.filter((m) => m.status === 'received' && !m.seen && m.kind !== 'notice')
+    if (unseen.length === 0 && !conv.unread) return
+    for (const m of unseen) m.seen = true
+    await this.store.putJson(`messages:${conversationId}`, list)
+    conv.unread = 0
+    if (!conv.request && this.state.readReceipts) {
+      for (const m of unseen) this.queueReceipt(conversationId, 'read', m.id)
+    }
+    this.emitView()
+  }
+
+  async setReadReceipts(on: boolean) {
+    await this.exclusive(async () => {
+      this.state.readReceipts = on
+      await this.persist()
+    })
+    this.emitView()
+  }
+
+  /** Batches receipts briefly so a burst of messages costs one envelope. */
+  private queueReceipt(conversationId: string, kind: 'delivered' | 'read', messageId: string) {
+    const entry = this.receipts.get(conversationId) ?? { delivered: [], read: [] }
+    entry[kind].push(messageId)
+    this.receipts.set(conversationId, entry)
+    clearTimeout(this.receiptTimer)
+    this.receiptTimer = setTimeout(() => void this.sendReceipts(), 300)
+  }
+
+  private async sendReceipts() {
+    const batch = [...this.receipts]
+    this.receipts.clear()
+    await this.exclusive(async () => {
+      for (const [conversationId, { delivered, read }] of batch) {
+        const conv = this.state.conversations[conversationId]
+        if (!conv || conv.status) continue
+        const recipients = this.recipients(conversationId)
+        if (recipients.length === 0) continue
+        for (const [isRead, ids] of [
+          [false, delivered],
+          [true, read],
+        ] as const) {
+          if (ids.length === 0) continue
+          const messageId = randomId()
+          const envelope = this.core!.sendReceipt(fromHex(conversationId), isRead, ids.map(fromHex), Date.now(), messageId)
+          this.state.outbox.push({
+            messageId: toHex(messageId),
+            conversationId,
+            envelope: toBase64(envelope),
+            recipients,
+            silent: true,
+          })
+        }
+      }
+      await this.persist()
+    })
+    void this.flushOutbox()
+  }
+
+  /** Updates our messages with receipts from `account`. */
+  private async applyReceipts(conversationId: string, account: string, read: boolean, flat: Uint8Array) {
+    const ids = new Set(splitIds(flat, toHex))
+    const peers = this.state.conversations[conversationId]?.peers ?? []
+    const list = await this.messages(conversationId)
+    let changed = false
+    for (const m of list) {
+      if (m.from === 'me' && ids.has(m.id)) {
+        applyReceipt(m, account, read, peers)
+        changed = true
+      }
+    }
+    if (!changed) return
+    await this.store.putJson(`messages:${conversationId}`, list)
+    this.emit({ type: 'messages', conversationId })
+  }
+
   // ---- blocking and reporting (FR-ID-8) --------------------------------------
 
   async block(account: string) {
@@ -603,6 +703,10 @@ export class Engine {
       conv.request = undefined
       await this.persist()
     })
+    // Receipts were held while it was a request.
+    for (const m of await this.messages(conversationId)) {
+      if (m.status === 'received') this.queueReceipt(conversationId, 'delivered', m.id)
+    }
     this.emitView()
   }
 
@@ -1136,6 +1240,10 @@ export class Engine {
         if (mine) await this.applyDeviceSync(conversationId, event.deviceSync)
         return
       }
+      if (event.receiptKind !== undefined) {
+        if (!mine && conv) await this.applyReceipts(conversationId, from, event.receiptKind === 1, event.receiptIds)
+        return
+      }
       if (event.groupName !== undefined && conv && acceptsGroupInfo(conv.admins, from)) {
         if (event.groupName) conv.name = event.groupName.slice(0, 64)
         const admins = parseAdmins(event.groupAdmins)
@@ -1153,6 +1261,10 @@ export class Engine {
         }
       }
       if (event.text !== undefined) {
+        if (!mine && conv) {
+          conv.unread = (conv.unread ?? 0) + 1
+          if (!conv.request) this.queueReceipt(conversationId, 'delivered', messageId)
+        }
         // Sent from another of our devices: show it as ours.
         await this.appendMessage(conversationId, {
           id: messageId,
@@ -1176,7 +1288,7 @@ export class Engine {
       while (this.state.outbox.length > 0 && this.connection === 'online') {
         const item = this.state.outbox[0]
         const result = await this.request((id) =>
-          encodeSend(id, fromBase64(item.envelope), item.recipients.map(fromHex)),
+          encodeSend(id, fromBase64(item.envelope), item.recipients.map(fromHex), item.silent ?? false),
         )
         if (!result) return // disconnected: retry after reconnecting
         if (result.kind === 'error' && result.errorCode === RATE_LIMITED) {
@@ -1237,7 +1349,7 @@ export class Engine {
             welcome.envelope,
             welcome.recipients.map(fromHex),
           )
-        : encodeSend(requestId, commit, recipients.map(fromHex)),
+        : encodeSend(requestId, commit, recipients.map(fromHex), false),
     )
     if (!result) {
       // The server may or may not have accepted it; ask once reconnected.
@@ -1405,7 +1517,8 @@ export class Engine {
   private async setStatus(conversationId: string, messageId: string, status: ChatMessage['status']) {
     const list = await this.messages(conversationId)
     const message = list.find((m) => m.id === messageId)
-    if (!message) return
+    // A receipt may already have moved it past 'sent'.
+    if (!message || (status === 'sent' && message.status !== 'sending')) return
     message.status = status
     await this.store.putJson(`messages:${conversationId}`, list)
     this.emit({ type: 'messages', conversationId })

@@ -16,6 +16,8 @@ export type ConversationSummary = {
   peer?: string
   /** From someone with no connection to this user, until accepted (FR-SAF-3). */
   request: boolean
+  /** Received messages not seen yet. */
+  unread: number
   /** 1:1 chats: this user blocked the other person (FR-ID-8). */
   blocked?: boolean
   /** 1:1 chats: safety number status of the other person (ADR-0020). */
@@ -38,6 +40,8 @@ export type AppView =
       conversations: ConversationSummary[]
       /** New devices on this account that nobody here approved (ADR-0020). */
       alerts: { id: string; text: string }[]
+      /** Whether this user sends read receipts (FR-MSG-5). */
+      readReceipts: boolean
     }
 
 /** One of this account's devices (ADR-0019). */
@@ -74,7 +78,12 @@ export type ChatMessage = {
   fromName?: string
   text: string
   sentAt: number
-  status: 'sending' | 'sent' | 'failed' | 'received'
+  status: 'sending' | 'sent' | 'delivered' | 'read' | 'failed' | 'received'
+  /** Our messages: accounts that confirmed delivery or reading (FR-MSG-5). */
+  deliveredTo?: string[]
+  readBy?: string[]
+  /** Received messages: this user has seen it (a read receipt was due). */
+  seen?: boolean
 }
 
 export type CoreStatus = { version: string; selfTest: boolean }
@@ -108,6 +117,8 @@ export type CoreRequest =
   | { type: 'dismissAlert'; id: string }
   | { type: 'acceptRequest'; conversationId: string }
   | { type: 'deleteAccount'; phone: string }
+  | { type: 'markRead'; conversationId: string }
+  | { type: 'setReadReceipts'; on: boolean }
   | { type: 'block'; account: string }
   | { type: 'unblock'; account: string }
   | { type: 'blocked' }

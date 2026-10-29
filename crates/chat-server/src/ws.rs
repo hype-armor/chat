@@ -271,8 +271,10 @@ async fn send_envelope(
     )
     .await?;
     if outcome == SendOutcome::Accepted {
+        let silent = send.silent;
         for device in recipients.iter().chain(&welcome_recipients) {
             if !state.hub.wake(device)
+                && !silent
                 && let Some(push) = state.push.clone()
             {
                 // Offline: a content-free Web Push makes it reconnect.
