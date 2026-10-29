@@ -1,6 +1,6 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react'
 import type { CoreClient } from '../core/client'
-import type { AppView, ChatMessage } from '../core/protocol'
+import type { AppView, ChatMessage, ConversationSummary, MemberInfo } from '../core/protocol'
 
 type Ready = Extract<AppView, { phase: 'ready' }>
 
@@ -54,6 +54,8 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
           title={conversation.title}
           isGroup={conversation.isGroup}
           memberCount={conversation.memberCount}
+          amAdmin={conversation.amAdmin}
+          status={conversation.status}
           onBack={() => setSelected(undefined)}
         />
       ) : (
@@ -97,6 +99,95 @@ function NewChat({ core, onStarted }: { core: CoreClient; onStarted: (id: string
         </p>
       )}
     </form>
+  )
+}
+
+function GroupInfo({
+  core,
+  id,
+  title,
+  amAdmin,
+  active,
+}: {
+  core: CoreClient
+  id: string
+  title: string
+  amAdmin: boolean
+  active: boolean
+}) {
+  const [members, setMembers] = useState<MemberInfo[]>([])
+  const [name, setName] = useState(title)
+  const { busy, error, run } = useAction()
+
+  useEffect(() => {
+    let live = true
+    const load = () => core.members(id).then((m) => live && setMembers(m))
+    load()
+    const unsubscribe = core.subscribe((e) => e.type === 'view' && load())
+    return () => {
+      live = false
+      unsubscribe()
+    }
+  }, [core, id])
+
+  return (
+    <section className="group-info" aria-label="Group info">
+      {amAdmin && (
+        <form
+          className="rename"
+          onSubmit={(e) => {
+            e.preventDefault()
+            run(() => core.renameGroup(id, name))
+          }}
+        >
+          <label>
+            Group name
+            <input value={name} onChange={(e) => setName(e.target.value)} required maxLength={64} />
+          </label>
+          <button type="submit" disabled={busy}>
+            Rename
+          </button>
+        </form>
+      )}
+      <ul className="members" aria-label="Members">
+        {members.map((m) => (
+          <li key={m.account}>
+            <span>
+              {m.isMe ? `${m.name} (you)` : m.name}
+              {m.isAdmin && <span className="badge small">Admin</span>}
+            </span>
+            {amAdmin && !m.isMe && (
+              <span className="actions">
+                {!m.isAdmin && (
+                  <button type="button" className="link small" disabled={busy} onClick={() => run(() => core.makeAdmin(id, m.account))}>
+                    Make admin
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="link small danger"
+                  disabled={busy}
+                  onClick={() => run(() => core.removeMember(id, m.account))}
+                  aria-label={`Remove ${m.name}`}
+                >
+                  Remove
+                </button>
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+      {active && (
+        <button type="button" className="link danger" disabled={busy} onClick={() => run(() => core.leaveGroup(id))}>
+          Leave group
+        </button>
+      )}
+      {error && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
+    </section>
   )
 }
 
@@ -205,6 +296,8 @@ function Conversation({
   title,
   isGroup,
   memberCount,
+  amAdmin,
+  status,
   onBack,
 }: {
   core: CoreClient
@@ -212,9 +305,13 @@ function Conversation({
   title: string
   isGroup: boolean
   memberCount: number
+  amAdmin: boolean
+  status: ConversationSummary['status']
   onBack: () => void
 }) {
-  const [adding, setAdding] = useState(false)
+  const [panel, setPanel] = useState<'add' | 'info'>()
+  const active = status === 'active'
+  const toggle = (p: 'add' | 'info') => setPanel((current) => (current === p ? undefined : p))
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [draft, setDraft] = useState('')
   const end = useRef<HTMLDivElement>(null)
@@ -254,11 +351,19 @@ function Conversation({
         </button>
         <h2>{title}</h2>
         {isGroup && <span className="muted small">{memberCount} people</span>}
-        <button type="button" className="link" onClick={() => setAdding((v) => !v)}>
-          {adding ? 'Cancel' : 'Add people'}
-        </button>
+        {active && (
+          <button type="button" className="link" onClick={() => toggle('add')}>
+            {panel === 'add' ? 'Cancel' : 'Add people'}
+          </button>
+        )}
+        {isGroup && (
+          <button type="button" className="link" onClick={() => toggle('info')}>
+            {panel === 'info' ? 'Close' : 'Group info'}
+          </button>
+        )}
       </header>
-      {adding && <AddPeople core={core} id={id} onDone={() => setAdding(false)} />}
+      {panel === 'add' && active && <AddPeople core={core} id={id} onDone={() => setPanel(undefined)} />}
+      {panel === 'info' && <GroupInfo core={core} id={id} title={title} amAdmin={amAdmin && active} active={active} />}
       <ol className="messages">
         {messages.map((m) => (
           <li key={m.id} className={m.from === 'me' ? 'mine' : 'theirs'} data-testid="message">
@@ -272,7 +377,12 @@ function Conversation({
         ))}
       </ol>
       <div ref={end} />
-      <form className="composer" onSubmit={send}>
+      {!active && (
+        <p className="notice" role="note">
+          {status === 'left' ? 'You left this group.' : 'You were removed from this group.'}
+        </p>
+      )}
+      <form className="composer" onSubmit={send} hidden={!active}>
         <label className="visually-hidden" htmlFor="composer">
           Message
         </label>

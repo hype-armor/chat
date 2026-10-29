@@ -34,6 +34,43 @@ pub struct Started {
     pub welcome: Envelope,
 }
 
+/// A staged commit without new members; see [`Client::remove_members`].
+pub struct Staged {
+    pub commit: Envelope,
+    /// SHA-256 of the commit ciphertext (see [`Added::commit_hash`]).
+    pub commit_hash: Vec<u8>,
+}
+
+fn envelope(
+    conversation_id: &[u8],
+    epoch: u64,
+    content_type: ContentType,
+    ciphertext: Vec<u8>,
+    message_id: Vec<u8>,
+) -> Envelope {
+    Envelope {
+        version: PROTOCOL_VERSION,
+        conversation_id: conversation_id.to_vec(),
+        epoch,
+        content_type: content_type.into(),
+        ciphertext,
+        message_id,
+    }
+}
+
+fn staged(conversation_id: &[u8], epoch: u64, commit: Vec<u8>, commit_id: Vec<u8>) -> Staged {
+    Staged {
+        commit_hash: Sha256::digest(&commit).to_vec(),
+        commit: envelope(
+            conversation_id,
+            epoch,
+            ContentType::Handshake,
+            commit,
+            commit_id,
+        ),
+    }
+}
+
 /// A staged membership change; see [`Client::add_members`].
 pub struct Added {
     pub commit: Envelope,
@@ -56,6 +93,11 @@ pub enum Event {
     EpochChanged {
         conversation_id: Vec<u8>,
         epoch: u64,
+    },
+    /// A member proposed a change (e.g. leaving) for someone to commit.
+    Proposal {
+        conversation_id: Vec<u8>,
+        sender: Vec<u8>,
     },
     /// Nothing for the user to see (a proposal, or a welcome to a
     /// conversation this device is already in).
@@ -163,31 +205,78 @@ impl Client {
         commit_id: Vec<u8>,
         welcome_id: Vec<u8>,
     ) -> Result<Added> {
-        let device = &self.device;
-        let conv = self
-            .conversations
-            .get_mut(conversation_id)
-            .ok_or(Error::Malformed("unknown conversation"))?;
-        if conv.has_pending_commit() {
-            return Err(Error::Malformed("a membership change is already pending"));
-        }
+        let (device, conv) = self.ready_for_commit(conversation_id)?;
         // Commits are built in the current epoch; the server accepts exactly
         // one commit per epoch.
         let epoch = conv.epoch();
         let change = conv.stage_add_members(device, key_packages)?;
-        let envelope = |content_type: ContentType, ciphertext, message_id| Envelope {
-            version: PROTOCOL_VERSION,
-            conversation_id: conversation_id.to_vec(),
-            epoch,
-            content_type: content_type.into(),
-            ciphertext,
-            message_id,
-        };
         Ok(Added {
             commit_hash: Sha256::digest(&change.commit).to_vec(),
-            commit: envelope(ContentType::Handshake, change.commit, commit_id),
-            welcome: envelope(ContentType::Welcome, change.welcome, welcome_id),
+            commit: envelope(
+                conversation_id,
+                epoch,
+                ContentType::Handshake,
+                change.commit,
+                commit_id,
+            ),
+            welcome: envelope(
+                conversation_id,
+                epoch,
+                ContentType::Welcome,
+                change.welcome,
+                welcome_id,
+            ),
         })
+    }
+
+    /// Stages removing every device of the given accounts (identity
+    /// prefixes). Send the commit to all current members, including the
+    /// removed ones, then confirm or discard as for [`Self::add_members`].
+    pub fn remove_members(
+        &mut self,
+        conversation_id: &[u8],
+        accounts: &[&[u8]],
+        commit_id: Vec<u8>,
+    ) -> Result<Staged> {
+        let (device, conv) = self.ready_for_commit(conversation_id)?;
+        let epoch = conv.epoch();
+        let commit = conv.stage_remove_members(device, accounts)?;
+        Ok(staged(conversation_id, epoch, commit, commit_id))
+    }
+
+    /// Stages a commit of received proposals (e.g. members leaving).
+    pub fn commit_proposals(
+        &mut self,
+        conversation_id: &[u8],
+        commit_id: Vec<u8>,
+    ) -> Result<Staged> {
+        let (device, conv) = self.ready_for_commit(conversation_id)?;
+        let epoch = conv.epoch();
+        let commit = conv.stage_commit_proposals(device)?;
+        Ok(staged(conversation_id, epoch, commit, commit_id))
+    }
+
+    /// A proposal removing this device, for the other members to commit.
+    pub fn leave(&mut self, conversation_id: &[u8], message_id: Vec<u8>) -> Result<Envelope> {
+        let (device, conv) = self.ready_for_commit(conversation_id)?;
+        let epoch = conv.epoch();
+        let proposal = conv.leave(device)?;
+        Ok(envelope(
+            conversation_id,
+            epoch,
+            ContentType::Proposal,
+            proposal,
+            message_id,
+        ))
+    }
+
+    /// False once this device has been removed (or its departure committed).
+    pub fn is_active(&self, conversation_id: &[u8]) -> Result<bool> {
+        Ok(self.conversation(conversation_id)?.is_active())
+    }
+
+    pub fn has_pending_proposals(&self, conversation_id: &[u8]) -> Result<bool> {
+        Ok(self.conversation(conversation_id)?.has_pending_proposals())
     }
 
     pub fn confirm_commit(&mut self, conversation_id: &[u8]) -> Result<()> {
@@ -243,8 +332,23 @@ impl Client {
                 conversation_id: env.conversation_id.clone(),
                 epoch,
             },
-            Received::Proposal => Event::Ignored,
+            Received::Proposal { sender } => Event::Proposal {
+                conversation_id: env.conversation_id.clone(),
+                sender,
+            },
         })
+    }
+
+    /// The device and a conversation without a pending commit.
+    fn ready_for_commit(&mut self, conversation_id: &[u8]) -> Result<(&Device, &mut Conversation)> {
+        let conv = self
+            .conversations
+            .get_mut(conversation_id)
+            .ok_or(Error::Malformed("unknown conversation"))?;
+        if conv.has_pending_commit() {
+            return Err(Error::Malformed("a membership change is already pending"));
+        }
+        Ok((&self.device, conv))
     }
 
     fn conversation(&self, id: &[u8]) -> Result<&Conversation> {
@@ -363,6 +467,53 @@ mod tests {
             );
         }
         assert_eq!(bob.members(&id).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn remove_and_leave_through_the_client() {
+        let mut alice = Client::new(Device::new(b"alice-dev").unwrap());
+        let mut bob = Client::new(Device::new(b"bob-dev").unwrap());
+        let mut carol = Client::new(Device::new(b"carol-dev").unwrap());
+        let kps = [
+            bob.key_packages(1).unwrap().remove(0),
+            carol.key_packages(1).unwrap().remove(0),
+        ];
+        let started = alice
+            .start_conversation(&[&kps[0], &kps[1]], vec![1])
+            .unwrap();
+        let id = started.conversation_id.clone();
+        bob.receive(&started.welcome).unwrap();
+        carol.receive(&started.welcome).unwrap();
+
+        // Bob leaves; Alice commits his proposal.
+        let proposal = bob.leave(&id, vec![2]).unwrap();
+        assert_eq!(proposal.content_type, i32::from(ContentType::Proposal));
+        assert_eq!(
+            alice.receive(&proposal).unwrap(),
+            Event::Proposal {
+                conversation_id: id.clone(),
+                sender: b"bob-dev".to_vec()
+            }
+        );
+        carol.receive(&proposal).unwrap();
+        assert!(alice.has_pending_proposals(&id).unwrap());
+        let staged = alice.commit_proposals(&id, vec![3]).unwrap();
+        assert_eq!(
+            staged.commit_hash,
+            Sha256::digest(&staged.commit.ciphertext).to_vec()
+        );
+        alice.confirm_commit(&id).unwrap();
+        bob.receive(&staged.commit).unwrap();
+        carol.receive(&staged.commit).unwrap();
+        assert!(!bob.is_active(&id).unwrap());
+        assert_eq!(carol.members(&id).unwrap().len(), 2);
+
+        // Alice removes Carol.
+        let staged = alice.remove_members(&id, &[b"carol"], vec![4]).unwrap();
+        alice.confirm_commit(&id).unwrap();
+        carol.receive(&staged.commit).unwrap();
+        assert!(!carol.is_active(&id).unwrap());
+        assert_eq!(alice.members(&id).unwrap(), vec![b"alice-dev".to_vec()]);
     }
 
     #[test]

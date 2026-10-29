@@ -12,9 +12,10 @@ import init, {
   encodeSend,
 } from './pkg/chat_core.js'
 import { ApiError, api, fromBase64, toBase64 } from './api'
-import { commitWasAccepted } from './commits'
+import { type CommitOutcome, commitWasAccepted, throwUnlessAccepted } from './commits'
 import { RecentIds, fromHex, makeIdentity, plain, randomId, splitIdentity, toHex } from './ids'
-import type { AppView, ChatMessage, ConnectionState, CoreEvent } from './protocol'
+import type { AppView, ChatMessage, ConnectionState, CoreEvent, MemberInfo } from './protocol'
+import { acceptsGroupInfo, designatedCommitter, parseAdmins } from './roles'
 import { SecureStore } from './storage'
 
 const INITIAL_KEY_PACKAGES = 20
@@ -25,7 +26,17 @@ const MAX_EARLY = 200
 
 type Account = { phone: string; displayName: string; accountId: string; deviceId: string; token: string }
 
-type Conversation = { id: string; peers: string[]; name?: string; lastText?: string; lastAt: number }
+type Conversation = {
+  id: string
+  peers: string[]
+  name?: string
+  /** Admin account ids in priority order (groups only, ADR-0016). */
+  admins?: string[]
+  /** 'left' or 'removed': history stays readable, sending is disabled. */
+  status?: 'left' | 'removed'
+  lastText?: string
+  lastAt: number
+}
 
 /** A contact resolved through the key directory, with one key package per device. */
 type Invitee = { phone: string; account: string; devices: string[]; keyPackages: Uint8Array[] }
@@ -42,8 +53,9 @@ type PendingCommit = {
   conversationId: string
   /** Base64 SHA-256 of the commit ciphertext. */
   commitHash: string
-  welcome: string
-  invitees: { account: string; phone: string; devices: string[] }[]
+  /** For commits that add people: the welcome and who it is for. */
+  welcome?: string
+  invitees?: { account: string; phone: string; devices: string[] }[]
 }
 
 /** An envelope that arrived before the welcome to its conversation. */
@@ -57,11 +69,13 @@ type State = {
   phones: Record<string, string>
   outbox: Outgoing[]
   early: Early[]
+  /** Conversation id → accounts that proposed leaving, awaiting a commit. */
+  leaving: Record<string, string[]>
   pendingCommit?: PendingCommit
   seen: string[]
 }
 
-const emptyState = (): State => ({ conversations: {}, names: {}, phones: {}, outbox: [], early: [], seen: [] })
+const emptyState = (): State => ({ conversations: {}, names: {}, phones: {}, outbox: [], early: [], leaving: {}, seen: [] })
 
 export class Engine {
   private store!: SecureStore
@@ -76,6 +90,7 @@ export class Engine {
   private waiters = new Map<number, (frame: ServerFrameView | undefined) => void>()
   private reconnectMs = 1000
   private flushing = false
+
   /** Serialises every mutation of core state and storage. */
   private lock: Promise<unknown> = Promise.resolve()
 
@@ -104,6 +119,8 @@ export class Engine {
         id: c.id,
         title: this.title(c),
         isGroup: c.name !== undefined || c.peers.length > 1,
+        amAdmin: (c.admins ?? []).includes(this.myAccount()),
+        status: c.status ?? ('active' as const),
         memberCount: c.peers.length + 1,
         lastText: c.lastText,
         lastAt: c.lastAt,
@@ -190,14 +207,21 @@ export class Engine {
       const started = core.startConversation(invitees.flatMap((i) => i.keyPackages), randomId())
       const id = toHex(started.conversationId)
       for (const i of invitees) this.state.phones[i.account] = i.phone
-      this.state.conversations[id] = { id, peers: invitees.map((i) => i.account), name: groupName, lastAt: Date.now() }
+      const admins = [this.myAccount()]
+      this.state.conversations[id] = {
+        id,
+        peers: invitees.map((i) => i.account),
+        name: groupName,
+        admins,
+        lastAt: Date.now(),
+      }
       this.state.outbox.push({
         messageId: toHex(randomId()),
         conversationId: id,
         envelope: toBase64(started.welcome),
         recipients: invitees.flatMap((i) => i.devices),
       })
-      this.queueGroupInfo(id, groupName)
+      this.queueGroupInfo(id, groupName, admins)
       this.queueProfile(id)
       await this.persist()
       return id
@@ -239,23 +263,83 @@ export class Engine {
         welcome: toBase64(added.welcome),
         invitees: invitees.map(({ account, phone, devices }) => ({ account, phone, devices })),
       }
-      const result = await this.request((id) => encodeSend(id, added.commit, existing.map(fromHex)))
-      if (!result) {
-        // The server may or may not have accepted the commit. Keep it
-        // pending and ask once we are back online.
-        this.state.pendingCommit = pending
-        await this.persist()
-        throw new Error('Connection lost while adding people; this will finish when you are back online')
-      }
-      if (!(result.kind === 'send_result' && result.accepted)) {
-        core.discardCommit(fromHex(conversationId))
-        throw new Error(
-          result.epochConflict
-            ? 'Someone else changed the group at the same moment; try again'
-            : 'Could not add people right now; try again',
-        )
-      }
-      await this.finishCommit(pending)
+      throwUnlessAccepted(await this.sendCommit(pending, added.commit, existing), 'adding people')
+    })
+    this.emitView()
+    void this.flushOutbox()
+  }
+
+  /** Members of a conversation, including this user. */
+  members(conversationId: string): MemberInfo[] {
+    const conv = this.group(conversationId)
+    const me = this.myAccount()
+    return [me, ...conv.peers].map((account) => ({
+      account,
+      name: account === me ? this.account!.displayName : this.nameOf(account),
+      isAdmin: (conv.admins ?? []).includes(account),
+      isMe: account === me,
+    }))
+  }
+
+  async renameGroup(conversationId: string, name: string) {
+    const conv = this.requireAdmin(conversationId)
+    const groupName = name.trim().slice(0, 64)
+    if (!groupName) throw new Error('Give the group a name')
+    await this.exclusive(async () => {
+      conv.name = groupName
+      this.queueGroupInfo(conversationId, groupName, conv.admins ?? [])
+      await this.persist()
+    })
+    this.emitView()
+    void this.flushOutbox()
+  }
+
+  async makeAdmin(conversationId: string, account: string) {
+    const conv = this.requireAdmin(conversationId)
+    if (!conv.peers.includes(account)) throw new Error('Not a member of this group')
+    await this.exclusive(async () => {
+      conv.admins = [...new Set([...(conv.admins ?? []), account])]
+      this.queueGroupInfo(conversationId, conv.name ?? '', conv.admins)
+      await this.persist()
+    })
+    this.emitView()
+    void this.flushOutbox()
+  }
+
+  /** Removes all of an account's devices (admins only). Needs a connection. */
+  async removeMember(conversationId: string, account: string) {
+    const { core } = this.ready()
+    const conv = this.requireAdmin(conversationId)
+    if (!conv.peers.includes(account)) throw new Error('Not a member of this group')
+    this.requireCommitPossible()
+    await this.exclusive(async () => {
+      await this.flushOutbox(true)
+      // The removed member gets the commit too, so they learn they're out.
+      const everyone = this.recipients(conversationId)
+      const staged = core.removeMembers(fromHex(conversationId), [fromHex(account)], randomId())
+      const pending: PendingCommit = { conversationId, commitHash: toBase64(staged.commitHash) }
+      throwUnlessAccepted(await this.sendCommit(pending, staged.commit, everyone), 'removing them')
+    })
+    this.emitView()
+    void this.flushOutbox()
+  }
+
+  /** Proposes our own removal; another member commits it (ADR-0016). */
+  async leaveGroup(conversationId: string) {
+    const { core } = this.ready()
+    const conv = this.group(conversationId)
+    if (conv.status) return
+    await this.exclusive(async () => {
+      const messageId = randomId()
+      const proposal = core.leave(fromHex(conversationId), messageId)
+      this.state.outbox.push({
+        messageId: toHex(messageId),
+        conversationId,
+        envelope: toBase64(proposal),
+        recipients: this.recipients(conversationId),
+      })
+      conv.status = 'left'
+      await this.persist()
     })
     this.emitView()
     void this.flushOutbox()
@@ -271,6 +355,7 @@ export class Engine {
     if (this.state.pendingCommit?.conversationId === conversationId) {
       throw new Error('Finishing a group change; try again when you are back online')
     }
+    if (this.state.conversations[conversationId]?.status) throw new Error("You're no longer in this group")
     await this.exclusive(async () => {
       const messageId = randomId()
       const sentAt = Date.now()
@@ -317,7 +402,10 @@ export class Engine {
         this.reconnectMs = 1000
         this.setConnection('online')
         // Queued before any delivery handler, so it settles first.
-        void this.exclusive(() => this.resolvePendingCommit()).then(() => this.flushOutbox())
+        void this.exclusive(() => this.resolvePendingCommit()).then(() => {
+          this.commitDepartures()
+          return this.flushOutbox()
+        })
         return
       case 'deliver':
         void this.onDeliver(frame)
@@ -355,7 +443,37 @@ export class Engine {
     })
     // Ack only after the result is stored (docs/11-api.md).
     this.ws?.send(plain(encodeAck(0, messageId)))
+    this.commitDepartures()
     void this.flushOutbox()
+  }
+
+  private commitDepartures() {
+    for (const conversationId of Object.keys(this.state.leaving)) void this.commitProposalsIfDue(conversationId)
+  }
+
+  /** Commits members' departures if this user is the designated committer. */
+  private async commitProposalsIfDue(conversationId: string) {
+    await this.exclusive(async () => {
+      const core = this.core!
+      const conv = this.state.conversations[conversationId]
+      const leavers = this.state.leaving[conversationId] ?? []
+      if (!conv || conv.status || this.state.pendingCommit || this.connection !== 'online') return
+      if (!core.hasPendingProposals(fromHex(conversationId))) {
+        delete this.state.leaving[conversationId]
+        return
+      }
+      const members = [
+        ...new Set((core.members(fromHex(conversationId)) as Uint8Array[]).map((m) => splitIdentity(m).account)),
+      ]
+      if (designatedCommitter(conv.admins, members, leavers) !== this.myAccount()) return
+      await this.flushOutbox(true)
+      const everyone = this.recipients(conversationId)
+      const staged = core.commitProposals(fromHex(conversationId), randomId())
+      const pending: PendingCommit = { conversationId, commitHash: toBase64(staged.commitHash) }
+      // A conflict means another member committed first; nothing to do.
+      await this.sendCommit(pending, staged.commit, everyone)
+    })
+    this.emitView()
   }
 
   private async process(envelope: Uint8Array, messageId: string) {
@@ -390,16 +508,31 @@ export class Engine {
       const peers = (this.core!.members(event.conversationId) as Uint8Array[])
         .filter((m) => toHex(m) !== me)
         .map((m) => splitIdentity(m).account)
+      if (!this.core!.isActive(event.conversationId)) {
+        // A commit removed us (or committed our own departure).
+        conv.status ??= 'removed'
+        this.emitView()
+        return
+      }
       // Introduce ourselves to anyone new.
       if (peers.some((p) => !conv.peers.includes(p))) this.queueProfile(conversationId)
       conv.peers = [...new Set(peers)]
       this.emitView()
+    } else if (event.kind === 'proposal') {
+      // A member asked to leave; the designated member commits it once this
+      // envelope is stored (see `commitProposalsIfDue`).
+      const leaver = splitIdentity(event.sender).account
+      this.state.leaving[conversationId] = [...new Set([...(this.state.leaving[conversationId] ?? []), leaver])]
     } else if (event.kind === 'message') {
       const from = splitIdentity(event.sender).account
-      if (event.groupName !== undefined && this.state.conversations[conversationId]) {
-        this.state.conversations[conversationId].name = event.groupName.slice(0, 64)
+      const conv = this.state.conversations[conversationId]
+      if (event.groupName !== undefined && conv && acceptsGroupInfo(conv.admins, from)) {
+        if (event.groupName) conv.name = event.groupName.slice(0, 64)
+        const admins = parseAdmins(event.groupAdmins)
+        if (admins.length > 0) conv.admins = admins
         this.emitView()
       }
+      if (conv?.status && event.text !== undefined) return // no longer in the group
       if (event.displayName !== undefined) {
         this.state.names[from] = event.displayName.slice(0, 64)
         this.emitView()
@@ -460,20 +593,53 @@ export class Engine {
 
   // ---- helpers ---------------------------------------------------------------
 
-  /** Applies an accepted add-members commit and welcomes the new devices. */
+  /**
+   * Sends a staged commit and waits for the server. Accepted: applied.
+   * Conflict: discarded. No answer: kept pending until reconnect.
+   */
+  private async sendCommit(
+    pending: PendingCommit,
+    commit: Uint8Array,
+    recipients: string[],
+  ): Promise<CommitOutcome> {
+    const id = fromHex(pending.conversationId)
+    if (recipients.length === 0) {
+      // Nobody else to tell (e.g. the last other member left).
+      await this.finishCommit(pending)
+      return 'accepted'
+    }
+    const result = await this.request((requestId) => encodeSend(requestId, commit, recipients.map(fromHex)))
+    if (!result) {
+      // The server may or may not have accepted it; ask once reconnected.
+      this.state.pendingCommit = pending
+      await this.persist()
+      return 'lost'
+    }
+    if (result.kind === 'send_result' && result.accepted) {
+      await this.finishCommit(pending)
+      return 'accepted'
+    }
+    this.core!.discardCommit(id)
+    return result.epochConflict ? 'conflict' : 'rejected'
+  }
+
+  /** Applies an accepted commit; for additions, welcomes the new devices. */
   private async finishCommit(p: PendingCommit) {
     const conv = this.state.conversations[p.conversationId]
     this.core!.confirmCommit(fromHex(p.conversationId))
-    for (const i of p.invitees) this.state.phones[i.account] = i.phone
-    if (conv) conv.peers = [...new Set([...conv.peers, ...p.invitees.map((i) => i.account)])]
-    this.state.outbox.push({
-      messageId: toHex(randomId()),
-      conversationId: p.conversationId,
-      envelope: p.welcome,
-      recipients: p.invitees.flatMap((i) => i.devices),
-    })
-    if (conv?.name) this.queueGroupInfo(p.conversationId, conv.name)
-    this.queueProfile(p.conversationId)
+    if (conv) conv.peers = this.peersOf(p.conversationId)
+    if (!this.core!.hasPendingProposals(fromHex(p.conversationId))) delete this.state.leaving[p.conversationId]
+    if (p.welcome && p.invitees) {
+      for (const i of p.invitees) this.state.phones[i.account] = i.phone
+      this.state.outbox.push({
+        messageId: toHex(randomId()),
+        conversationId: p.conversationId,
+        envelope: p.welcome,
+        recipients: p.invitees.flatMap((i) => i.devices),
+      })
+      if (conv?.name) this.queueGroupInfo(p.conversationId, conv.name, conv.admins ?? [])
+      this.queueProfile(p.conversationId)
+    }
     this.state.pendingCommit = undefined
     await this.persist()
     this.emitView()
@@ -524,9 +690,15 @@ export class Engine {
     })
   }
 
-  private queueGroupInfo(conversationId: string, name: string) {
+  private queueGroupInfo(conversationId: string, name: string, admins: string[]) {
     const messageId = randomId()
-    const envelope = this.core!.sendGroupInfo(fromHex(conversationId), name, Date.now(), messageId)
+    const envelope = this.core!.sendGroupInfo(
+      fromHex(conversationId),
+      name,
+      admins.map(fromHex),
+      Date.now(),
+      messageId,
+    )
     this.state.outbox.push({
       messageId: toHex(messageId),
       conversationId,
@@ -552,6 +724,35 @@ export class Engine {
     return (this.core!.members(fromHex(conversationId)) as Uint8Array[])
       .filter((m) => toHex(m) !== me)
       .map((m) => toHex(splitIdentity(m).device))
+  }
+
+  private myAccount(): string {
+    return this.account ? this.account.accountId.replaceAll('-', '') : ''
+  }
+
+  /** Other members' account ids, from the core's current group state. */
+  private peersOf(conversationId: string): string[] {
+    const me = this.myAccount()
+    const accounts = (this.core!.members(fromHex(conversationId)) as Uint8Array[]).map((m) => splitIdentity(m).account)
+    return [...new Set(accounts.filter((a) => a !== me))]
+  }
+
+  private group(conversationId: string): Conversation {
+    const conv = this.state.conversations[conversationId]
+    if (!conv) throw new Error('Unknown conversation')
+    return conv
+  }
+
+  private requireAdmin(conversationId: string): Conversation {
+    const conv = this.group(conversationId)
+    if (conv.status) throw new Error("You're no longer in this group")
+    if (!(conv.admins ?? []).includes(this.myAccount())) throw new Error('Only group admins can do that')
+    return conv
+  }
+
+  private requireCommitPossible() {
+    if (this.connection !== 'online') throw new Error('You need to be online to change the group')
+    if (this.state.pendingCommit) throw new Error('Still finishing an earlier group change; try again shortly')
   }
 
   private nameOf(account: string): string {

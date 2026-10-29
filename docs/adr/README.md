@@ -22,3 +22,4 @@ revisited; do it with a new ADR that supersedes the old one.
 | [0013](0013-native-wrappers.md) | Native wrappers: Capacitor (mobile), Tauri (desktop) | Accepted |
 | [0014](0014-kubernetes-us-hosting.md) | Run on Kubernetes, hosted in the United States | Accepted |
 | [0015](0015-self-hosted-k3s.md) | Self-host on single-node k3s | Accepted |
+| [0016](0016-group-roles-and-leaving.md) | Group roles, removal and leaving (v1) | Accepted |
