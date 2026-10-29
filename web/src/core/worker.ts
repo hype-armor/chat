@@ -72,6 +72,20 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
     case 'verifyScanned':
       await engine.verifyScanned(request.conversationId, request.account, request.text)
       return { type: 'ok' }
+    case 'acceptRequest':
+      await engine.acceptRequest(request.conversationId)
+      return { type: 'ok' }
+    case 'block':
+      await engine.block(request.account)
+      return { type: 'ok' }
+    case 'unblock':
+      await engine.unblock(request.account)
+      return { type: 'ok' }
+    case 'blocked':
+      return { type: 'blocked', contacts: engine.blockedContacts() }
+    case 'report':
+      await engine.report(request.conversationId, request.account, request.reason, request.includeMessages)
+      return { type: 'ok' }
     case 'dismissAlert':
       await engine.dismissAlert(request.id)
       return { type: 'ok' }

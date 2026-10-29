@@ -51,6 +51,8 @@ export type DeviceSync = {
   phones: Record<string, string>
   /** Conversation id → group name and admins. */
   conversations: Record<string, { name?: string; admins?: string[] }>
+  /** Blocked account ids; the whole list, latest change wins (FR-ID-8). */
+  blocked?: string[]
 }
 
 const strings = (v: unknown): Record<string, string> =>
@@ -84,5 +86,8 @@ export function parseDeviceSync(bytes: Uint8Array): DeviceSync | undefined {
     names: strings(r.names),
     phones: strings(r.phones),
     conversations,
+    blocked: Array.isArray(r.blocked)
+      ? r.blocked.filter((a): a is string => typeof a === 'string' && /^[0-9a-f]{32}$/.test(a))
+      : undefined,
   }
 }

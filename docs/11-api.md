@@ -93,6 +93,22 @@ and fetches the queue. A `404`/`410` from the push service deletes the
 subscription. Configure `CHAT_VAPID_PRIVATE_KEY` (from
 `chat-server generate-vapid-key`) and `CHAT_VAPID_SUBJECT`.
 
+## Reports (FR-ID-8)
+
+| Method & path | Auth | Body → Response |
+|---------------|------|-----------------|
+| `POST /v1/reports` | ✓ | `{account_id, reason: "spam" \| "harassment" \| "other", messages: [{text, sent_at_ms}]}` → `204`. Up to 20 messages of 4000 characters, which the reporter chose to disclose; `404` unknown account |
+
+Reports are kept 90 days for moderation and are the only message content
+the server ever sees in readable form, because the reporter sent it. Blocking is
+client-side: the blocked person's messages are dropped on the blocker's
+devices, and the block list syncs between them in `DeviceSync`.
+Verifiable message franking (FR-SAF-1) is not implemented yet.
+
+Message requests (FR-SAF-3) are client-side too: a conversation whose
+members include nobody this user looked up or already talks to is listed
+under *Message requests* and can be read but not answered until accepted.
+
 ## Abuse limits (FR-SAF-2)
 
 Counted in PostgreSQL in fixed windows (table `rate_limits`), so they hold
@@ -109,6 +125,7 @@ across restarts and replicas. Exceeding one gives `429` (HTTP) or
 | `POST /v1/auth/request-code` | 50 per hour | first 5 characters of the number (country and area code) |
 | `POST /v1/auth/request-code` | 1000 per day | whole server |
 | `POST /v1/link/start` | 20 per hour | client IP |
+| `POST /v1/reports` | 20 per day | device |
 
 The client IP is the socket peer, or the last `X-Forwarded-For` entry when
 `CHAT_TRUST_PROXY_HEADERS=true` (Helm `server.trustProxyHeaders`, on by
@@ -121,7 +138,7 @@ queued and re-sends it after 5 s, doubling to 2 minutes.
 
 An hourly job deletes queue entries older than 30 days (FR-MSG-9), expired
 key packages and codes, code-request logs older than a day and rate-limit
-windows older than two days.
+windows older than two days, and reports older than 90 days.
 
 ## Not yet implemented
 

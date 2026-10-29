@@ -35,6 +35,8 @@ pub struct Limits {
     pub codes_per_day: i32,
     /// Device link codes per client IP per hour (ADR-0019).
     pub links_per_ip_per_hour: i32,
+    /// User reports per device per day (FR-ID-8).
+    pub reports_per_day: i32,
     /// Trust `X-Forwarded-For` from the ingress for the client IP.
     pub trust_proxy_headers: bool,
 }
@@ -50,6 +52,7 @@ impl Default for Limits {
             codes_per_prefix_per_hour: 50,
             codes_per_day: 1_000,
             links_per_ip_per_hour: 20,
+            reports_per_day: 20,
             trust_proxy_headers: false,
         }
     }

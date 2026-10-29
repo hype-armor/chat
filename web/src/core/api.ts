@@ -28,6 +28,14 @@ async function post<T>(path: string, body: unknown, token?: string): Promise<T> 
 
 export type Registered = { account_id: string; device_id: string; token: string; phone: string }
 
+export type ReportReason = 'spam' | 'harassment' | 'other'
+
+export type ReportBody = {
+  account_id: string
+  reason: ReportReason
+  messages: { text: string; sent_at_ms: number }[]
+}
+
 export type ServerDevice = { device_id: string; added_on: string; last_seen_on: string | null; current: boolean }
 
 export const api = {
@@ -51,6 +59,7 @@ export const api = {
   linkStatus: (token: string, code: string) => post<{ device_id: string | null }>('/v1/link/status', { code }, token),
   linkComplete: (code: string, identityKey: string) =>
     post<Registered>('/v1/link/complete', { code, identity_key: identityKey }),
+  report: (token: string, report: ReportBody) => post<void>('/v1/reports', report, token),
   claim: (token: string, deviceIds: string[]) =>
     post<{ key_packages: Record<string, string> }>('/v1/keys/claim', { device_ids: deviceIds }, token),
 }

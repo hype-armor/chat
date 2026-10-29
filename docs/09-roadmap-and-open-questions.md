@@ -61,7 +61,8 @@ surviving reloads; three-engine browser CI against a real server.
    and remove devices (ADR-0019).
 9. [x] Safety numbers / QR verification and key-change warnings (FR-ID-5/6,
    ADR-0020).
-10. [ ] Block and report (FR-ID-8); message requests (FR-SAF-3, should).
+10. [x] Block and report (FR-ID-8); message requests (FR-SAF-3, should).
+    Reports carry only messages the reporter includes; franking (FR-SAF-1) later.
 11. [ ] Delete account and all server data (FR-ID-9).
 12. [ ] Delivered/read receipts (FR-MSG-5).
 13. [ ] PWA polish: install prompt, persistent-storage request and warning,

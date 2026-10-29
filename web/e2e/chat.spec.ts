@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { messages, randomPhone, signUp } from './support'
+import { messages, openChat, randomPhone, signUp } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -18,7 +18,7 @@ test('two people exchange encrypted messages, and history survives a reload', as
   // Bob's profile arrives once he joins, replacing the phone number.
   await expect(alice.getByRole('heading', { name: 'Bob' })).toBeVisible()
 
-  await bob.getByRole('button', { name: /Alice/ }).click()
+  await openChat(bob, /Alice/)
   await expect(messages(bob)).toHaveText([/Hello Bob/])
   await bob.getByLabel('Message').fill('Hi Alice')
   await bob.getByRole('button', { name: 'Send' }).click()
@@ -58,7 +58,7 @@ test('groups: create, talk, and add someone later', async ({ browser }) => {
   await expect(messages(ann).filter({ hasText: 'Hi team' })).toContainText('Sent')
 
   for (const page of [ben, cat]) {
-    await page.getByRole('button', { name: /Trip/ }).click()
+    await openChat(page, /Trip/)
     await expect(messages(page)).toHaveText([/Ann\s*Hi team/])
   }
   await cat.getByLabel('Message').fill('Hello from Cat')
@@ -93,7 +93,7 @@ test('group admin: rename, promote, remove, and members leaving', async ({ brows
   await ann.getByLabel("Members' phone numbers").fill(phones.slice(1).join('\n'))
   await ann.getByRole('button', { name: 'Create group' }).click()
   await expect(ann.getByRole('heading', { name: 'Club' })).toBeVisible()
-  for (const page of [ben, cat, dee]) await page.getByRole('button', { name: /Club/ }).click()
+  for (const page of [ben, cat, dee]) await openChat(page, /Club/)
 
   // Only admins can rename.
   await ben.getByRole('button', { name: 'Group info' }).click()

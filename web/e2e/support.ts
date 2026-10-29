@@ -45,9 +45,17 @@ export async function linkDevice(browser: Browser, page: Page): Promise<Page> {
   await page.getByText('Linked devices').click()
   await page.getByRole('button', { name: 'Link a new device' }).click()
   await page.getByLabel('Or type the code shown on the new device').fill(code)
-  await expect(page.getByRole('note')).toContainText('read every message')
+  await expect(page.getByText('The new device will be able to read every message')).toBeVisible()
   await page.getByRole('button', { name: 'Link device' }).click()
   await expect(page.getByRole('button', { name: 'Link a new device' })).toBeVisible({ timeout: 30_000 })
   await expect(laptop.getByRole('status')).toHaveText('online')
   return laptop
+}
+
+/** Opens a conversation, accepting it if it arrived as a message request. */
+export async function openChat(page: Page, name: RegExp) {
+  await page.getByRole('button', { name }).click()
+  const accept = page.getByRole('button', { name: 'Accept' })
+  if (await accept.isVisible()) await accept.click()
+  await expect(page.getByLabel('Message', { exact: true })).toBeVisible()
 }
