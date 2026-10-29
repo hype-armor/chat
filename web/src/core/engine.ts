@@ -3,6 +3,7 @@
 // receives `AppView` snapshots and message lists.
 
 import init, {
+  AttachmentView,
   CoreClient,
   PendingClient,
   type ServerFrameView,
@@ -13,6 +14,7 @@ import init, {
   encodeSendWithWelcome,
   encodeQr,
   safetyNumber,
+  sealedLength,
 } from './pkg/chat_core.js'
 import { ApiError, type Registered, api, fromBase64, toBase64 } from './api'
 import {
@@ -27,6 +29,18 @@ import {
 import { RecentIds, fromHex, makeIdentity, plain, randomId, splitIdentity, toHex } from './ids'
 import { type DeviceSync, deviceHex, linkText, memberDevicePlan, parseDeviceSync, parseLinkCode } from './devices'
 import { applyReceipt, splitIds } from './receipts'
+import {
+  MAX_ATTACHMENT_BYTES,
+  attachmentLabel,
+  hexToUuid,
+  openFile,
+  prepareImage,
+  renamed,
+  safeMime,
+  safeName,
+  sealFile,
+  uuidToHex,
+} from './attachments'
 import {
   deriveBackupKeys,
   formatRecoveryKey,
@@ -50,12 +64,14 @@ import type {
   ChatMessage,
   ConnectionState,
   CoreEvent,
+  FileInfo,
   DeviceInfo,
   InviteOffer,
   LinkOffer,
   MemberInfo,
   SafetyNumber,
 } from './protocol'
+import { isPhoto } from './protocol'
 import { acceptsGroupInfo, designatedCommitter, parseAdmins } from './roles'
 import { SecureStore } from './storage'
 
@@ -76,6 +92,20 @@ const LINK_POLL_MS = 2_000
 const LINK_TTL_MS = 10 * 60_000
 /** How long the approving device waits for the new one to register. */
 const LINK_APPROVAL_WAIT_MS = 2 * 60_000
+
+/** An attachment as stored: what the UI sees, plus how to fetch and open it (ADR-0024). */
+type StoredFile = Omit<FileInfo, 'thumbnail'> & {
+  /** Hex blob id, once uploaded. */
+  blobId?: string
+  /** Base64 key and ciphertext SHA-256. */
+  key: string
+  digest: string
+  /** Base64 JPEG. */
+  thumbnail?: string
+}
+
+/** A message as stored; `messages()` hands the UI a `ChatMessage` without keys. */
+type StoredMessage = Omit<ChatMessage, 'file'> & { file?: StoredFile }
 
 type Account = { username: string; displayName: string; accountId: string; deviceId: string; token: string }
 
@@ -169,7 +199,7 @@ type BackupPayload = {
   createdAt: number
   displayName: string
   state: Pick<State, 'conversations' | 'names' | 'usernames' | 'blocked' | 'verified' | 'keys' | 'readReceipts'>
-  messages: Record<string, ChatMessage[]>
+  messages: Record<string, StoredMessage[]>
 }
 
 const emptyState = (): State => ({
@@ -357,12 +387,12 @@ export class Engine {
     const key = await this.store.getKey('backup')
     if (!key || !this.state.backup) return
     const payload = await this.exclusive(async () => {
-      const messages: Record<string, ChatMessage[]> = {}
+      const messages: Record<string, StoredMessage[]> = {}
       const conversations: State['conversations'] = {}
       for (const c of Object.values(this.state.conversations)) {
         if (c.self) continue
         conversations[c.id] = c
-        messages[c.id] = await this.messages(c.id)
+        messages[c.id] = await this.stored(c.id)
       }
       const { names, usernames, blocked, verified, keys, readReceipts } = this.state
       return {
@@ -793,7 +823,7 @@ export class Engine {
     const changed = await this.exclusive(async () => {
       const conv = this.state.conversations[conversationId]
       if (!conv) return false
-      const list = await this.messages(conversationId)
+      const list = await this.stored(conversationId)
       const unseen = list.filter((m) => m.status === 'received' && !m.seen && m.kind !== 'notice')
       if (unseen.length === 0 && !conv.unread) return false
       for (const m of unseen) m.seen = true
@@ -865,7 +895,7 @@ export class Engine {
   private async applyReceipts(conversationId: string, account: string, read: boolean, flat: Uint8Array) {
     const ids = new Set(splitIds(flat, toHex))
     const peers = this.state.conversations[conversationId]?.peers ?? []
-    const list = await this.messages(conversationId)
+    const list = await this.stored(conversationId)
     let changed = false
     for (const m of list) {
       if (m.from === 'me' && ids.has(m.id)) {
@@ -900,7 +930,7 @@ export class Engine {
     includeMessages: boolean,
   ) {
     const recent = includeMessages
-      ? (await this.messages(conversationId))
+      ? (await this.stored(conversationId))
           .filter((m) => m.from === account && m.kind !== 'notice')
           .slice(-10)
           .map((m) => ({ text: m.text, sent_at_ms: m.sentAt }))
@@ -936,7 +966,7 @@ export class Engine {
       await this.persist()
     })
     // Receipts were held while it was a request.
-    for (const m of await this.messages(conversationId)) {
+    for (const m of await this.stored(conversationId)) {
       if (m.status === 'received') this.queueReceipt(conversationId, 'delivered', m.id)
     }
     this.emitView()
@@ -1262,17 +1292,36 @@ export class Engine {
     await api.subscribePush(this.ready().account.token, subscription)
   }
 
+  /** Messages for the UI: sender names resolved, attachment keys left out. */
   async messages(conversationId: string): Promise<ChatMessage[]> {
-    const list = (await this.store.getJson<ChatMessage[]>(`messages:${conversationId}`)) ?? []
-    return list.map((m) => (m.from === 'me' || m.kind === 'notice' ? m : { ...m, fromName: this.nameOf(m.from) }))
+    return (await this.stored(conversationId)).map(({ file, ...m }) => ({
+      ...m,
+      fromName: m.from === 'me' || m.kind === 'notice' ? undefined : this.nameOf(m.from),
+      file: file && {
+        name: file.name,
+        mime: file.mime,
+        size: file.size,
+        width: file.width,
+        height: file.height,
+        thumbnail: file.thumbnail ? plain(fromBase64(file.thumbnail)) : undefined,
+      },
+    }))
   }
 
-  async sendText(conversationId: string, text: string) {
-    const { core } = this.ready()
+  private async stored(conversationId: string): Promise<StoredMessage[]> {
+    return (await this.store.getJson<StoredMessage[]>(`messages:${conversationId}`)) ?? []
+  }
+
+  private checkCanSend(conversationId: string) {
     if (this.state.pendingCommit?.conversationId === conversationId) {
       throw new Error('Finishing a group change; try again when you are back online')
     }
     if (this.state.conversations[conversationId]?.status) throw new Error("You're no longer in this group")
+  }
+
+  async sendText(conversationId: string, text: string) {
+    const { core } = this.ready()
+    this.checkCanSend(conversationId)
     await this.exclusive(async () => {
       const messageId = randomId()
       const sentAt = Date.now()
@@ -1298,11 +1347,18 @@ export class Engine {
     const { core } = this.ready()
     const conv = this.group(conversationId)
     if (conv.status) throw new Error("You're no longer in this conversation")
+    const failed = (await this.stored(conversationId)).find((m) => m.id === messageId && m.status === 'failed')
+    if (failed?.file && !failed.file.blobId) {
+      // The upload failed: start over from the sealed copy kept here.
+      await this.exclusive(() => this.setStatus(conversationId, messageId, 'sending'))
+      void this.uploadAndSend(conversationId, messageId)
+      return
+    }
     await this.exclusive(async () => {
-      const list = await this.messages(conversationId)
+      const list = await this.stored(conversationId)
       const message = list.find((m) => m.id === messageId && m.from === 'me' && m.status === 'failed')
       if (!message) return
-      const envelope = core.sendText(fromHex(conversationId), message.text, message.sentAt, fromHex(messageId))
+      const envelope = this.encode(core, conversationId, message)
       this.state.outbox.push({
         messageId,
         conversationId,
@@ -1316,6 +1372,134 @@ export class Engine {
     })
     this.emit({ type: 'messages', conversationId })
     void this.flushOutbox()
+  }
+
+  /** Encrypts one of our messages for the group as it is now. */
+  private encode(core: CoreClient, conversationId: string, m: StoredMessage): Uint8Array {
+    const id = fromHex(m.id)
+    if (!m.file) return core.sendText(fromHex(conversationId), m.text, m.sentAt, id)
+    const f = m.file
+    if (!f.blobId) throw new Error('not uploaded yet')
+    const view = new AttachmentView(
+      fromHex(f.blobId),
+      fromBase64(f.key),
+      fromBase64(f.digest),
+      f.size,
+      f.mime,
+      f.name,
+      f.width ?? 0,
+      f.height ?? 0,
+      f.thumbnail ? fromBase64(f.thumbnail) : new Uint8Array(),
+      m.text,
+    )
+    try {
+      return core.sendAttachment(fromHex(conversationId), view, m.sentAt, id)
+    } finally {
+      view.free()
+    }
+  }
+
+  // ---- images and files (ADR-0024) -------------------------------------------
+
+  /**
+   * Sends a photo or file: photos are re-drawn without their metadata, the
+   * file is sealed under a new key and kept here sealed, then uploaded; the
+   * key goes to the group in an MLS message.
+   */
+  async sendFile(conversationId: string, file: File, caption: string) {
+    this.ready()
+    this.checkCanSend(conversationId)
+    if (file.size === 0) throw new Error('That file is empty')
+    if (file.size > MAX_ATTACHMENT_BYTES) throw new Error('Files can be up to 100 MB')
+    const image = await prepareImage(file)
+    const data = image?.data ?? file
+    if (data.size > MAX_ATTACHMENT_BYTES) throw new Error('Files can be up to 100 MB')
+    const key = crypto.getRandomValues(new Uint8Array(32))
+    const sealed = await sealFile(data, key)
+    const mime = image?.mime ?? safeMime(file.type)
+    const name = safeName(image && image.data !== file ? renamed(file.name, mime) : file.name)
+    const messageId = toHex(randomId())
+    await this.store.putFile(messageId, sealed.body)
+    await this.exclusive(() =>
+      this.appendMessage(conversationId, {
+        id: messageId,
+        from: 'me',
+        text: caption,
+        sentAt: Date.now(),
+        status: 'sending',
+        file: {
+          name,
+          mime,
+          size: sealed.size,
+          width: image?.width,
+          height: image?.height,
+          thumbnail: image?.thumbnail.length ? toBase64(image.thumbnail) : undefined,
+          key: toBase64(key),
+          digest: toBase64(sealed.digest),
+        },
+      }),
+    )
+    void this.uploadAndSend(conversationId, messageId)
+  }
+
+  private async uploadAndSend(conversationId: string, messageId: string) {
+    try {
+      const { account } = this.ready()
+      const pending = (await this.stored(conversationId)).find((m) => m.id === messageId)
+      if (!pending?.file) return
+      let blobId = pending.file.blobId
+      if (!blobId) {
+        const body = await this.store.getFile(messageId)
+        if (!body) throw new Error('This file is no longer on this device')
+        blobId = uuidToHex((await api.uploadBlob(account.token, body)).blob_id)
+      }
+      await this.exclusive(async () => {
+        const { core } = this.ready()
+        this.checkCanSend(conversationId)
+        const list = await this.stored(conversationId)
+        const message = list.find((m) => m.id === messageId)
+        if (!message?.file || message.status !== 'sending') return
+        message.file.blobId = blobId
+        const envelope = this.encode(core, conversationId, message)
+        this.state.outbox.push({
+          messageId,
+          conversationId,
+          envelope: toBase64(envelope),
+          recipients: this.recipients(conversationId),
+        })
+        await this.store.putJson(`messages:${conversationId}`, list)
+        await this.persist()
+      })
+      void this.flushOutbox()
+    } catch (e) {
+      await this.exclusive(() => this.setStatus(conversationId, messageId, 'failed', describeError(e)))
+    }
+  }
+
+  /**
+   * The decrypted file of a message: from this device if it was sent or
+   * opened here before, else downloaded (and kept sealed for next time).
+   */
+  async openAttachment(conversationId: string, messageId: string): Promise<Blob> {
+    const { account } = this.ready()
+    const message = (await this.stored(conversationId)).find((m) => m.id === messageId)
+    const f = message?.file
+    if (!f) throw new Error('No such file')
+    let body = await this.store.getFile(messageId)
+    if (!body) {
+      if (!f.blobId) throw new Error('This file was not uploaded')
+      body = await api.downloadBlob(account.token, hexToUuid(f.blobId))
+      if (body.size !== sealedLength(f.size)) throw new Error("This file doesn't match its message")
+      await this.store.putFile(messageId, body)
+    }
+    try {
+      // Other types (SVG, HTML…) are never handed out as something a browser renders.
+      const type = isPhoto(f.mime) ? f.mime : 'application/octet-stream'
+      return await openFile(body, fromBase64(f.key), f.size, fromBase64(f.digest), type)
+    } catch (e) {
+      await this.store.putFile(messageId, undefined)
+      throw new Error(`This file could not be opened: ${describeError(e)}`)
+    }
   }
 
   // ---- WebSocket -------------------------------------------------------------
@@ -1548,7 +1732,12 @@ export class Engine {
         if (admins.length > 0) conv.admins = admins
         this.emitView()
       }
-      if (conv?.status && event.text !== undefined) return // no longer in the group
+      const view = event.attachment
+      const attachment = view && this.receivedFile(view)
+      // An unusable attachment is dropped with its caption.
+      const text = view ? attachment && view.caption : event.text
+      view?.free()
+      if (conv?.status && text !== undefined) return // no longer in the group
       if (this.state.blocked.includes(from)) return // blocked (FR-ID-8)
       if (event.displayName !== undefined && !mine) {
         this.state.names[from] = event.displayName.slice(0, 64)
@@ -1558,7 +1747,7 @@ export class Engine {
           if (c.peers.includes(from)) this.emit({ type: 'messages', conversationId: c.id })
         }
       }
-      if (event.text !== undefined) {
+      if (text !== undefined) {
         if (!mine && conv) {
           conv.unread = (conv.unread ?? 0) + 1
           if (!conv.request) this.queueReceipt(conversationId, 'delivered', messageId)
@@ -1567,9 +1756,10 @@ export class Engine {
         await this.appendMessage(conversationId, {
           id: messageId,
           from: mine ? 'me' : from,
-          text: event.text,
+          text,
           sentAt: event.sentAtMs,
           status: mine ? 'sent' : 'received',
+          file: attachment,
         })
       }
     }
@@ -1819,13 +2009,34 @@ export class Engine {
     return c.name ?? (c.peers.map((p) => this.nameOf(p)).join(', ') || 'Just you')
   }
 
-  private async appendMessage(conversationId: string, message: ChatMessage) {
-    const list = await this.messages(conversationId)
+  /** Checks an attachment from the wire; undefined if it is unusable. */
+  private receivedFile(a: AttachmentView): StoredFile | undefined {
+    if (a.blobId.length !== 16 || a.key.length !== 32 || a.digest.length !== 32) return undefined
+    if (!(a.size > 0 && a.size <= MAX_ATTACHMENT_BYTES)) return undefined
+    const dims = a.width > 0 && a.height > 0 && a.width <= 20_000 && a.height <= 20_000
+    const thumbnail = a.thumbnail
+    return {
+      blobId: toHex(a.blobId),
+      key: toBase64(a.key),
+      digest: toBase64(a.digest),
+      size: a.size,
+      mime: safeMime(a.mime),
+      name: safeName(a.name),
+      width: dims ? a.width : undefined,
+      height: dims ? a.height : undefined,
+      thumbnail: thumbnail.length > 0 && thumbnail.length <= 64 * 1024 ? toBase64(thumbnail) : undefined,
+    }
+  }
+
+  private async appendMessage(conversationId: string, message: StoredMessage) {
+    const list = await this.stored(conversationId)
     list.push(message)
     await this.store.putJson(`messages:${conversationId}`, list)
     const conv = this.state.conversations[conversationId]
     if (conv && message.kind !== 'notice') {
-      conv.lastText = message.text
+      conv.lastText = message.file
+        ? [attachmentLabel(message.file.mime, message.file.name), message.text].filter(Boolean).join(': ')
+        : message.text
       conv.lastAt = Math.max(conv.lastAt, message.sentAt)
     }
     this.emit({ type: 'messages', conversationId })
@@ -1833,7 +2044,7 @@ export class Engine {
   }
 
   private async setStatus(conversationId: string, messageId: string, status: ChatMessage['status'], error?: string) {
-    const list = await this.messages(conversationId)
+    const list = await this.stored(conversationId)
     const message = list.find((m) => m.id === messageId)
     // A receipt may already have moved it past 'sent'.
     if (!message || (status === 'sent' && message.status !== 'sending')) return

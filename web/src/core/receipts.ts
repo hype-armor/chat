@@ -2,11 +2,13 @@
 
 import type { ChatMessage } from './protocol'
 
+type Receipted = Pick<ChatMessage, 'status' | 'readBy' | 'deliveredTo'>
+
 /**
  * The status of one of our messages after receipts: read once every other
  * member has read it, delivered once every other member has it.
  */
-export function statusAfterReceipts(m: ChatMessage, peers: string[]): ChatMessage['status'] {
+export function statusAfterReceipts(m: Receipted, peers: string[]): ChatMessage['status'] {
   if (m.status === 'sending' || m.status === 'failed' || peers.length === 0) return m.status
   const read = m.readBy ?? []
   const delivered = [...(m.deliveredTo ?? []), ...read]
@@ -16,7 +18,7 @@ export function statusAfterReceipts(m: ChatMessage, peers: string[]): ChatMessag
 }
 
 /** Records a receipt from `account` on one of our messages. */
-export function applyReceipt(m: ChatMessage, account: string, read: boolean, peers: string[]) {
+export function applyReceipt(m: Receipted, account: string, read: boolean, peers: string[]) {
   const field = read ? 'readBy' : 'deliveredTo'
   if (!(m[field] ?? []).includes(account)) m[field] = [...(m[field] ?? []), account]
   m.status = statusAfterReceipts(m, peers)

@@ -50,7 +50,8 @@ escape reports.
 | `GET /v1/blobs/{blob_id}` | ✓ | → the bytes, or `404` once expired |
 
 The server only ever sees ciphertext. The key and hash travel inside the
-E2EE message that references the blob. Blobs are deleted 30 days after
+E2EE message that references the blob (an `Attachment` content body;
+format in ADR-0024). Blobs are deleted 30 days after
 upload, whether or not they were fetched.
 
 ### Backup and restore (ADR-0022)

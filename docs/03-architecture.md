@@ -123,11 +123,12 @@ flowchart LR
 
 ### 5.2 Send media
 
-1. Client generates random key K, encrypts file (streaming AEAD), hashes
-   ciphertext.
-2. Requests pre-signed upload URL, uploads ciphertext to Blob service.
+1. Client generates random key K, encrypts the file (STREAM over
+   AES-256-GCM, ADR-0024), hashes the ciphertext.
+2. Uploads the ciphertext to the server, which streams it to the Blob
+   service (ADR-0023).
 3. Sends a normal E2EE message containing `{blob_id, K, hash, mime, size,
-   encrypted thumbnail}`.
+   thumbnail}`.
 4. Recipient downloads ciphertext, verifies hash, decrypts with K.
 
 ### 5.3 Group membership change

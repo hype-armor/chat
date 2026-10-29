@@ -30,3 +30,4 @@ revisited; do it with a new ADR that supersedes the old one.
 | [0021](0021-usernames-and-invites.md) | Usernames and invite-only sign-up (replaces phone numbers) | Accepted |
 | [0022](0022-backup-and-restore.md) | Backup of history under a recovery key; restore as a new device that members re-add | Accepted |
 | [0023](0023-blob-transfer-through-server.md) | Attachments stream through the server (not pre-signed URLs) | Accepted |
+| [0024](0024-attachment-encryption.md) | Attachments sealed with STREAM over AES-256-GCM in the core; photos re-drawn to drop metadata | Accepted |

@@ -37,6 +37,28 @@ async function bytes(method: 'GET' | 'PUT', path: string, token: string, body?: 
   return new Uint8Array(await res.arrayBuffer())
 }
 
+/** Uploads a sealed attachment; the browser sends its Content-Length. */
+async function uploadBlob(token: string, body: Blob): Promise<{ blob_id: string; expires_in_days: number }> {
+  const res = await fetch('/v1/blobs', {
+    method: 'PUT',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' },
+    body,
+  })
+  const json = await res.json().catch(() => undefined)
+  if (!res.ok) throw new ApiError(res.status, json?.error ?? `upload failed (${res.status})`)
+  return json
+}
+
+async function downloadBlob(token: string, id: string): Promise<Blob> {
+  const res = await fetch(`/v1/blobs/${id}`, { headers: { authorization: `Bearer ${token}` } })
+  if (res.status === 404) throw new ApiError(404, 'This file has expired (files are kept 30 days)')
+  if (!res.ok) {
+    const json = await res.json().catch(() => undefined)
+    throw new ApiError(res.status, json?.error ?? `download failed (${res.status})`)
+  }
+  return res.blob()
+}
+
 async function putJson(path: string, body: unknown, token: string): Promise<void> {
   const res = await fetch(path, {
     method: 'PUT',
@@ -67,6 +89,8 @@ export const api = {
   setBackupKey: (token: string, authHash: string) => putJson('/v1/backup/key', { auth_hash: authHash }, token),
   uploadBackup: (token: string, sealed: Uint8Array) => bytes('PUT', '/v1/backup', token, sealed),
   downloadBackup: (token: string) => bytes('GET', '/v1/backup', token),
+  uploadBlob,
+  downloadBlob,
   deleteBackup: (token: string) => post<void>('/v1/backup/delete', {}, token),
   restore: (username: string, auth: string, identityKey: string) =>
     post<Registered>('/v1/backup/restore', { username, auth, identity_key: identityKey }),

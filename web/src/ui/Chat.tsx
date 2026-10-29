@@ -5,6 +5,7 @@ import { InstallBanner, StorageBanner } from './Banners'
 import { Devices } from './Devices'
 import { Invite } from './Invite'
 import { Backup } from './Backup'
+import { Attachment } from './Attachment'
 import { BlockedList, DeleteAccount, ReportForm } from './Safety'
 import { VerificationBadge, Verify } from './Verify'
 import { type NotificationState, enableNotifications, notificationState, refreshSubscription } from '../notifications'
@@ -468,7 +469,10 @@ function Conversation({
   const toggle = (p: 'add' | 'info' | 'verify' | 'report') => setPanel((current) => (current === p ? undefined : p))
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [draft, setDraft] = useState('')
+  const [attaching, setAttaching] = useState(false)
+  const [attachError, setAttachError] = useState<string>()
   const end = useRef<HTMLDivElement>(null)
+  const picker = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     let live = true
@@ -504,6 +508,22 @@ function Conversation({
     if (!text) return
     setDraft('')
     await core.sendText(id, text)
+  }
+
+  // The draft, if any, goes with the file as its caption.
+  const attach = async (file: File | undefined) => {
+    if (picker.current) picker.current.value = ''
+    if (!file) return
+    setAttaching(true)
+    setAttachError(undefined)
+    try {
+      await core.sendFile(id, file, draft.trim())
+      setDraft('')
+    } catch (e) {
+      setAttachError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setAttaching(false)
+    }
   }
 
   return (
@@ -613,7 +633,8 @@ function Conversation({
           ) : (
             <li key={m.id} className={m.from === 'me' ? 'mine' : 'theirs'} data-testid="message">
               {isGroup && m.from !== 'me' && <span className="sender small">{m.fromName}</span>}
-              <span className="text">{m.text}</span>
+              {m.file && <Attachment core={core} conversationId={id} messageId={m.id} file={m.file} />}
+              {m.text && <span className="text">{m.text}</span>}
               <span className="meta small">
                 {new Date(m.sentAt).toLocaleTimeString([], {
                   hour: '2-digit',
@@ -641,7 +662,28 @@ function Conversation({
               : 'You were removed from this group.'}
         </p>
       )}
+      {attachError && (
+        <p className="notice warning" role="alert">
+          {attachError}
+        </p>
+      )}
       <form className="composer" onSubmit={send} hidden={!active || blocked || request}>
+        <input
+          ref={picker}
+          type="file"
+          hidden
+          data-testid="attach-input"
+          onChange={(e) => void attach(e.target.files?.[0])}
+        />
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => picker.current?.click()}
+          disabled={attaching}
+          aria-label="Attach a photo or file"
+        >
+          {attaching ? '…' : '+'}
+        </button>
         <label className="visually-hidden" htmlFor="composer">
           Message
         </label>

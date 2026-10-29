@@ -330,6 +330,7 @@ dependencies = [
 name = "chat-core"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "chat-proto",
  "getrandom 0.2.17",
  "js-sys",

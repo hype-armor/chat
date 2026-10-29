@@ -13,6 +13,7 @@ message Content {
     GroupInfo group_info = 4;
     DeviceSync device_sync = 5;
     Receipt receipt = 6;
+    Attachment attachment = 7;
   }
 }
 
@@ -48,4 +49,25 @@ message Receipt {
   }
   Kind kind = 1;
   repeated bytes message_ids = 2;
+}
+
+// An image or file in blob storage (ADR-0023, ADR-0024). The blob holds the
+// file encrypted under `key`; only members can fetch and open it.
+message Attachment {
+  // 16-byte blob id from `PUT /v1/blobs`.
+  bytes blob_id = 1;
+  // 32-byte AES-256 key, used for this file only.
+  bytes key = 2;
+  // SHA-256 of the ciphertext.
+  bytes digest = 3;
+  // Plaintext size in bytes, without padding.
+  uint64 size = 4;
+  string mime = 5;
+  string name = 6;
+  // Images: pixel size, and a small JPEG preview (sent inline, encrypted
+  // by MLS with the rest of this message).
+  uint32 width = 7;
+  uint32 height = 8;
+  bytes thumbnail = 9;
+  string caption = 10;
 }
