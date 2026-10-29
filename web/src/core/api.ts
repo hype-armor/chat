@@ -29,6 +29,8 @@ export const api = {
     post<void>('/v1/keys', { key_packages: keyPackages }, token),
   lookup: (token: string, phone: string) =>
     post<{ account_id: string; device_ids: string[] }>('/v1/lookup', { phone }, token),
+  groupEpoch: (token: string, groupId: string) =>
+    post<{ epoch: number; last_commit_hash: string }>('/v1/groups/epoch', { group_id: groupId }, token),
   claim: (token: string, deviceIds: string[]) =>
     post<{ key_packages: Record<string, string> }>('/v1/keys/claim', { device_ids: deviceIds }, token),
 }

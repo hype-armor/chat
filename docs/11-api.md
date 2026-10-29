@@ -22,6 +22,7 @@ Each device's coarse last-seen *day* is recorded on authentication.
 |---------------|------|-----------------|
 | `POST /v1/keys` | ✓ | `{key_packages: [b64]}` (1–100, ≤ 4 KiB each, ≤ 200 stored per device, 30-day expiry) → `204` |
 | `POST /v1/lookup` | ✓ | `{phone}` → `{account_id, device_ids}` or `404`. One number per call; no bulk lookup |
+| `POST /v1/groups/epoch` | ✓ | `{group_id}` (b64) → `{epoch, last_commit_hash}` (b64 SHA-256 of the accepted commit's ciphertext) or `404` if no commit was recorded. Lets a client that lost the answer to its commit learn whether it was accepted |
 | `POST /v1/keys/claim` | ✓ | `{device_ids}` (1–200) → `{key_packages: {device_id: b64}}`. Each package is handed out once; devices with none left are omitted |
 
 ## WebSocket `GET /v1/ws`

@@ -12,6 +12,7 @@ use chat_proto::{
     v1::{Ack, ContentType, Envelope, Ping, SendEnvelope, SendResult, client_frame, server_frame},
 };
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use support::{Client, TestServer};
 use uuid::Uuid;
@@ -276,8 +277,37 @@ async fn one_commit_per_epoch(pool: PgPool) {
         !racing.accepted && racing.epoch_conflict,
         "second commit on epoch 3 must lose"
     );
-    let next = send(&mut ws, commit(4), &[dev]).await;
+    let winner = commit(4);
+    let next = send(&mut ws, winner.clone(), &[dev]).await;
     assert!(next.accepted, "commit on the new epoch is accepted");
+
+    // A client that lost the reply can ask which commit the group applied.
+    let group = STANDARD.encode(b"group-1");
+    let (status, epoch) = server
+        .post(
+            "/v1/groups/epoch",
+            Some(&token),
+            json!({ "group_id": group }),
+        )
+        .await;
+    assert_eq!(status, 200, "{epoch}");
+    assert_eq!(epoch["epoch"], 5);
+    let expected = STANDARD.encode(Sha256::digest(&winner.ciphertext));
+    assert_eq!(epoch["last_commit_hash"], expected.as_str());
+
+    let unknown = STANDARD.encode(b"no-such-group");
+    let (status, _) = server
+        .post(
+            "/v1/groups/epoch",
+            Some(&token),
+            json!({ "group_id": unknown }),
+        )
+        .await;
+    assert_eq!(status, 404);
+    let (status, _) = server
+        .post("/v1/groups/epoch", None, json!({ "group_id": group }))
+        .await;
+    assert_eq!(status, 401);
 }
 
 #[sqlx::test]
@@ -302,4 +332,46 @@ async fn websocket_requires_authentication(pool: PgPool) {
         ))
         .await;
     assert!(matches!(reply.body, Some(server_frame::Body::Error(e)) if e.code == 401));
+}
+
+#[sqlx::test]
+async fn commit_survives_a_lost_reply(pool: PgPool) {
+    let server = TestServer::start(pool).await;
+    let (dev, token) = server.register("+15550005555").await;
+    let mut ws = server.connect(&token).await;
+    let commit = Envelope {
+        version: PROTOCOL_VERSION,
+        conversation_id: b"group-2".to_vec(),
+        epoch: 1,
+        content_type: ContentType::Handshake.into(),
+        ciphertext: b"commit-bytes".to_vec(),
+        message_id: message_id(),
+    };
+    // Send, then drop the connection without reading the reply.
+    ws.send_frame(client_frame::Body::Send(SendEnvelope {
+        envelope: Some(commit.clone()),
+        recipient_devices: vec![dev.as_bytes().to_vec()],
+    }))
+    .await;
+    drop(ws);
+
+    // After reconnecting, the client asks which commit the group applied.
+    let group = STANDARD.encode(b"group-2");
+    let expected = STANDARD.encode(Sha256::digest(&commit.ciphertext));
+    for _ in 0..50 {
+        let (status, epoch) = server
+            .post(
+                "/v1/groups/epoch",
+                Some(&token),
+                json!({ "group_id": group }),
+            )
+            .await;
+        if status == 200 {
+            assert_eq!(epoch["epoch"], 2);
+            assert_eq!(epoch["last_commit_hash"], expected.as_str());
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("commit was not recorded");
 }

@@ -13,7 +13,7 @@ export type Capabilities = {
 
 export async function detectCapabilities(): Promise<Capabilities> {
   return {
-    persistentStorage: await requestPersistence(),
+    persistentStorage: await persistenceState(),
     opfs: typeof navigator.storage?.getDirectory === 'function',
     webPush: 'PushManager' in window && 'serviceWorker' in navigator,
     webrtc: 'RTCPeerConnection' in window,
@@ -23,10 +23,14 @@ export async function detectCapabilities(): Promise<Capabilities> {
   }
 }
 
-/** Asks the browser not to evict our storage (FR-PLAT-3). */
-async function requestPersistence(): Promise<boolean | 'unsupported'> {
-  if (!navigator.storage?.persist) return 'unsupported'
-  return (await navigator.storage.persisted()) || navigator.storage.persist()
+/**
+ * Whether storage is already persistent. Only reports: requesting
+ * persistence can open a permission prompt (Firefox), so that belongs to an
+ * explicit user step after sign-up (FR-PLAT-3), not to page load.
+ */
+async function persistenceState(): Promise<boolean | 'unsupported'> {
+  if (!navigator.storage?.persisted) return 'unsupported'
+  return navigator.storage.persisted()
 }
 
 export function registerServiceWorker() {

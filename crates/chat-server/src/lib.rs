@@ -5,6 +5,7 @@ mod auth;
 pub mod config;
 mod delivery;
 mod error;
+mod groups;
 mod hub;
 mod keys;
 pub mod sms;
@@ -54,6 +55,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/keys", post(keys::upload))
         .route("/v1/keys/claim", post(keys::claim))
         .route("/v1/lookup", post(keys::lookup))
+        .route("/v1/groups/epoch", post(groups::epoch))
         .route("/v1/ws", get(ws::upgrade))
         .with_state(state)
 }
