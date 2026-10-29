@@ -12,6 +12,7 @@ import init, {
   encodeSend,
 } from './pkg/chat_core.js'
 import { ApiError, api, fromBase64, toBase64 } from './api'
+import { commitWasAccepted } from './commits'
 import { RecentIds, fromHex, makeIdentity, plain, randomId, splitIdentity, toHex } from './ids'
 import type { AppView, ChatMessage, ConnectionState, CoreEvent } from './protocol'
 import { SecureStore } from './storage'
@@ -32,6 +33,19 @@ type Invitee = { phone: string; account: string; devices: string[]; keyPackages:
 /** An envelope waiting to be accepted by the server (FR-MSG-9). */
 type Outgoing = { messageId: string; conversationId: string; envelope: string; recipients: string[] }
 
+/**
+ * A commit sent to the server whose answer was lost (the connection
+ * dropped). It stays pending in the core until the server says which commit
+ * it accepted for that epoch (docs/03 §5.3).
+ */
+type PendingCommit = {
+  conversationId: string
+  /** Base64 SHA-256 of the commit ciphertext. */
+  commitHash: string
+  welcome: string
+  invitees: { account: string; phone: string; devices: string[] }[]
+}
+
 /** An envelope that arrived before the welcome to its conversation. */
 type Early = { conversationId: string; messageId: string; envelope: string }
 
@@ -43,6 +57,7 @@ type State = {
   phones: Record<string, string>
   outbox: Outgoing[]
   early: Early[]
+  pendingCommit?: PendingCommit
   seen: string[]
 }
 
@@ -201,6 +216,7 @@ export class Engine {
     const conv = this.state.conversations[conversationId]
     if (!conv) throw new Error('Unknown conversation')
     if (this.connection !== 'online') throw new Error('You need to be online to add people')
+    if (this.state.pendingCommit) throw new Error('Still finishing an earlier group change; try again shortly')
     const invitees = (await this.resolve(phones)).filter((i) => !conv.peers.includes(i.account))
     if (invitees.length === 0) throw new Error('Everyone listed is already in this conversation')
     if (conv.peers.length + invitees.length + 1 > MAX_GROUP_MEMBERS) {
@@ -217,27 +233,29 @@ export class Engine {
         randomId(),
         randomId(),
       )
+      const pending: PendingCommit = {
+        conversationId,
+        commitHash: toBase64(added.commitHash),
+        welcome: toBase64(added.welcome),
+        invitees: invitees.map(({ account, phone, devices }) => ({ account, phone, devices })),
+      }
       const result = await this.request((id) => encodeSend(id, added.commit, existing.map(fromHex)))
-      if (!(result?.kind === 'send_result' && result.accepted)) {
+      if (!result) {
+        // The server may or may not have accepted the commit. Keep it
+        // pending and ask once we are back online.
+        this.state.pendingCommit = pending
+        await this.persist()
+        throw new Error('Connection lost while adding people; this will finish when you are back online')
+      }
+      if (!(result.kind === 'send_result' && result.accepted)) {
         core.discardCommit(fromHex(conversationId))
         throw new Error(
-          result?.epochConflict
+          result.epochConflict
             ? 'Someone else changed the group at the same moment; try again'
             : 'Could not add people right now; try again',
         )
       }
-      core.confirmCommit(fromHex(conversationId))
-      for (const i of invitees) this.state.phones[i.account] = i.phone
-      conv.peers.push(...invitees.map((i) => i.account))
-      this.state.outbox.push({
-        messageId: toHex(randomId()),
-        conversationId,
-        envelope: toBase64(added.welcome),
-        recipients: invitees.flatMap((i) => i.devices),
-      })
-      if (conv.name) this.queueGroupInfo(conversationId, conv.name)
-      this.queueProfile(conversationId)
-      await this.persist()
+      await this.finishCommit(pending)
     })
     this.emitView()
     void this.flushOutbox()
@@ -250,6 +268,9 @@ export class Engine {
 
   async sendText(conversationId: string, text: string) {
     const { core } = this.ready()
+    if (this.state.pendingCommit?.conversationId === conversationId) {
+      throw new Error('Finishing a group change; try again when you are back online')
+    }
     await this.exclusive(async () => {
       const messageId = randomId()
       const sentAt = Date.now()
@@ -295,7 +316,8 @@ export class Engine {
       case 'auth':
         this.reconnectMs = 1000
         this.setConnection('online')
-        void this.flushOutbox()
+        // Queued before any delivery handler, so it settles first.
+        void this.exclusive(() => this.resolvePendingCommit()).then(() => this.flushOutbox())
         return
       case 'deliver':
         void this.onDeliver(frame)
@@ -437,6 +459,44 @@ export class Engine {
   }
 
   // ---- helpers ---------------------------------------------------------------
+
+  /** Applies an accepted add-members commit and welcomes the new devices. */
+  private async finishCommit(p: PendingCommit) {
+    const conv = this.state.conversations[p.conversationId]
+    this.core!.confirmCommit(fromHex(p.conversationId))
+    for (const i of p.invitees) this.state.phones[i.account] = i.phone
+    if (conv) conv.peers = [...new Set([...conv.peers, ...p.invitees.map((i) => i.account)])]
+    this.state.outbox.push({
+      messageId: toHex(randomId()),
+      conversationId: p.conversationId,
+      envelope: p.welcome,
+      recipients: p.invitees.flatMap((i) => i.devices),
+    })
+    if (conv?.name) this.queueGroupInfo(p.conversationId, conv.name)
+    this.queueProfile(p.conversationId)
+    this.state.pendingCommit = undefined
+    await this.persist()
+    this.emitView()
+  }
+
+  /** Settles a commit whose server answer was lost (see `PendingCommit`). */
+  private async resolvePendingCommit() {
+    const p = this.state.pendingCommit
+    if (!p) return
+    let serverHash: string | undefined
+    try {
+      serverHash = (await api.groupEpoch(this.account!.token, toBase64(fromHex(p.conversationId)))).last_commit_hash
+    } catch (e) {
+      if (!(e instanceof ApiError && e.status === 404)) return // try again on the next reconnect
+    }
+    if (commitWasAccepted(p.commitHash, serverHash)) {
+      await this.finishCommit(p)
+    } else {
+      this.core!.discardCommit(fromHex(p.conversationId))
+      this.state.pendingCommit = undefined
+      await this.persist()
+    }
+  }
 
   /** Resolves phone numbers to accounts and claims a key package per device. */
   private async resolve(phones: string[]): Promise<Invitee[]> {

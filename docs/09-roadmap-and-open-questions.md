@@ -34,6 +34,52 @@
 | **6. Native wrappers & radio mesh (Tier 2)** | Capacitor Android/iOS + Tauri desktop; BLE / Wi-Fi Aware mesh; CallKit/Telecom ringing; background location | Field test with 100+ devices |
 | Later | Federation (MIMI), LoRa hardware bridge | — |
 
+## 2.1 Phase 1 checklist (2026-10-29)
+
+Worked in this order; tick items as their PRs merge.
+
+**Done:** phone sign-up, device keys and key directory; server delivery
+(durable queue, ack/redelivery, one commit per epoch); 1:1 chats and groups
+up to 50 (create, add people); offline outbox; encrypted local storage
+surviving reloads; three-engine browser CI against a real server.
+
+1. [x] Group re-sync on reconnect: a client that lost the server's answer to
+   its commit asks the server whether it was accepted (docs/03 §5.3 gap).
+2. [ ] Group roles (owner/admin/member, FR-MSG-4); remove people, leave,
+   rename.
+3. [ ] Web Push notifications without content (FR-NOT-1/2).
+4. [ ] Send authorisation: devices may only send to members of
+   conversations they share; basic anti-spam.
+5. [ ] Server rate limits per device on lookup, claim and send; SMS-pumping
+   protection beyond per-number limits (FR-SAF-2, NFR-LEG-5).
+6. [ ] Continuous deployment to the dev k3s cluster: build images, run
+   `scripts/k3s-dev-deploy.sh` for real.
+7. [ ] Measure delivery p95 < 1 s: load test plus basic server metrics.
+8. [ ] Device linking by QR (FR-ID-3/4): self-sync of sent messages, list
+   and remove devices.
+9. [ ] Safety numbers / QR verification and key-change warnings (FR-ID-5/6).
+10. [ ] Block and report (FR-ID-8); message requests (FR-SAF-3, should).
+11. [ ] Delete account and all server data (FR-ID-9).
+12. [ ] Delivered/read receipts (FR-MSG-5).
+13. [ ] PWA polish: install prompt, persistent-storage request and warning,
+    update banner (FR-PLAT-2/3).
+14. [ ] Key-package replenishment driven by a server-reported count.
+15. [ ] Retry and clear feedback for messages the server rejects.
+16. [ ] Real SMS provider behind `CodeSender` (needed for production, not
+    for dogfooding).
+
+**Exit:** internal dogfood on the dev cluster; delivery p95 < 1 s.
+
+**Can slip to later phases (should-haves):** typing indicators, reply/quote,
+reactions, edit and delete-for-everyone, disappearing messages, mentions and
+mute, local search, IP-hiding relay option.
+
+**Phase 0 spikes still open** (block later phases, not Phase 1): (b)
+SQLite3MultipleCiphers on OPFS (deferred; IndexedDB snapshots suffice for
+now); (c) phone-hotspot QR WebRTC test (needs two physical phones); (d)
+SFrame 3-party call through LiveKit; (a) record benchmark timings in
+Firefox and WebKit.
+
 ## 3. Top risks
 
 | Risk | Impact | Mitigation |

@@ -10,6 +10,7 @@ use chat_proto::{
 };
 use prost::Message;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::{
     Error, Result, envelope,
@@ -37,6 +38,9 @@ pub struct Started {
 pub struct Added {
     pub commit: Envelope,
     pub welcome: Envelope,
+    /// SHA-256 of the commit ciphertext, as the server records it for the
+    /// epoch it accepts (`POST /v1/groups/epoch`).
+    pub commit_hash: Vec<u8>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -180,6 +184,7 @@ impl Client {
             message_id,
         };
         Ok(Added {
+            commit_hash: Sha256::digest(&change.commit).to_vec(),
             commit: envelope(ContentType::Handshake, change.commit, commit_id),
             welcome: envelope(ContentType::Welcome, change.welcome, welcome_id),
         })
@@ -335,6 +340,10 @@ mod tests {
             .add_members(&id, &[&carol_kp], vec![4], vec![5])
             .unwrap();
         assert_eq!(added.commit.content_type, i32::from(ContentType::Handshake));
+        assert_eq!(
+            added.commit_hash,
+            Sha256::digest(&added.commit.ciphertext).to_vec()
+        );
         alice.confirm_commit(&id).unwrap();
         assert!(matches!(
             bob.receive(&added.commit).unwrap(),

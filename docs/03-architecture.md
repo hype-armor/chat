@@ -146,10 +146,11 @@ their profile) before the adder's welcome reaches the server, so a new
 member's device holds envelopes for conversations it hasn't joined yet and
 replays them once the welcome arrives.
 
-**Known gap:** if the connection drops after the server accepted a commit
-but before the client saw the acceptance, the client discards a commit the
-group has applied and falls out of sync. Fix: let clients query the
-server's current epoch (or fetch their own commit) on reconnect.
+If the connection drops before the client sees the server's answer, the
+client keeps the commit pending (persisted) and, on reconnect and before
+processing anything else, asks `POST /v1/groups/epoch` for the hash of the
+commit the server accepted for that epoch: if it is ours, the client
+applies it and sends the welcome; otherwise it discards it.
 
 ### 5.4 Calls — see doc 05.  Offline — see doc 07.
 

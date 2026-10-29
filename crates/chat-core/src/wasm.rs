@@ -149,6 +149,9 @@ pub struct AddedView {
     pub commit: Vec<u8>,
     /// Encoded welcome `Envelope` for the new devices.
     pub welcome: Vec<u8>,
+    /// SHA-256 of the commit ciphertext (compare with `/v1/groups/epoch`).
+    #[wasm_bindgen(js_name = commitHash)]
+    pub commit_hash: Vec<u8>,
 }
 
 /// A received envelope, flattened for JavaScript. `kind` is one of
@@ -242,6 +245,7 @@ impl CoreClient {
             .add_members(conversation_id, &refs, commit_id, welcome_id)
             .map_err(js_err)?;
         Ok(AddedView {
+            commit_hash: added.commit_hash,
             commit: added.commit.encode_to_vec(),
             welcome: added.welcome.encode_to_vec(),
         })
