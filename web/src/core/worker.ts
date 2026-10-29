@@ -64,6 +64,17 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
       return { type: 'ok' }
     case 'decodeQr':
       return { type: 'qr', text: decodeQr(request.rgba, request.width, request.height) }
+    case 'safetyNumber':
+      return { type: 'safety', safety: engine.safetyNumber(request.conversationId, request.account) }
+    case 'markVerified':
+      await engine.markVerified(request.conversationId, request.account)
+      return { type: 'ok' }
+    case 'verifyScanned':
+      await engine.verifyScanned(request.conversationId, request.account, request.text)
+      return { type: 'ok' }
+    case 'dismissAlert':
+      await engine.dismissAlert(request.id)
+      return { type: 'ok' }
     case 'status':
       return { type: 'status', status: { version: core_version(), selfTest: self_test() } }
     case 'bench': {

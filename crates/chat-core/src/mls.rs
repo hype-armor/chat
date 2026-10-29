@@ -251,6 +251,14 @@ impl Conversation {
     }
 
     /// Identities of all members, including this device.
+    /// (identity, signature public key) of each member, in leaf order.
+    pub fn member_keys(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+        self.group
+            .members()
+            .map(|m| (credential_identity(&m.credential).to_vec(), m.signature_key))
+            .collect()
+    }
+
     pub fn member_identities(&self) -> Vec<Vec<u8>> {
         self.group
             .members()

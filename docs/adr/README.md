@@ -26,3 +26,4 @@ revisited; do it with a new ADR that supersedes the old one.
 | [0017](0017-send-authorisation.md) | Send authorisation by conversation membership | Accepted |
 | [0018](0018-pull-based-dev-deployment.md) | Pull-based continuous deployment to the dev cluster | Accepted |
 | [0019](0019-linked-devices.md) | Linked devices: server-approved link codes, MLS for everything else | Accepted |
+| [0020](0020-safety-numbers.md) | Safety numbers per pair of accounts; warnings on new device keys | Accepted |

@@ -12,12 +12,23 @@ import init, {
   encodeSend,
   encodeSendWithWelcome,
   encodeQr,
+  safetyNumber,
 } from './pkg/chat_core.js'
 import { ApiError, type Registered, api, fromBase64, toBase64 } from './api'
 import { type CommitOutcome, RATE_LIMITED, commitWasAccepted, retryDelay, throwUnlessAccepted } from './commits'
 import { RecentIds, fromHex, makeIdentity, plain, randomId, splitIdentity, toHex } from './ids'
 import { type DeviceSync, deviceHex, linkText, ownDevicePlan, parseDeviceSync, parseLinkCode } from './devices'
-import type { AppView, ChatMessage, ConnectionState, CoreEvent, DeviceInfo, LinkOffer, MemberInfo } from './protocol'
+import { type KeyBook, observeKeys, scannedMatches, verification, verifyText } from './keys'
+import type {
+  AppView,
+  ChatMessage,
+  ConnectionState,
+  CoreEvent,
+  DeviceInfo,
+  LinkOffer,
+  MemberInfo,
+  SafetyNumber,
+} from './protocol'
 import { acceptsGroupInfo, designatedCommitter, parseAdmins } from './roles'
 import { SecureStore } from './storage'
 
@@ -89,6 +100,14 @@ type State = {
   myDevices: string[]
   /** Group metadata from another own device, for conversations not joined yet. */
   syncedMeta: DeviceSync['conversations']
+  /** Every device signature key seen per account (ADR-0020). */
+  keys: KeyBook
+  /** Account → their keys when this user verified the safety number. */
+  verified: Record<string, string[]>
+  /** Own devices this device approved, so their arrival raises no alert. */
+  expectedOwn: string[]
+  /** New devices on this account that nobody here approved. */
+  alerts: { id: string; text: string }[]
 }
 
 const emptyState = (): State => ({
@@ -101,6 +120,10 @@ const emptyState = (): State => ({
   seen: [],
   myDevices: [],
   syncedMeta: {},
+  keys: {},
+  verified: {},
+  expectedOwn: [],
+  alerts: [],
 })
 
 export class Engine {
@@ -159,6 +182,9 @@ export class Engine {
         amAdmin: (c.admins ?? []).includes(this.myAccount()),
         status: c.status ?? ('active' as const),
         memberCount: c.peers.length + 1,
+        peer: c.name === undefined && c.peers.length === 1 ? c.peers[0] : undefined,
+        verification:
+          c.name === undefined && c.peers.length === 1 ? this.verificationOf(c.peers[0]) : undefined,
         lastText: c.lastText,
         lastAt: c.lastAt,
       }))
@@ -167,6 +193,7 @@ export class Engine {
       me: { phone: this.account.phone, displayName: this.account.displayName || this.account.phone },
       connection: this.connection,
       conversations,
+      alerts: this.state.alerts,
     }
   }
 
@@ -262,6 +289,7 @@ export class Engine {
     while (Date.now() < until) {
       const { device_id } = await api.linkStatus(account.token, code)
       if (device_id) {
+        this.state.expectedOwn = [...this.state.expectedOwn, deviceHex(device_id)]
         await this.syncOwnDevices()
         return
       }
@@ -412,6 +440,7 @@ export class Engine {
       const started = this.core!.startConversation(invitee.keyPackages, randomId())
       const id = toHex(started.conversationId)
       this.state.conversations[id] = { id, peers: [], self: true, lastAt: Date.now() }
+      await this.observeKeysIn(id)
       this.state.outbox.push({
         messageId: toHex(randomId()),
         conversationId: id,
@@ -478,6 +507,98 @@ export class Engine {
     if ((conv.admins ?? []).length === 0 && meta.admins?.length) conv.admins = meta.admins
   }
 
+  // ---- safety numbers (ADR-0020) ---------------------------------------------
+
+  /** The safety number with `account`, from the keys in a shared conversation. */
+  safetyNumber(conversationId: string, account: string): SafetyNumber {
+    const { mine, theirs } = this.keysIn(conversationId, account)
+    if (theirs.length === 0) throw new Error('They are not in this conversation')
+    const digits = safetyNumber(fromHex(this.myAccount()), mine.map(fromHex), fromHex(account), theirs.map(fromHex))
+    const qr = encodeQr(verifyText(digits))
+    const result = { digits, qrSize: qr.size, qrModules: Array.from(qr.modules) }
+    qr.free()
+    return result
+  }
+
+  /** Marks the contact verified with the keys their safety number covers. */
+  async markVerified(conversationId: string, account: string) {
+    const { theirs } = this.keysIn(conversationId, account)
+    if (theirs.length === 0) throw new Error('They are not in this conversation')
+    await this.exclusive(async () => {
+      this.state.verified[account] = [...theirs].sort()
+      await this.persist()
+    })
+    this.emitView()
+  }
+
+  /** Verifies by their scanned QR code; throws if it doesn't match. */
+  async verifyScanned(conversationId: string, account: string, scanned: string) {
+    if (!scannedMatches(scanned, this.safetyNumber(conversationId, account).digits)) {
+      throw new Error("The codes don't match. Compare the numbers, and don't mark them verified.")
+    }
+    await this.markVerified(conversationId, account)
+  }
+
+  async dismissAlert(id: string) {
+    await this.exclusive(async () => {
+      this.state.alerts = this.state.alerts.filter((a) => a.id !== id)
+      await this.persist()
+    })
+    this.emitView()
+  }
+
+  private verificationOf(account: string) {
+    return verification(this.state.verified[account], this.state.keys[account])
+  }
+
+  /** Signature keys (hex) of this account's and `account`'s members in a group. */
+  private keysIn(conversationId: string, account: string): { mine: string[]; theirs: string[] } {
+    const me = this.myAccount()
+    const mine: string[] = []
+    const theirs: string[] = []
+    for (const [identity, key] of this.core!.memberKeys(fromHex(conversationId)) as Uint8Array[][]) {
+      const owner = splitIdentity(identity).account
+      if (owner === me) mine.push(toHex(key))
+      else if (owner === account) theirs.push(toHex(key))
+    }
+    return { mine, theirs }
+  }
+
+  /**
+   * Records the device keys in a group's current roster and warns about
+   * keys never seen before for a known account (FR-ID-6).
+   */
+  private async observeKeysIn(conversationId: string) {
+    const me = this.myAccount()
+    const byAccount = new Map<string, { keys: string[]; devices: Map<string, string> }>()
+    for (const [identity, key] of this.core!.memberKeys(fromHex(conversationId)) as Uint8Array[][]) {
+      const { account, device } = splitIdentity(identity)
+      const entry = byAccount.get(account) ?? { keys: [] as string[], devices: new Map<string, string>() }
+      entry.keys.push(toHex(key))
+      entry.devices.set(toHex(key), toHex(device))
+      byAccount.set(account, entry)
+    }
+    for (const [account, { keys, devices }] of byAccount) {
+      const added = observeKeys(this.state.keys, account, keys)
+      if (added.length === 0) continue
+      if (account === me) {
+        if (added.every((k) => this.state.expectedOwn.includes(devices.get(k) ?? ''))) continue
+        this.state.alerts.push({
+          id: toHex(randomId()),
+          text: `A new device was added to your account on ${new Date().toLocaleDateString()}. If this wasn't you, remove it in Linked devices.`,
+        })
+        this.emitView()
+        continue
+      }
+      const text = `${this.nameOf(account)}'s safety number changed: a device was added.`
+      for (const c of Object.values(this.state.conversations)) {
+        if (!c.self && c.peers.includes(account)) {
+          await this.appendMessage(c.id, { id: toHex(randomId()), from: '', kind: 'notice', text, sentAt: Date.now(), status: 'received' })
+        }
+      }
+    }
+  }
+
   // ---- conversations -------------------------------------------------------
 
   async startChat(phone: string): Promise<string> {
@@ -501,6 +622,7 @@ export class Engine {
       const id = toHex(started.conversationId)
       this.state.phones[peer] = phone
       this.state.conversations[id] = { id, peers: [peer], lastAt: Date.now() }
+      await this.observeKeysIn(id)
       const welcomeId = randomId()
       this.state.outbox.push({
         messageId: toHex(welcomeId),
@@ -540,6 +662,7 @@ export class Engine {
         admins,
         lastAt: Date.now(),
       }
+      await this.observeKeysIn(id)
       this.state.outbox.push({
         messageId: toHex(randomId()),
         conversationId: id,
@@ -603,6 +726,7 @@ export class Engine {
       name: account === me ? this.account!.displayName || this.account!.phone : this.nameOf(account),
       isAdmin: (conv.admins ?? []).includes(account),
       isMe: account === me,
+      verification: account === me ? undefined : this.verificationOf(account),
     }))
   }
 
@@ -682,7 +806,7 @@ export class Engine {
 
   async messages(conversationId: string): Promise<ChatMessage[]> {
     const list = (await this.store.getJson<ChatMessage[]>(`messages:${conversationId}`)) ?? []
-    return list.map((m) => (m.from === 'me' ? m : { ...m, fromName: this.nameOf(m.from) }))
+    return list.map((m) => (m.from === 'me' || m.kind === 'notice' ? m : { ...m, fromName: this.nameOf(m.from) }))
   }
 
   async sendText(conversationId: string, text: string) {
@@ -835,6 +959,7 @@ export class Engine {
         delete this.state.syncedMeta[conversationId]
       }
       this.state.conversations[conversationId] = conv
+      await this.observeKeysIn(conversationId)
       this.scheduleSync()
       this.queueProfile(conversationId)
       // Joining consumed one of our key packages; publish a replacement.
@@ -854,6 +979,7 @@ export class Engine {
         this.emitView()
         return
       }
+      await this.observeKeysIn(conversationId)
       if (conv.self) return
       // Introduce ourselves to anyone new.
       if (peers.some((p) => !conv.peers.includes(p))) this.queueProfile(conversationId)
@@ -1007,7 +1133,8 @@ export class Engine {
   private async finishCommit(p: PendingCommit) {
     const conv = this.state.conversations[p.conversationId]
     this.core!.confirmCommit(fromHex(p.conversationId))
-    if (conv) conv.peers = this.peersOf(p.conversationId)
+    if (conv && !conv.self) conv.peers = this.peersOf(p.conversationId)
+    if (conv) await this.observeKeysIn(p.conversationId)
     if (!this.core!.hasPendingProposals(fromHex(p.conversationId))) delete this.state.leaving[p.conversationId]
     if (p.invitees && conv?.self) {
       this.queueDeviceSync(p.conversationId)
@@ -1145,7 +1272,7 @@ export class Engine {
     list.push(message)
     await this.store.putJson(`messages:${conversationId}`, list)
     const conv = this.state.conversations[conversationId]
-    if (conv) {
+    if (conv && message.kind !== 'notice') {
       conv.lastText = message.text
       conv.lastAt = Math.max(conv.lastAt, message.sentAt)
     }

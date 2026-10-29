@@ -12,6 +12,10 @@ export type ConversationSummary = {
   status: 'active' | 'left' | 'removed'
   /** Including this user. */
   memberCount: number
+  /** 1:1 chats: the other person's account id. */
+  peer?: string
+  /** 1:1 chats: safety number status of the other person (ADR-0020). */
+  verification?: Verification
   lastText?: string
   lastAt: number
 }
@@ -28,6 +32,8 @@ export type AppView =
       me: { phone: string; displayName: string }
       connection: ConnectionState
       conversations: ConversationSummary[]
+      /** New devices on this account that nobody here approved (ADR-0020). */
+      alerts: { id: string; text: string }[]
     }
 
 /** One of this account's devices (ADR-0019). */
@@ -36,12 +42,25 @@ export type DeviceInfo = { id: string; addedOn: string; lastSeenOn?: string; cur
 /** A link code to show on a new device: text for typing, QR modules for scanning. */
 export type LinkOffer = { code: string; qrSize: number; qrModules: number[] }
 
-export type MemberInfo = { account: string; name: string; isAdmin: boolean; isMe: boolean }
+export type Verification = 'unverified' | 'verified' | 'changed'
+
+/** 60 digits to compare, and the same as a QR code to scan. */
+export type SafetyNumber = { digits: string; qrSize: number; qrModules: number[] }
+
+export type MemberInfo = {
+  account: string
+  name: string
+  isAdmin: boolean
+  isMe: boolean
+  verification?: Verification
+}
 
 export type ChatMessage = {
   id: string
-  /** 'me' or the sender's account id (hex). */
+  /** 'me' or the sender's account id (hex); empty for notices. */
   from: string
+  /** A notice from this app (e.g. a safety number change), not a message. */
+  kind?: 'notice'
   /** Sender's display name (or phone), resolved when read. */
   fromName?: string
   text: string
@@ -74,6 +93,10 @@ export type CoreRequest =
   | { type: 'devices' }
   | { type: 'removeDevice'; id: string }
   | { type: 'decodeQr'; rgba: Uint8Array; width: number; height: number }
+  | { type: 'safetyNumber'; conversationId: string; account: string }
+  | { type: 'markVerified'; conversationId: string; account: string }
+  | { type: 'verifyScanned'; conversationId: string; account: string; text: string }
+  | { type: 'dismissAlert'; id: string }
   | { type: 'status' }
   | { type: 'bench'; members: number }
 
@@ -87,6 +110,7 @@ export type CoreResponseBody =
   | { type: 'link'; offer: LinkOffer }
   | { type: 'devices'; devices: DeviceInfo[] }
   | { type: 'qr'; text?: string }
+  | { type: 'safety'; safety: SafetyNumber }
   | { type: 'status'; status: CoreStatus }
   | { type: 'bench'; result: BenchResult }
   | { type: 'error'; message: string }

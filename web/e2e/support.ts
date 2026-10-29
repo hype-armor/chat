@@ -35,3 +35,19 @@ export async function signUp(browser: Browser, name: string, phone: string): Pro
 }
 
 export const messages = (page: Page) => page.getByTestId('message')
+
+/** Links a new browser to the account signed in on `page` by typed code. */
+export async function linkDevice(browser: Browser, page: Page): Promise<Page> {
+  const laptop = await (await browser.newContext()).newPage()
+  await laptop.goto('/')
+  await laptop.getByRole('button', { name: /Link this one/ }).click()
+  const code = (await laptop.getByTestId('link-code').textContent())!.trim()
+  await page.getByText('Linked devices').click()
+  await page.getByRole('button', { name: 'Link a new device' }).click()
+  await page.getByLabel('Or type the code shown on the new device').fill(code)
+  await expect(page.getByRole('note')).toContainText('read every message')
+  await page.getByRole('button', { name: 'Link device' }).click()
+  await expect(page.getByRole('button', { name: 'Link a new device' })).toBeVisible({ timeout: 30_000 })
+  await expect(laptop.getByRole('status')).toHaveText('online')
+  return laptop
+}

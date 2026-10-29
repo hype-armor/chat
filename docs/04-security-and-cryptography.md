@@ -70,7 +70,9 @@ membership changes deferred until online).
 | Local DB key | Device | Wrapped by non-extractable WebCrypto key (+ optional passphrase) | Life of install |
 
 ### Identity verification
-- **Safety numbers / QR codes** per contact (out-of-band comparison).
+- **Safety numbers / QR codes** per contact (out-of-band comparison),
+  covering all of a contact's devices; new device keys trigger warnings
+  (ADR-0020).
 - **Key transparency** (S): a verifiable append-only log of
   account→device-key bindings, so clients can audit that the server isn't
   equivocating (cf. WhatsApp/Apple key transparency, IETF KEYTRANS WG).

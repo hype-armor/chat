@@ -2,6 +2,7 @@ import { type FormEvent, useEffect, useRef, useState } from 'react'
 import type { CoreClient } from '../core/client'
 import type { AppView, ChatMessage, ConversationSummary, MemberInfo } from '../core/protocol'
 import { Devices } from './Devices'
+import { VerificationBadge, Verify } from './Verify'
 import { type NotificationState, enableNotifications, notificationState, refreshSubscription } from '../notifications'
 
 type Ready = Extract<AppView, { phase: 'ready' }>
@@ -29,6 +30,14 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
             {view.connection}
           </span>
         </header>
+        {view.alerts.map((a) => (
+          <div key={a.id} className="alert" role="alert">
+            <p>{a.text}</p>
+            <button type="button" className="link small" onClick={() => void core.dismissAlert(a.id)}>
+              Dismiss
+            </button>
+          </div>
+        ))}
         <NotificationToggle core={core} />
         <Devices core={core} />
         <NewChat core={core} onStarted={setSelected} />
@@ -37,11 +46,7 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
           <ul className="conversations">
             {view.conversations.map((c) => (
               <li key={c.id}>
-                <button
-                  type="button"
-                  className={c.id === selected ? 'active' : ''}
-                  onClick={() => setSelected(c.id)}
-                >
+                <button type="button" className={c.id === selected ? 'active' : ''} onClick={() => setSelected(c.id)}>
                   <span className="title">{c.title}</span>
                   <span className="muted small preview">{c.lastText ?? 'No messages yet'}</span>
                 </button>
@@ -60,6 +65,8 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
           memberCount={conversation.memberCount}
           amAdmin={conversation.amAdmin}
           status={conversation.status}
+          peer={conversation.peer}
+          verification={conversation.verification}
           onBack={() => setSelected(undefined)}
         />
       ) : (
@@ -83,7 +90,12 @@ function NotificationToggle({ core }: { core: CoreClient }) {
       {state === 'denied' ? (
         <p className="muted small">Notifications are blocked in your browser settings.</p>
       ) : (
-        <button type="button" className="link" disabled={busy} onClick={() => run(async () => setState(await enableNotifications(core)))}>
+        <button
+          type="button"
+          className="link"
+          disabled={busy}
+          onClick={() => run(async () => setState(await enableNotifications(core)))}
+        >
           Enable notifications
         </button>
       )}
@@ -147,6 +159,7 @@ function GroupInfo({
   active: boolean
 }) {
   const [members, setMembers] = useState<MemberInfo[]>([])
+  const [verifying, setVerifying] = useState<MemberInfo>()
   const [name, setName] = useState(title)
   const { busy, error, run } = useAction()
 
@@ -186,11 +199,27 @@ function GroupInfo({
             <span>
               {m.isMe ? `${m.name} (you)` : m.name}
               {m.isAdmin && <span className="badge small">Admin</span>}
+              <VerificationBadge status={m.verification} />
             </span>
+            {!m.isMe && (
+              <button
+                type="button"
+                className="link small"
+                onClick={() => setVerifying(m)}
+                aria-label={`Verify ${m.name}`}
+              >
+                Verify
+              </button>
+            )}
             {amAdmin && !m.isMe && (
               <span className="actions">
                 {!m.isAdmin && (
-                  <button type="button" className="link small" disabled={busy} onClick={() => run(() => core.makeAdmin(id, m.account))}>
+                  <button
+                    type="button"
+                    className="link small"
+                    disabled={busy}
+                    onClick={() => run(() => core.makeAdmin(id, m.account))}
+                  >
                     Make admin
                   </button>
                 )}
@@ -208,6 +237,16 @@ function GroupInfo({
           </li>
         ))}
       </ul>
+      {verifying && (
+        <Verify
+          core={core}
+          conversationId={id}
+          account={verifying.account}
+          name={verifying.name}
+          status={members.find((m) => m.account === verifying.account)?.verification}
+          onDone={() => setVerifying(undefined)}
+        />
+      )}
       {active && (
         <button type="button" className="link danger" disabled={busy} onClick={() => run(() => core.leaveGroup(id))}>
           Leave group
@@ -329,6 +368,8 @@ function Conversation({
   memberCount,
   amAdmin,
   status,
+  peer,
+  verification,
   onBack,
 }: {
   core: CoreClient
@@ -338,11 +379,13 @@ function Conversation({
   memberCount: number
   amAdmin: boolean
   status: ConversationSummary['status']
+  peer?: string
+  verification?: ConversationSummary['verification']
   onBack: () => void
 }) {
-  const [panel, setPanel] = useState<'add' | 'info'>()
+  const [panel, setPanel] = useState<'add' | 'info' | 'verify'>()
   const active = status === 'active'
-  const toggle = (p: 'add' | 'info') => setPanel((current) => (current === p ? undefined : p))
+  const toggle = (p: 'add' | 'info' | 'verify') => setPanel((current) => (current === p ? undefined : p))
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [draft, setDraft] = useState('')
   const end = useRef<HTMLDivElement>(null)
@@ -381,7 +424,13 @@ function Conversation({
           ←
         </button>
         <h2>{title}</h2>
+        <VerificationBadge status={verification} />
         {isGroup && <span className="muted small">{memberCount} people</span>}
+        {peer && (
+          <button type="button" className="link" onClick={() => toggle('verify')}>
+            {panel === 'verify' ? 'Close' : 'Verify'}
+          </button>
+        )}
         {active && (
           <button type="button" className="link" onClick={() => toggle('add')}>
             {panel === 'add' ? 'Cancel' : 'Add people'}
@@ -394,18 +443,42 @@ function Conversation({
         )}
       </header>
       {panel === 'add' && active && <AddPeople core={core} id={id} onDone={() => setPanel(undefined)} />}
+      {verification === 'changed' && panel !== 'verify' && (
+        <p className="notice warning" role="note">
+          {title}'s safety number changed since you verified it. Verify it again before sharing anything sensitive.
+        </p>
+      )}
+      {panel === 'verify' && peer && (
+        <Verify
+          core={core}
+          conversationId={id}
+          account={peer}
+          name={title}
+          status={verification}
+          onDone={() => setPanel(undefined)}
+        />
+      )}
       {panel === 'info' && <GroupInfo core={core} id={id} title={title} amAdmin={amAdmin && active} active={active} />}
       <ol className="messages">
-        {messages.map((m) => (
-          <li key={m.id} className={m.from === 'me' ? 'mine' : 'theirs'} data-testid="message">
-            {isGroup && m.from !== 'me' && <span className="sender small">{m.fromName}</span>}
-            <span className="text">{m.text}</span>
-            <span className="meta small">
-              {new Date(m.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              {STATUS_LABEL[m.status] && ` · ${STATUS_LABEL[m.status]}`}
-            </span>
-          </li>
-        ))}
+        {messages.map((m) =>
+          m.kind === 'notice' ? (
+            <li key={m.id} className="notice-msg small" data-testid="notice">
+              {m.text}
+            </li>
+          ) : (
+            <li key={m.id} className={m.from === 'me' ? 'mine' : 'theirs'} data-testid="message">
+              {isGroup && m.from !== 'me' && <span className="sender small">{m.fromName}</span>}
+              <span className="text">{m.text}</span>
+              <span className="meta small">
+                {new Date(m.sentAt).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+                {STATUS_LABEL[m.status] && ` · ${STATUS_LABEL[m.status]}`}
+              </span>
+            </li>
+          ),
+        )}
       </ol>
       <div ref={end} />
       {!active && (

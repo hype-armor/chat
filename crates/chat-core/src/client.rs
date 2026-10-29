@@ -189,6 +189,11 @@ impl Client {
         })
     }
 
+    /// Members' identities and signature keys, including this device.
+    pub fn member_keys(&self, conversation_id: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        Ok(self.conversation(conversation_id)?.member_keys())
+    }
+
     /// Member identities, including this device.
     pub fn members(&self, conversation_id: &[u8]) -> Result<Vec<Vec<u8>>> {
         Ok(self.conversation(conversation_id)?.member_identities())
