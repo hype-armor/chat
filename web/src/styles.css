@@ -557,3 +557,22 @@ button.danger {
   font-weight: normal;
   margin-top: 0.75rem;
 }
+
+/* Install, storage and update banners (FR-PLAT-2/3) */
+.banner {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+}
+
+.banner p {
+  margin: 0;
+  flex: 1 1 12rem;
+}
+
+.banner.warning p {
+  color: var(--danger);
+}

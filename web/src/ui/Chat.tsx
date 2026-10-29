@@ -1,6 +1,7 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react'
 import type { CoreClient } from '../core/client'
 import type { AppView, ChatMessage, ConversationSummary, MemberInfo } from '../core/protocol'
+import { InstallBanner, StorageBanner } from './Banners'
 import { Devices } from './Devices'
 import { BlockedList, DeleteAccount, ReportForm } from './Safety'
 import { VerificationBadge, Verify } from './Verify'
@@ -35,6 +36,8 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
             {view.connection}
           </span>
         </header>
+        <StorageBanner />
+        <InstallBanner />
         {view.alerts.map((a) => (
           <div key={a.id} className="alert" role="alert">
             <p>{a.text}</p>

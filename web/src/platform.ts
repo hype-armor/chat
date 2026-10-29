@@ -1,5 +1,3 @@
-import { scriptUrl } from './trusted-types'
-
 // Browser capability checks the app depends on (FR-PLAT-*).
 
 export type Capabilities = {
@@ -31,11 +29,4 @@ export async function detectCapabilities(): Promise<Capabilities> {
 async function persistenceState(): Promise<boolean | 'unsupported'> {
   if (!navigator.storage?.persisted) return 'unsupported'
   return navigator.storage.persisted()
-}
-
-export function registerServiceWorker() {
-  if (!('serviceWorker' in navigator) || import.meta.env.DEV) return
-  navigator.serviceWorker.register(scriptUrl('/sw.js'), { type: 'module' }).catch((e) => {
-    console.error('service worker registration failed', e)
-  })
 }
