@@ -33,6 +33,12 @@ pub struct Started {
     pub welcome: Envelope,
 }
 
+/// A staged membership change; see [`Client::add_members`].
+pub struct Added {
+    pub commit: Envelope,
+    pub welcome: Envelope,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Event {
     Message {
@@ -142,6 +148,59 @@ impl Client {
         Ok(self.conversation(conversation_id)?.member_identities())
     }
 
+    /// Stages adding devices to an existing conversation. Send `commit` to
+    /// the current members (excluding this device); if the server accepts
+    /// it, call [`Self::confirm_commit`] and then deliver `welcome` to the
+    /// new devices. On an epoch conflict call [`Self::discard_commit`].
+    pub fn add_members(
+        &mut self,
+        conversation_id: &[u8],
+        key_packages: &[&[u8]],
+        commit_id: Vec<u8>,
+        welcome_id: Vec<u8>,
+    ) -> Result<Added> {
+        let device = &self.device;
+        let conv = self
+            .conversations
+            .get_mut(conversation_id)
+            .ok_or(Error::Malformed("unknown conversation"))?;
+        if conv.has_pending_commit() {
+            return Err(Error::Malformed("a membership change is already pending"));
+        }
+        // Commits are built in the current epoch; the server accepts exactly
+        // one commit per epoch.
+        let epoch = conv.epoch();
+        let change = conv.stage_add_members(device, key_packages)?;
+        let envelope = |content_type: ContentType, ciphertext, message_id| Envelope {
+            version: PROTOCOL_VERSION,
+            conversation_id: conversation_id.to_vec(),
+            epoch,
+            content_type: content_type.into(),
+            ciphertext,
+            message_id,
+        };
+        Ok(Added {
+            commit: envelope(ContentType::Handshake, change.commit, commit_id),
+            welcome: envelope(ContentType::Welcome, change.welcome, welcome_id),
+        })
+    }
+
+    pub fn confirm_commit(&mut self, conversation_id: &[u8]) -> Result<()> {
+        let device = &self.device;
+        self.conversations
+            .get_mut(conversation_id)
+            .ok_or(Error::Malformed("unknown conversation"))?
+            .merge_pending_commit(device)
+    }
+
+    pub fn discard_commit(&mut self, conversation_id: &[u8]) -> Result<()> {
+        let device = &self.device;
+        self.conversations
+            .get_mut(conversation_id)
+            .ok_or(Error::Malformed("unknown conversation"))?
+            .clear_pending_commit(device)
+    }
+
     pub fn send(
         &mut self,
         conversation_id: &[u8],
@@ -244,6 +303,57 @@ mod tests {
         assert!(
             matches!(alice.receive(&env).unwrap(), Event::Message { sender, .. } if sender == b"bob")
         );
+    }
+
+    #[test]
+    fn add_members_to_an_existing_conversation() {
+        let mut alice = Client::new(Device::new(b"alice").unwrap());
+        let mut bob = Client::new(Device::new(b"bob").unwrap());
+        let mut carol = Client::new(Device::new(b"carol").unwrap());
+        let started = alice
+            .start_conversation(&[&bob.key_packages(1).unwrap()[0]], vec![1])
+            .unwrap();
+        let id = started.conversation_id.clone();
+        bob.receive(&started.welcome).unwrap();
+
+        let carol_kp = carol.key_packages(1).unwrap().remove(0);
+        // A lost race: discard and nothing changes.
+        alice
+            .add_members(&id, &[&carol_kp], vec![2], vec![3])
+            .unwrap();
+        assert!(
+            alice
+                .add_members(&id, &[&carol_kp], vec![2], vec![3])
+                .is_err(),
+            "one at a time"
+        );
+        alice.discard_commit(&id).unwrap();
+        assert_eq!(alice.members(&id).unwrap().len(), 2);
+
+        let carol_kp = carol.key_packages(1).unwrap().remove(0);
+        let added = alice
+            .add_members(&id, &[&carol_kp], vec![4], vec![5])
+            .unwrap();
+        assert_eq!(added.commit.content_type, i32::from(ContentType::Handshake));
+        alice.confirm_commit(&id).unwrap();
+        assert!(matches!(
+            bob.receive(&added.commit).unwrap(),
+            Event::EpochChanged { .. }
+        ));
+        assert_eq!(
+            carol.receive(&added.welcome).unwrap(),
+            Event::Joined {
+                conversation_id: id.clone()
+            }
+        );
+
+        let env = carol.send(&id, &text("hello both"), vec![6]).unwrap();
+        for client in [&mut alice, &mut bob] {
+            assert!(
+                matches!(client.receive(&env).unwrap(), Event::Message { sender, .. } if sender == b"carol")
+            );
+        }
+        assert_eq!(bob.members(&id).unwrap().len(), 3);
     }
 
     #[test]

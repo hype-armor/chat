@@ -73,3 +73,41 @@ test('unknown numbers are reported', async ({ browser }) => {
   await page.getByRole('button', { name: 'Start chat' }).click()
   await expect(page.getByRole('alert')).toHaveText('no account for that number')
 })
+
+test('groups: create, talk, and add someone later', async ({ browser }) => {
+  const [annPhone, benPhone, catPhone, danPhone] = [randomPhone(), randomPhone(), randomPhone(), randomPhone()]
+  const ann = await signUp(browser, 'Ann', annPhone)
+  const ben = await signUp(browser, 'Ben', benPhone)
+  const cat = await signUp(browser, 'Cat', catPhone)
+  const dan = await signUp(browser, 'Dan', danPhone)
+
+  await ann.getByText('New group').click()
+  await ann.getByLabel('Group name').fill('Trip')
+  await ann.getByLabel("Members' phone numbers").fill(`${benPhone}\n${catPhone}`)
+  await ann.getByRole('button', { name: 'Create group' }).click()
+  await expect(ann.getByRole('heading', { name: 'Trip' })).toBeVisible()
+  await ann.getByLabel('Message').fill('Hi team')
+  await ann.getByRole('button', { name: 'Send' }).click()
+  await expect(messages(ann).filter({ hasText: 'Hi team' })).toContainText('Sent')
+
+  for (const page of [ben, cat]) {
+    await page.getByRole('button', { name: /Trip/ }).click()
+    await expect(messages(page)).toHaveText([/Ann\s*Hi team/])
+  }
+  await cat.getByLabel('Message').fill('Hello from Cat')
+  await cat.getByRole('button', { name: 'Send' }).click()
+  await expect(messages(ann)).toHaveText([/Hi team/, /Cat\s*Hello from Cat/])
+  await expect(messages(ben)).toHaveText([/Hi team/, /Hello from Cat/])
+
+  // Adding Dan needs a commit the server orders; he sees only later messages.
+  await ann.getByRole('button', { name: 'Add people' }).click()
+  await ann.getByLabel('Phone numbers to add').fill(danPhone)
+  await ann.getByRole('button', { name: 'Add', exact: true }).click()
+  await expect(ann.getByText('4 people')).toBeVisible()
+  await dan.getByRole('button', { name: /Trip/ }).click()
+  await expect(ben.getByText('4 people')).toBeVisible()
+  await ben.getByLabel('Message').fill('Welcome Dan')
+  await ben.getByRole('button', { name: 'Send' }).click()
+  await expect(messages(dan)).toHaveText([/Ben\s*Welcome Dan/])
+  for (const page of [ann, cat]) await expect(messages(page).last()).toContainText('Welcome Dan')
+})

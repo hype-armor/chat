@@ -6,6 +6,9 @@ export type ConnectionState = 'offline' | 'connecting' | 'online'
 export type ConversationSummary = {
   id: string
   title: string
+  isGroup: boolean
+  /** Including this user. */
+  memberCount: number
   lastText?: string
   lastAt: number
 }
@@ -24,6 +27,8 @@ export type ChatMessage = {
   id: string
   /** 'me' or the sender's account id (hex). */
   from: string
+  /** Sender's display name (or phone), resolved when read. */
+  fromName?: string
   text: string
   sentAt: number
   status: 'sending' | 'sent' | 'failed' | 'received'
@@ -37,6 +42,8 @@ export type CoreRequest =
   | { type: 'requestCode'; phone: string }
   | { type: 'verify'; phone: string; code: string; displayName: string }
   | { type: 'startChat'; phone: string }
+  | { type: 'createGroup'; name: string; phones: string[] }
+  | { type: 'addMembers'; conversationId: string; phones: string[] }
   | { type: 'messages'; conversationId: string }
   | { type: 'sendText'; conversationId: string; text: string }
   | { type: 'status' }

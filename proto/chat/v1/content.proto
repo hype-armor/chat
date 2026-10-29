@@ -10,6 +10,7 @@ message Content {
   oneof body {
     Text text = 2;
     Profile profile = 3;
+    GroupInfo group_info = 4;
   }
 }
 
@@ -20,4 +21,9 @@ message Text {
 // Sent when a conversation starts so members can label each other.
 message Profile {
   string display_name = 1;
+}
+
+// Group metadata, sent by the member who created or renamed the group.
+message GroupInfo {
+  string name = 1;
 }

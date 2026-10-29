@@ -20,6 +20,11 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
       return { type: 'ok' }
     case 'startChat':
       return { type: 'conversation', conversationId: await engine.startChat(request.phone) }
+    case 'createGroup':
+      return { type: 'conversation', conversationId: await engine.createGroup(request.name, request.phones) }
+    case 'addMembers':
+      await engine.addMembers(request.conversationId, request.phones)
+      return { type: 'ok' }
     case 'messages':
       return { type: 'messages', messages: await engine.messages(request.conversationId) }
     case 'sendText':
