@@ -1,0 +1,21 @@
+{{- if .Values.networkPolicy.enabled }}
+# Only the ingress/gateway controller may reach our pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "chat.fullname" . }}
+  labels:
+    {{- include "chat.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/name: {{ include "chat.name" . }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.ingressNamespaceSelector | nindent 12 }}
+      ports:
+        - port: 8080
+{{- end }}

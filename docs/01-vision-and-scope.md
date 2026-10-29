@@ -51,7 +51,7 @@ browsers cannot provide (see doc 07).
 ## Openness (decided)
 
 Fully open: client, server, protocol spec, and infrastructure config are
-public. Anyone can self-host a server (Docker Compose). Licence proposed in
+public. Anyone can self-host a server (Kubernetes Helm chart; Docker Compose for development). The main instance is hosted in the USA on Kubernetes (ADR-0014). Licence proposed in
 ADR-0012: AGPL-3.0-or-later for code, CC BY 4.0 for the protocol spec.
 
 ## Success metrics (initial)

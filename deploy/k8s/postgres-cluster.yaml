@@ -1,0 +1,22 @@
+# Requires the CloudNativePG operator (https://cloudnative-pg.io).
+# Creates database "app", owner "app", and secret "chat-db-app" whose `uri`
+# key the chart passes to the server as DATABASE_URL.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: chat-db
+spec:
+  instances: 1          # 100-user launch; raise to 3 for HA
+  imageName: ghcr.io/cloudnative-pg/postgresql:18
+  storage:
+    size: 10Gi
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { memory: 1Gi }
+  # Nightly base backups + WAL archiving to object storage (US region).
+  # backup:
+  #   barmanObjectStore:
+  #     destinationPath: s3://chat-backups/postgres
+  #     s3Credentials:
+  #       accessKeyId: { name: backup-s3, key: ACCESS_KEY_ID }
+  #       secretAccessKey: { name: backup-s3, key: SECRET_ACCESS_KEY }

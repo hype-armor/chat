@@ -195,5 +195,5 @@ Items marked **[ASSUMPTION]** need stakeholder confirmation (see doc 09).
 |----|-------------|-----|
 | NFR-OPS-1 | Privacy-preserving telemetry only (aggregate, no content, no per-user tracking). | M |
 | NFR-OPS-2 | Infrastructure as code; zero-downtime deploys. | S |
-| NFR-OPS-4 | One-command self-hosting (Docker Compose) with documented config. | M |
+| NFR-OPS-4 | Self-hosting with documented config: Helm chart for Kubernetes (production) and Docker Compose (development/small installs). | M |
 | NFR-OPS-3 | Protocol versioning so old clients keep working through upgrades. | M |

@@ -1,0 +1,13 @@
+{
+  "name": "chat-monorepo",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "packageManager": "pnpm@10.28.0",
+  "scripts": {
+    "build:wasm": "scripts/build-wasm.sh",
+    "dev": "pnpm --filter web dev",
+    "build": "pnpm --filter web build",
+    "test": "pnpm --filter web test",
+    "typecheck": "pnpm --filter web typecheck"
+  }
+}

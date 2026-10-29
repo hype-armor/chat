@@ -1,0 +1,75 @@
+// Wire format shared by the server transport, local-network mode and the
+// radio mesh. Everything inside `ciphertext` is end-to-end encrypted; the
+// fields outside it are the only things a server or relay can see.
+syntax = "proto3";
+
+package chat.v1;
+
+// An end-to-end encrypted unit of delivery (doc 03 §5.1).
+message Envelope {
+  uint32 version = 1;
+  // Opaque conversation identifier (MLS group id). Not linked to members.
+  bytes conversation_id = 2;
+  // MLS epoch the ciphertext belongs to.
+  uint64 epoch = 3;
+  ContentType content_type = 4;
+  // MLS-encrypted payload, padded to a size bucket by the sender.
+  bytes ciphertext = 5;
+  // Random id used for de-duplication and acknowledgement.
+  bytes message_id = 6;
+}
+
+enum ContentType {
+  CONTENT_TYPE_UNSPECIFIED = 0;
+  // MLS application message (text, media pointer, location, call signal).
+  CONTENT_TYPE_APPLICATION = 1;
+  // MLS commit or proposal; the delivery service orders these per group.
+  CONTENT_TYPE_HANDSHAKE = 2;
+  // MLS welcome for a newly added member.
+  CONTENT_TYPE_WELCOME = 3;
+}
+
+// Frames exchanged over the client <-> server WebSocket.
+message ClientFrame {
+  uint64 request_id = 1;
+  oneof body {
+    SendEnvelope send = 2;
+    Ack ack = 3;
+    Ping ping = 4;
+  }
+}
+
+message ServerFrame {
+  // Echoes ClientFrame.request_id when the frame is a response.
+  uint64 request_id = 1;
+  oneof body {
+    SendResult send_result = 2;
+    Envelope deliver = 3;
+    Pong pong = 4;
+    Error error = 5;
+  }
+}
+
+message SendEnvelope {
+  Envelope envelope = 1;
+  // Recipient device ids, resolved by the sender from group state.
+  repeated bytes recipient_devices = 2;
+}
+
+message SendResult {
+  bool accepted = 1;
+  // Set when a handshake message lost the race for its epoch (doc 03 §5.3).
+  bool epoch_conflict = 2;
+}
+
+message Ack {
+  bytes message_id = 1;
+}
+
+message Ping {}
+message Pong {}
+
+message Error {
+  uint32 code = 1;
+  string message = 2;
+}

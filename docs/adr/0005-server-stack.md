@@ -14,7 +14,7 @@ The server routes ciphertext, holds queues and key packages, and must be easy to
 4. **Microservices from day one**: harder to self-host, unnecessary at this scale.
 
 ## Decision
-A single Rust binary with internal modules (gateway, accounts, contact lookup, keys, delivery, group epochs, blobs, push, call signalling). PostgreSQL for durable state and the delivery queue; Valkey for presence and rate limits; S3-compatible storage for blobs (MinIO when self-hosting); Web Push via VAPID. WebSocket transport with Protobuf frames.
+A single Rust binary with internal modules (gateway, accounts, contact lookup, keys, delivery, group epochs, blobs, push, call signalling). PostgreSQL for durable state and the delivery queue; Valkey for presence and rate limits; S3-compatible storage for blobs (managed S3 in a US region, or SeaweedFS when self-hosting; MinIO's community edition is no longer maintained); Web Push via VAPID. WebSocket transport with Protobuf frames.
 
 ## Consequences
 Modules must keep clean boundaries so they can be split into services later. Each server instance needs a shared connection registry (Valkey pub/sub).

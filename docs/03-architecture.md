@@ -166,6 +166,6 @@ lists, plaintext group names/members (goal), locations, call content.
 - **Rate limiting & abuse:** per-account and per-IP token buckets at the edge;
   SMS-pumping protection (per-prefix limits, CAPTCHA/proof-of-work before
   sending a code, block premium-rate ranges).
-- **Self-hosting:** every service ships as a container; a single Docker
-  Compose file runs the full stack (gateway + services, PostgreSQL, Valkey,
-  MinIO, LiveKit, coturn) for small deployments.
+- **Deployment:** every component ships as a container. Production runs
+  on Kubernetes via a Helm chart (doc 10, ADR-0014); a Docker Compose file
+  runs the full stack for local development.

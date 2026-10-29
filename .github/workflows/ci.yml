@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy -p chat-core --target wasm32-unknown-unknown --features wasm -- -D warnings
+      - run: cargo test --workspace
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: Install wasm-bindgen CLI
+        run: cargo install wasm-bindgen-cli --locked --version "$(scripts/wasm-bindgen-version.sh)"
+      - run: scripts/build-wasm.sh
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - name: Install browsers
+        run: pnpm --filter web exec playwright install --with-deps chromium firefox webkit
+      - name: End-to-end tests (Chromium, Firefox, WebKit)
+        run: pnpm --filter web e2e
+        env:
+          PW_ALL_BROWSERS: "1"
+          CI: "1"
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: helm lint deploy/helm/chat
+      - run: helm template chat deploy/helm/chat > /dev/null

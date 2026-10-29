@@ -1,0 +1,8 @@
+apiVersion: v2
+name: chat
+description: End-to-end encrypted chat service (server + web client)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+license: AGPL-3.0-or-later
+home: https://github.com/hype-armor/chat

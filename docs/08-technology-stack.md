@@ -19,7 +19,7 @@ cost to operate**.
 | Client UI | **TypeScript + React + Vite**, custom service worker, installable PWA | 0004 |
 | Local storage | **SQLite WASM on OPFS**, page-encrypted; key wrapped by non-extractable WebCrypto key | 0003 |
 | Server | **Rust** (tokio + axum) modular monolith; WebSocket; Protobuf | 0005 |
-| Datastores | **PostgreSQL** (accounts, keys, queues), **Valkey** (presence, rate limits), **S3-compatible** blobs (MinIO when self-hosted) | 0005 |
+| Datastores | **PostgreSQL** (accounts, keys, queues), **Valkey** (presence, rate limits), **S3-compatible** blobs (SeaweedFS when self-hosted) | 0005 |
 | Push | **Web Push** (VAPID, RFC 8291) | 0005 |
 | Calls | **LiveKit** SFU + **coturn** TURN; **SFrame** keyed from MLS | 0006 |
 | Offline | Tier 1: WebRTC over local network + QR pairing; Tier 2: native BLE / Wi-Fi Aware plugins | 0007 |
@@ -28,6 +28,7 @@ cost to operate**.
 | Backup | Encrypted backup with user-held recovery key | 0010 |
 | Identity | Phone number + SMS/voice one-time code via pluggable provider | 0011 |
 | Licence | AGPL-3.0-or-later for code; CC BY 4.0 for the protocol spec | 0012 |
+| Runtime / hosting | **Kubernetes** in a **US** region; CloudNativePG, cert-manager, LiveKit chart | 0014 |
 | Native wrappers (later) | **Capacitor** (Android/iOS), **Tauri** (desktop), reusing the web UI and core | 0013 |
 
 ## Why these fit
@@ -76,4 +77,4 @@ cost to operate**.
 | Testing | `cargo test`, Vitest, **Playwright** for multi-browser end-to-end tests (Chromium, Firefox, WebKit), cargo-fuzz for parsers |
 | Reproducible builds | Pinned toolchains + Nix flake; release hashes published to a transparency log (Sigstore) |
 | CI | GitHub Actions |
-| Self-host packaging | Docker images + Docker Compose; Helm chart later |
+| Deployment | Kubernetes + Helm chart (production, ADR-0014); Docker Compose for local development |

@@ -1,0 +1,77 @@
+# Default values for the chat chart. See docs/10-deployment-kubernetes.md.
+# Datastores (PostgreSQL, object storage) and LiveKit are installed
+# separately; this chart deploys our own components only.
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Public hostname serving both the web app (/) and the API (/v1, /healthz).
+host: chat.example.com
+
+server:
+  image:
+    repository: ghcr.io/hype-armor/chat-server
+    tag: ""            # defaults to .Chart.AppVersion
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  # Secret holding DATABASE_URL (e.g. the CloudNativePG app secret's `uri`).
+  database:
+    existingSecret: chat-db-app
+    secretKey: uri
+  logFormat: json
+  logLevel: info
+  extraEnv: []
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { memory: 512Mi }
+
+web:
+  image:
+    repository: ghcr.io/hype-armor/chat-web
+    tag: ""
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  # Extra CSP connect-src origins, e.g. the LiveKit signalling URL.
+  cspConnectExtra: "wss://rtc.chat.example.com"
+  resources:
+    requests: { cpu: 20m, memory: 32Mi }
+    limits: { memory: 128Mi }
+
+# Classic Ingress. Long timeouts keep client WebSockets open.
+ingress:
+  enabled: true
+  className: ""
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+  tls:
+    enabled: true
+    secretName: chat-tls
+
+# Gateway API alternative to Ingress (enable one or the other).
+gateway:
+  enabled: false
+  parentRefs: []
+  #  - name: public
+  #    namespace: gateway-system
+
+networkPolicy:
+  enabled: true
+  # Namespace label selecting the ingress/gateway controller pods' namespace.
+  ingressNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: ingress
+
+serviceAccount:
+  create: true
+  name: ""
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]

@@ -20,3 +20,4 @@ revisited; do it with a new ADR that supersedes the old one.
 | [0011](0011-identity-phone-number.md) | Account identity: phone number | Accepted |
 | [0012](0012-licence.md) | Licence: AGPL-3.0-or-later (code), CC BY 4.0 (spec) | Accepted |
 | [0013](0013-native-wrappers.md) | Native wrappers: Capacitor (mobile), Tauri (desktop) | Accepted |
+| [0014](0014-kubernetes-us-hosting.md) | Run on Kubernetes, hosted in the United States | Accepted |
