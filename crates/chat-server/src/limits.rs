@@ -36,6 +36,9 @@ pub struct Limits {
     pub invites_per_day: i32,
     /// Device link codes per client IP per hour (ADR-0019).
     pub links_per_ip_per_hour: i32,
+    /// Restore attempts per client IP per hour and per account per day.
+    pub restores_per_ip_per_hour: i32,
+    pub restores_per_account_per_day: i32,
     /// Member device-list checks per device per hour (ADR-0022).
     pub device_lists_per_hour: i32,
     /// User reports per device per day (FR-ID-8).
@@ -57,6 +60,8 @@ impl Default for Limits {
             links_per_ip_per_hour: 20,
             reports_per_day: 20,
             device_lists_per_hour: 120,
+            restores_per_ip_per_hour: 10,
+            restores_per_account_per_day: 10,
             trust_proxy_headers: false,
         }
     }

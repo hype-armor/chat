@@ -28,6 +28,15 @@ import { RecentIds, fromHex, makeIdentity, plain, randomId, splitIdentity, toHex
 import { type DeviceSync, deviceHex, linkText, memberDevicePlan, parseDeviceSync, parseLinkCode } from './devices'
 import { applyReceipt, splitIds } from './receipts'
 import {
+  deriveBackupKeys,
+  formatRecoveryKey,
+  newRecoveryKey,
+  openBackup,
+  parseRecoveryKey,
+  sealBackup,
+  sha256,
+} from './backup'
+import {
   KEY_PACKAGE_TARGET,
   type KeyBook,
   keyPackagesToUpload,
@@ -52,6 +61,8 @@ import { SecureStore } from './storage'
 
 /** How long the server may take to answer a request before we reconnect. */
 const REQUEST_TIMEOUT_MS = 20_000
+/** Upload a backup at most this often, when something changed (ADR-0022). */
+const BACKUP_INTERVAL_MS = 10 * 60_000
 /** Check members' device lists this often while connected (ADR-0022). */
 const MEMBER_CHECK_MS = 10 * 60_000
 /** Check the server's key-package count this often while connected. */
@@ -75,7 +86,7 @@ type Conversation = {
   /** Admin account ids in priority order (groups only, ADR-0016). */
   admins?: string[]
   /** 'left' or 'removed': history stays readable, sending is disabled. */
-  status?: 'left' | 'removed'
+  status?: 'left' | 'removed' | 'restoring'
   /** The account's private conversation of its own devices (ADR-0019); hidden. */
   self?: boolean
   /** Started by someone this user has no connection to, until accepted (FR-SAF-3). */
@@ -148,6 +159,17 @@ type State = {
   blocked: string[]
   /** Whether to send read receipts (FR-MSG-5); delivery receipts always go. */
   readReceipts: boolean
+  /** Encrypted backups (ADR-0022): on, and when the last one was uploaded. */
+  backup?: { lastAt?: number }
+}
+
+/** What a backup holds (ADR-0022): no MLS state, keys or tokens. */
+type BackupPayload = {
+  version: 1
+  createdAt: number
+  displayName: string
+  state: Pick<State, 'conversations' | 'names' | 'usernames' | 'blocked' | 'verified' | 'keys' | 'readReceipts'>
+  messages: Record<string, ChatMessage[]>
 }
 
 const emptyState = (): State => ({
@@ -185,6 +207,9 @@ export class Engine {
   /** Timer for re-sending after a transient failure. */
   private retryTimer?: ReturnType<typeof setTimeout>
   private replenishing = false
+  /** Something changed since the last backup upload. */
+  private backupDirty = false
+  private backupTimer?: ReturnType<typeof setInterval>
   private keyCheckTimer?: ReturnType<typeof setInterval>
   private memberCheckTimer?: ReturnType<typeof setInterval>
   /** Pending own-device reconciliation (see `syncOwnDevices`). */
@@ -252,6 +277,7 @@ export class Engine {
       conversations,
       alerts: this.state.alerts,
       readReceipts: this.state.readReceipts,
+      backup: this.state.backup ? { lastAt: this.state.backup.lastAt } : undefined,
     }
   }
 
@@ -274,7 +300,8 @@ export class Engine {
     return offer
   }
 
-  private async register(reg: Registered, displayName: string) {
+  /** `prepare` runs after the new identity exists and before connecting. */
+  private async register(reg: Registered, displayName: string, prepare?: () => Promise<void>) {
     await this.exclusive(async () => {
       this.core = this.pending!.intoClient(makeIdentity(reg.account_id, reg.device_id))
       this.pending = undefined
@@ -291,9 +318,100 @@ export class Engine {
       await this.persist()
       await this.store.putJson('account', this.account)
       await api.uploadKeyPackages(reg.token, packages.map(toBase64))
+      await prepare?.()
     })
     this.connect()
     this.emitView()
+  }
+
+  // ---- backup and restore (ADR-0022) -----------------------------------------
+
+  /** Turns backups on with a new recovery key; returns it, to show once. */
+  async setupBackup(): Promise<string> {
+    const { account } = this.ready()
+    const recovery = newRecoveryKey()
+    const keys = await deriveBackupKeys(recovery)
+    await api.setBackupKey(account.token, toBase64(await sha256(keys.auth)))
+    await this.store.putKey('backup', keys.encryption)
+    await this.exclusive(async () => {
+      this.state.backup = {}
+      await this.persist()
+    })
+    await this.backupNow()
+    return formatRecoveryKey(recovery)
+  }
+
+  async turnOffBackup() {
+    await api.deleteBackup(this.ready().account.token)
+    await this.store.putKey('backup', undefined)
+    await this.exclusive(async () => {
+      this.state.backup = undefined
+      await this.persist()
+    })
+    this.emitView()
+  }
+
+  /** Encrypts this device's history and uploads it. */
+  async backupNow() {
+    const { account } = this.ready()
+    const key = await this.store.getKey('backup')
+    if (!key || !this.state.backup) return
+    const payload = await this.exclusive(async () => {
+      const messages: Record<string, ChatMessage[]> = {}
+      const conversations: State['conversations'] = {}
+      for (const c of Object.values(this.state.conversations)) {
+        if (c.self) continue
+        conversations[c.id] = c
+        messages[c.id] = await this.messages(c.id)
+      }
+      const { names, usernames, blocked, verified, keys, readReceipts } = this.state
+      return {
+        version: 1,
+        createdAt: Date.now(),
+        displayName: account.displayName,
+        state: { conversations, names, usernames, blocked, verified, keys, readReceipts },
+        messages,
+      } satisfies BackupPayload
+    })
+    await api.uploadBackup(account.token, await sealBackup(key, payload))
+    await this.exclusive(async () => {
+      if (this.state.backup) this.state.backup.lastAt = payload.createdAt
+      await this.persist()
+    })
+    this.backupDirty = false
+    this.emitView()
+  }
+
+  /**
+   * On a new device: proves the recovery key, becomes the account's only
+   * device and restores the history. Conversations wait until members add
+   * this device back (ADR-0022).
+   */
+  async restore(username: string, recoveryText: string) {
+    if (this.account) throw new Error('Already signed in')
+    const recovery = parseRecoveryKey(recoveryText)
+    if (!recovery) throw new Error('A recovery key is 26 letters and digits, like ABCD-EFGH-…')
+    const keys = await deriveBackupKeys(recovery)
+    this.pending ??= new PendingClient()
+    const reg = await api.restore(username.trim(), toBase64(keys.auth), toBase64(this.pending.publicKey()))
+    await this.register(reg, '', async () => {
+      const backup = await openBackup<BackupPayload>(keys.encryption, await api.downloadBackup(reg.token))
+      this.account!.displayName = backup.displayName
+      await this.store.putJson('account', this.account)
+      const restored = backup.state
+      for (const c of Object.values(restored.conversations)) {
+        c.status = c.status ?? 'restoring'
+        c.request = undefined
+        await this.store.putJson(`messages:${c.id}`, backup.messages[c.id] ?? [])
+      }
+      // This device is the account's own: its key must not raise an alert.
+      Object.assign(this.state, restored, {
+        backup: { lastAt: backup.createdAt },
+        expectedOwn: [deviceHex(reg.device_id)],
+      })
+      await this.store.putKey('backup', keys.encryption)
+      await this.persist()
+    })
   }
 
   // ---- linked devices (ADR-0019) ---------------------------------------------
@@ -1215,6 +1333,11 @@ export class Engine {
     this.keyCheckTimer ??= setInterval(() => {
       if (this.connection === 'online') void this.replenishKeyPackages()
     }, KEY_PACKAGE_CHECK_MS)
+    this.backupTimer ??= setInterval(() => {
+      if (this.connection === 'online' && this.backupDirty && this.state.backup) {
+        this.backupNow().catch((e) => console.warn('backup failed', e))
+      }
+    }, BACKUP_INTERVAL_MS)
     // Members' devices change without telling us (restores, deletions).
     this.memberCheckTimer ??= setInterval(() => {
       if (this.connection === 'online') this.scheduleSync()
@@ -1246,6 +1369,10 @@ export class Engine {
         return
       case 'deliver':
         void this.onDeliver(frame)
+        return
+      case 'devices_changed':
+        // A member restored, linked or lost a device (ADR-0022).
+        this.scheduleSync()
         return
       default: {
         const waiter = this.waiters.get(frame.requestId)
@@ -1328,6 +1455,17 @@ export class Engine {
   private async apply(event: ReturnType<CoreClient['receive']>, messageId: string) {
     const conversationId = toHex(event.conversationId)
     if (event.kind === 'joined') {
+      const restored = this.state.conversations[conversationId]
+      if (restored?.status === 'restoring') {
+        // Re-added after a restore: keep the history and group details.
+        restored.status = undefined
+        restored.peers = this.peersOf(conversationId)
+        await this.observeKeysIn(conversationId)
+        this.queueProfile(conversationId)
+        this.emitView()
+        this.emit({ type: 'messages', conversationId })
+        return
+      }
       const conv: Conversation = { id: conversationId, peers: this.peersOf(conversationId), lastAt: Date.now() }
       const meta = this.state.syncedMeta[conversationId]
       if (meta) {
@@ -1706,6 +1844,7 @@ export class Engine {
   }
 
   private async persist() {
+    this.backupDirty = true
     this.state.seen = this.recent.toJSON()
     await this.store.putBytes('core', this.core!.snapshot())
     await this.store.putJson('app', this.state)

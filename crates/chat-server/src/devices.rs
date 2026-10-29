@@ -156,7 +156,9 @@ pub async fn complete(
         .bind(registered.device_id)
         .execute(&mut *tx)
         .await?;
+    let watchers = watchers(&mut tx, account_id).await?;
     tx.commit().await?;
+    state.hub.devices_changed(&watchers);
     Ok(Json(registered))
 }
 
@@ -217,18 +219,23 @@ pub async fn remove(
             "use another device to remove this one",
         ));
     }
-    let deleted = sqlx::query(
-        "DELETE FROM devices WHERE device_id = $1
-         AND account_id = (SELECT account_id FROM devices WHERE device_id = $2)",
-    )
-    .bind(req.device_id)
-    .bind(device)
-    .execute(db(&state)?)
-    .await?;
+    let mut tx = db(&state)?.begin().await?;
+    let (account,): (Uuid,) = sqlx::query_as("SELECT account_id FROM devices WHERE device_id = $1")
+        .bind(device)
+        .fetch_one(&mut *tx)
+        .await?;
+    let watchers = watchers(&mut tx, account).await?;
+    let deleted = sqlx::query("DELETE FROM devices WHERE device_id = $1 AND account_id = $2")
+        .bind(req.device_id)
+        .bind(account)
+        .execute(&mut *tx)
+        .await?;
     if deleted.rows_affected() == 0 {
         return Err(ApiError::NotFound("no such device on this account"));
     }
+    tx.commit().await?;
     state.hub.disconnect(&req.device_id);
+    state.hub.devices_changed(&watchers);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -241,8 +248,7 @@ pub struct DevicesOf {
 
 #[derive(Serialize)]
 pub struct AccountDevices {
-    /// Account id → its devices, oldest first. Accounts that share no
-    /// conversation with the caller (including deleted ones) are absent.
+    /// Account id → its devices, oldest first. Deleted accounts are absent.
     devices: HashMap<Uuid, Vec<Uuid>>,
 }
 
@@ -266,18 +272,13 @@ pub async fn of(
         limits::HOUR,
     )
     .await?;
-    // Only accounts sharing a conversation with the caller: no enumeration.
+    // Account ids are random and learned only from groups or a username
+    // lookup (which returns devices too), so this reveals nothing more.
     let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
-        "SELECT d.account_id, d.device_id FROM devices d
-         WHERE d.account_id = ANY($1) AND EXISTS (
-             SELECT 1 FROM conversation_members mine
-             JOIN conversation_members theirs USING (conversation_id)
-             JOIN devices td ON td.device_id = theirs.device_id
-             WHERE mine.device_id = $2 AND td.account_id = d.account_id)
-         ORDER BY d.created_at, d.device_id",
+        "SELECT account_id, device_id FROM devices WHERE account_id = ANY($1)
+         ORDER BY created_at, device_id",
     )
     .bind(&req.account_ids)
-    .bind(device)
     .fetch_all(db)
     .await?;
     let mut devices: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
@@ -285,4 +286,25 @@ pub async fn of(
         devices.entry(account).or_default().push(device);
     }
     Ok(Json(AccountDevices { devices }))
+}
+
+/// Devices to tell when `account`'s devices change: its own and those of
+/// everyone sharing a conversation with it (ADR-0022). Call before
+/// deleting devices, whose memberships go with them.
+pub async fn watchers(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    account: Uuid,
+) -> Result<Vec<Uuid>, ApiError> {
+    let rows: Vec<(Uuid,)> = sqlx::query_as(
+        "SELECT device_id FROM devices WHERE account_id = $1
+         UNION
+         SELECT theirs.device_id FROM conversation_members mine
+         JOIN devices d ON d.device_id = mine.device_id
+         JOIN conversation_members theirs USING (conversation_id)
+         WHERE d.account_id = $1",
+    )
+    .bind(account)
+    .fetch_all(&mut **tx)
+    .await?;
+    Ok(rows.into_iter().map(|(d,)| d).collect())
 }

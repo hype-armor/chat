@@ -584,3 +584,16 @@ button.danger {
   justify-items: center;
   margin: 0.75rem 0;
 }
+
+/* Backup (ADR-0022) */
+.recovery {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.devices .actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}

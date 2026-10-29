@@ -15,8 +15,8 @@ use axum::{
     response::Response,
 };
 use chat_proto::v1::{
-    AuthResult, ClientFrame, ContentType, Error, Pong, SendEnvelope, SendResult, ServerFrame,
-    client_frame, server_frame,
+    AuthResult, ClientFrame, ContentType, DevicesChanged, Error, Pong, SendEnvelope, SendResult,
+    ServerFrame, client_frame, server_frame,
 };
 use prost::Message as _;
 use sqlx::PgPool;
@@ -28,7 +28,7 @@ use crate::{
     auth::device_for_token,
     delivery::{self, SendOutcome},
     error::ApiError,
-    hub::Registration,
+    hub::{Registration, Wake},
     keys, limits,
     metrics::ConnectionGuard,
 };
@@ -52,7 +52,7 @@ struct Authed {
     device: Uuid,
     _registration: Registration,
     _counted: ConnectionGuard,
-    wake: mpsc::Receiver<()>,
+    wake: mpsc::Receiver<Wake>,
     /// Highest queue_id sent on this connection.
     cursor: i64,
 }
@@ -99,7 +99,10 @@ impl Session {
                     Some(Err(e)) => return Err(e),
                 },
                 wake = recv_wake(&mut self.authed) => match wake {
-                    Some(()) => self.flush(true).await?,
+                    Some(Wake::Deliveries) => self.flush(true).await?,
+                    Some(Wake::DevicesChanged) => {
+                        self.send(reply(0, server_frame::Body::DevicesChanged(DevicesChanged {}))).await?
+                    }
                     // The device was removed (ADR-0019).
                     None => {
                         let _ = self.socket.send(Message::Close(None)).await;
@@ -291,7 +294,7 @@ async fn send_envelope(
     })))
 }
 
-async fn recv_wake(authed: &mut Option<Authed>) -> Option<()> {
+async fn recv_wake(authed: &mut Option<Authed>) -> Option<Wake> {
     match authed {
         Some(a) => a.wake.recv().await,
         None => std::future::pending().await,

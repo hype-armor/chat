@@ -612,7 +612,7 @@ pub fn encode_ping(request_id: u32) -> Vec<u8> {
     client_frame(request_id, client_frame::Body::Ping(Ping {}))
 }
 
-/// A decoded `ServerFrame`. `kind` is one of `auth`, `deliver`,
+/// A decoded `ServerFrame`. `kind` is one of `auth`, `deliver`, `devices_changed`,
 /// `send_result`, `pong`, `error`, `empty`.
 #[wasm_bindgen]
 pub struct ServerFrameView {
@@ -662,6 +662,7 @@ pub fn decode_server_frame(bytes: &[u8]) -> Result<ServerFrameView, JsError> {
         key_packages: 0,
     };
     match frame.body {
+        Some(server_frame::Body::DevicesChanged(_)) => view.kind = "devices_changed".to_owned(),
         Some(server_frame::Body::AuthResult(a)) => {
             view.kind = "auth".to_owned();
             view.device_id = a.device_id;

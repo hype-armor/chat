@@ -9,7 +9,7 @@ export type ConversationSummary = {
   isGroup: boolean
   amAdmin: boolean
   /** 'left' / 'removed': read-only history. */
-  status: 'active' | 'left' | 'removed'
+  status: 'active' | 'left' | 'removed' | 'restoring'
   /** Including this user. */
   memberCount: number
   /** 1:1 chats: the other person's account id. */
@@ -42,6 +42,8 @@ export type AppView =
       alerts: { id: string; text: string }[]
       /** Whether this user sends read receipts (FR-MSG-5). */
       readReceipts: boolean
+      /** Encrypted backups are on (ADR-0022), with the last upload time. */
+      backup?: { lastAt?: number }
     }
 
 /** One of this account's devices (ADR-0019). */
@@ -122,6 +124,10 @@ export type CoreRequest =
   | { type: 'dismissAlert'; id: string }
   | { type: 'acceptRequest'; conversationId: string }
   | { type: 'deleteAccount'; username: string }
+  | { type: 'setupBackup' }
+  | { type: 'backupNow' }
+  | { type: 'turnOffBackup' }
+  | { type: 'restore'; username: string; recoveryKey: string }
   | { type: 'markRead'; conversationId: string }
   | { type: 'retryMessage'; conversationId: string; messageId: string }
   | { type: 'setReadReceipts'; on: boolean }
@@ -147,6 +153,7 @@ export type CoreResponseBody =
   | { type: 'pushKey'; key: string }
   | { type: 'link'; offer: LinkOffer }
   | { type: 'invite'; offer: InviteOffer }
+  | { type: 'recoveryKey'; key: string }
   | { type: 'devices'; devices: DeviceInfo[] }
   | { type: 'qr'; text?: string }
   | { type: 'safety'; safety: SafetyNumber }

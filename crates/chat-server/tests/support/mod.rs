@@ -59,6 +59,41 @@ impl TestServer {
         Self { state, ws_url }
     }
 
+    pub async fn put_json(&self, path: &str, token: &str, body: Value) -> (u16, Vec<u8>) {
+        let req = Request::put(path)
+            .header("authorization", format!("Bearer {token}"))
+            .header("content-type", "application/json");
+        let res = router(self.state.clone())
+            .oneshot(req.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap();
+        let status = res.status().as_u16();
+        let bytes = res.into_body().collect().await.unwrap().to_bytes();
+        (status, bytes.to_vec())
+    }
+
+    /// A request with a raw body; returns the raw response body.
+    pub async fn raw(
+        &self,
+        method: &str,
+        path: &str,
+        token: &str,
+        body: Vec<u8>,
+    ) -> (u16, Vec<u8>) {
+        let req = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("authorization", format!("Bearer {token}"))
+            .header("content-type", "application/octet-stream");
+        let res = router(self.state.clone())
+            .oneshot(req.body(Body::from(body)).unwrap())
+            .await
+            .unwrap();
+        let status = res.status().as_u16();
+        let bytes = res.into_body().collect().await.unwrap().to_bytes();
+        (status, bytes.to_vec())
+    }
+
     #[allow(dead_code)]
     pub async fn get(&self, path: &str, token: Option<&str>) -> (u16, Value) {
         let mut req = Request::get(path);

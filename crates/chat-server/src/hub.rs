@@ -14,7 +14,17 @@ use std::{
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-type Sessions = HashMap<Uuid, Vec<(u64, mpsc::Sender<()>)>>;
+/// Why a session is woken.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Wake {
+    /// New envelopes are queued for the device.
+    Deliveries,
+    /// A member's devices changed (restore, link, removal, deletion): the
+    /// client re-checks its groups (ADR-0022).
+    DevicesChanged,
+}
+
+type Sessions = HashMap<Uuid, Vec<(u64, mpsc::Sender<Wake>)>>;
 
 #[derive(Clone, Default)]
 pub struct Hub {
@@ -30,9 +40,9 @@ pub struct Registration {
 }
 
 impl Hub {
-    pub fn register(&self, device: Uuid) -> (Registration, mpsc::Receiver<()>) {
-        // Capacity 1: a pending wake-up already covers any later ones.
-        let (tx, rx) = mpsc::channel(1);
+    pub fn register(&self, device: Uuid) -> (Registration, mpsc::Receiver<Wake>) {
+        // Small: pending wake-ups already cover later ones of the same kind.
+        let (tx, rx) = mpsc::channel(4);
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         self.lock().entry(device).or_default().push((id, tx));
         (
@@ -51,12 +61,22 @@ impl Hub {
         self.lock().remove(device);
     }
 
+    /// Tells the devices' open sessions that a member's devices changed.
+    pub fn devices_changed(&self, devices: &[Uuid]) {
+        let sessions = self.lock();
+        for device in devices {
+            for (_, tx) in sessions.get(device).into_iter().flatten() {
+                let _ = tx.try_send(Wake::DevicesChanged);
+            }
+        }
+    }
+
     /// Wakes the device's sessions; false if it has none (it's offline).
     pub fn wake(&self, device: &Uuid) -> bool {
         match self.lock().get(device) {
             Some(sessions) => {
                 for (_, tx) in sessions {
-                    let _ = tx.try_send(());
+                    let _ = tx.try_send(Wake::Deliveries);
                 }
                 true
             }
@@ -90,10 +110,18 @@ mod tests {
         let hub = Hub::default();
         let device = Uuid::new_v4();
         let (reg, mut rx) = hub.register(device);
-        hub.wake(&device);
-        hub.wake(&device); // coalesced
-        assert!(rx.recv().await.is_some());
-        assert!(rx.try_recv().is_err());
+        for _ in 0..10 {
+            hub.wake(&device);
+        }
+        hub.devices_changed(&[device, Uuid::new_v4()]);
+        // A burst queues a bounded number of wake-ups.
+        let mut woken = Vec::new();
+        while let Ok(wake) = rx.try_recv() {
+            woken.push(wake);
+        }
+        assert_eq!(woken, [Wake::Deliveries; 4]);
+        hub.devices_changed(&[device]);
+        assert_eq!(rx.recv().await, Some(Wake::DevicesChanged));
         drop(reg);
         assert!(hub.lock().is_empty());
     }

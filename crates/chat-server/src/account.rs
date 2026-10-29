@@ -42,6 +42,7 @@ pub async fn delete(
             .bind(account)
             .fetch_all(&mut *tx)
             .await?;
+    let watchers = crate::devices::watchers(&mut tx, account).await?;
     sqlx::query("DELETE FROM accounts WHERE account_id = $1")
         .bind(account)
         .execute(&mut *tx)
@@ -50,6 +51,7 @@ pub async fn delete(
     for (device,) in devices {
         state.hub.disconnect(&device);
     }
+    state.hub.devices_changed(&watchers);
     tracing::info!("account deleted");
     Ok(StatusCode::NO_CONTENT)
 }

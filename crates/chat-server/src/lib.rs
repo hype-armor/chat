@@ -3,6 +3,7 @@
 
 mod account;
 mod auth;
+mod backup;
 pub mod config;
 mod delivery;
 mod devices;
@@ -23,7 +24,7 @@ use axum::{
     Router,
     extract::State,
     http::StatusCode,
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use sqlx::PgPool;
 
@@ -94,6 +95,17 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/devices", get(devices::list))
         .route("/v1/devices/remove", post(devices::remove))
         .route("/v1/devices/of", post(devices::of))
+        .route(
+            "/v1/backup",
+            put(backup::upload)
+                .get(backup::download)
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    backup::MAX_BACKUP_BYTES,
+                )),
+        )
+        .route("/v1/backup/key", put(backup::set_key))
+        .route("/v1/backup/delete", post(backup::delete))
+        .route("/v1/backup/restore", post(backup::restore))
         .route("/v1/reports", post(reports::create))
         .route("/v1/account/delete", post(account::delete))
         .route("/v1/push/key", get(push::public_key))
