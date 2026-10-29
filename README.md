@@ -16,7 +16,7 @@ messenger yet. Design docs: [`docs/`](docs/README.md).
 | `crates/chat-proto` | Rust types generated from `proto/` |
 | `crates/chat-core` | Client core: MLS (OpenMLS), envelopes, padding. Builds natively and to WebAssembly |
 | `crates/chat-server` | Server (Rust, axum): phone sign-up, key directory, authenticated WebSocket delivery queue ([API](docs/11-api.md)) |
-| `web/` | Web client / PWA (TypeScript, React, Vite); runs the core in a Web Worker |
+| `web/` | Web client / PWA (TypeScript, React, Vite): sign-up, 1:1 chats; keys, storage and networking live in a Web Worker |
 | `deploy/docker` | Container images (server; web served by nginx with a strict CSP) |
 | `deploy/compose` | Local development stack |
 | `deploy/helm/chat` | Helm chart for Kubernetes |
@@ -39,13 +39,17 @@ export DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres
 cargo test --workspace          # core + server tests
 scripts/build-wasm.sh           # core -> web/src/core/pkg
 pnpm install
-pnpm dev                        # web app at http://localhost:5173
-cargo run -p chat-server        # server at http://localhost:8080 (no DB needed)
+cargo run -p chat-server        # server at http://localhost:8080 (uses DATABASE_URL)
+pnpm dev                        # web app at http://localhost:5173, proxies /v1 to :8080
 ```
+
+Verification codes are written to the server log in development (no SMS
+provider yet). Sign up in two browser profiles to chat with yourself.
 
 Web checks: `pnpm typecheck`, `pnpm test` (unit), `pnpm build`, then
 `pnpm --filter web e2e` (Playwright; set `PW_ALL_BROWSERS=1` to include
-Firefox and WebKit). The preview server applies the production security
+Firefox and WebKit, and `E2E_SERVER=1` with `DATABASE_URL` to run the
+two-user messaging tests against a real server). The preview server applies the production security
 headers from `deploy/docker/security-headers.inc.template`, so e2e tests
 catch CSP regressions.
 

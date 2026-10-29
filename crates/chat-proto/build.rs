@@ -2,7 +2,7 @@
 // is needed on developer machines or in CI.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proto_root = "../../proto";
-    let files = ["chat/v1/envelope.proto"];
+    let files = ["chat/v1/envelope.proto", "chat/v1/content.proto"];
     for file in files {
         println!("cargo:rerun-if-changed={proto_root}/{file}");
     }

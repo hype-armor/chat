@@ -16,6 +16,8 @@ Security-critical logic (crypto, envelope parsing, storage, mesh routing) must b
 Rust core built with wasm-bindgen, running in a dedicated worker (a SharedWorker where supported, so multiple tabs share one core). Local DB: official SQLite WASM build on the OPFS SyncAccessHandle VFS with page encryption (SQLite3MultipleCiphers); the DB key is wrapped by a non-extractable WebCrypto key.
 
 ## Consequences
+**Interim (Phase 1):** the client stores an encrypted snapshot of the MLS key store plus JSON app state and message history in IndexedDB (AES-GCM, non-extractable WebCrypto key). Move to SQLite on OPFS when history size makes whole-value rewrites too slow.
+
 WASM bundle size must be watched (target < 1 MB compressed). Multi-tab coordination is needed where SharedWorker is missing (Web Locks API leader election).
 
 ## Validation

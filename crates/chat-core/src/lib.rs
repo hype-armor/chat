@@ -3,6 +3,7 @@
 //! Runs natively (tests, future native wrappers) and as WebAssembly in a
 //! browser worker (`--features wasm`). See docs/03-architecture.md §3.
 
+pub mod client;
 pub mod envelope;
 pub mod mls;
 pub mod padding;

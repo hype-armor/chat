@@ -26,7 +26,7 @@
 | Phase | Scope | Exit criteria |
 |-------|-------|---------------|
 | **0. Spikes** | Scaffold in place (see repo README). (a) OpenMLS in WASM in all 3 browser engines, 50-member commit timing — *Chromium done: 17 ms on desktop*; (b) SQLite3MultipleCiphers on OPFS; (c) QR-paired WebRTC on a phone hotspot with no internet (iOS Safari PWA + Android Chrome), third peer joining via the mesh; (d) SFrame-encrypted 3-party call through LiveKit | All four demoed; ADRs confirmed or superseded |
-| **1. MVP messaging (web)** | Deployed continuously to the dev k3s cluster. Phone sign-up, device keys, 1:1 + groups (MLS), Web Push, encrypted local DB, PWA install, device linking by QR | Internal dogfood; delivery p95 < 1 s |
+| **1. MVP messaging (web)** | *In progress: server delivery, web sign-up and 1:1 chat done.* Deployed continuously to the dev k3s cluster. Phone sign-up, device keys, 1:1 + groups (MLS), Web Push, encrypted local DB, PWA install, device linking by QR | Internal dogfood; delivery p95 < 1 s |
 | **2. Media, location, backup** | Encrypted attachments, voice notes, one-shot + live location (foreground), encrypted backup | Feature-complete beta |
 | **3. Calling** | 1:1 P2P calls, then group calls via LiveKit with SFrame | Call success ≥ 99% |
 | **4. Local mode (Tier 1 offline)** | QR rooms, contacts + strangers, mesh relay, local calls, sync back online | Field test with 20+ devices |

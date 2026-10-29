@@ -1,0 +1,23 @@
+// Plaintext carried inside MLS application messages. Only group members
+// ever see these fields; the server sees only the encrypted Envelope.
+syntax = "proto3";
+
+package chat.v1;
+
+message Content {
+  // Sender's clock, milliseconds since the Unix epoch.
+  uint64 sent_at_ms = 1;
+  oneof body {
+    Text text = 2;
+    Profile profile = 3;
+  }
+}
+
+message Text {
+  string body = 1;
+}
+
+// Sent when a conversation starts so members can label each other.
+message Profile {
+  string display_name = 1;
+}
