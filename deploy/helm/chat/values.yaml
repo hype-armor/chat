@@ -20,6 +20,13 @@ server:
     secretKey: uri
   logFormat: json
   logLevel: info
+  # Web Push (VAPID) key. Create one with `chat-server generate-vapid-key`
+  # and store it in a Secret; without it a random key is used and push
+  # subscriptions break whenever the pod restarts.
+  vapid:
+    existingSecret: ""
+    secretKey: private-key
+    subject: "mailto:ops@example.com"
   extraEnv: []
   resources:
     requests: { cpu: 100m, memory: 128Mi }

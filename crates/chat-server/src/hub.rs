@@ -45,11 +45,16 @@ impl Hub {
         )
     }
 
-    pub fn wake(&self, device: &Uuid) {
-        if let Some(sessions) = self.lock().get(device) {
-            for (_, tx) in sessions {
-                let _ = tx.try_send(());
+    /// Wakes the device's sessions; false if it has none (it's offline).
+    pub fn wake(&self, device: &Uuid) -> bool {
+        match self.lock().get(device) {
+            Some(sessions) => {
+                for (_, tx) in sessions {
+                    let _ = tx.try_send(());
+                }
+                true
             }
+            None => false,
         }
     }
 

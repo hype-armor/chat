@@ -72,6 +72,14 @@ export class CoreClient {
     expect(await this.call({ type: 'addMembers', conversationId, phones }), 'ok')
   }
 
+  async pushKey(): Promise<string> {
+    return expect(await this.call({ type: 'pushKey' }), 'pushKey').key
+  }
+
+  async enablePush(subscription: PushSubscriptionJSON) {
+    expect(await this.call({ type: 'enablePush', subscription }), 'ok')
+  }
+
   async members(conversationId: string): Promise<MemberInfo[]> {
     return expect(await this.call({ type: 'members', conversationId }), 'members').members
   }

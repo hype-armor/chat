@@ -34,6 +34,15 @@ spec:
               value: {{ .Values.server.logFormat | quote }}
             - name: RUST_LOG
               value: {{ .Values.server.logLevel | quote }}
+            - name: CHAT_VAPID_SUBJECT
+              value: {{ .Values.server.vapid.subject | quote }}
+            {{- with .Values.server.vapid.existingSecret }}
+            - name: CHAT_VAPID_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.server.vapid.secretKey }}
+            {{- end }}
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:

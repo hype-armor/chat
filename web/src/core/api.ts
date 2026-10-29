@@ -9,6 +9,13 @@ export class ApiError extends Error {
   }
 }
 
+async function get<T>(path: string): Promise<T> {
+  const res = await fetch(path)
+  const json = await res.json().catch(() => undefined)
+  if (!res.ok) throw new ApiError(res.status, json?.error ?? `request failed (${res.status})`)
+  return json as T
+}
+
 async function post<T>(path: string, body: unknown, token?: string): Promise<T> {
   const headers: Record<string, string> = { 'content-type': 'application/json' }
   if (token) headers.authorization = `Bearer ${token}`
@@ -29,6 +36,10 @@ export const api = {
     post<void>('/v1/keys', { key_packages: keyPackages }, token),
   lookup: (token: string, phone: string) =>
     post<{ account_id: string; device_ids: string[] }>('/v1/lookup', { phone }, token),
+  pushKey: () => get<{ public_key: string }>('/v1/push/key'),
+  subscribePush: (token: string, subscription: PushSubscriptionJSON) =>
+    post<void>('/v1/push/subscription', subscription, token),
+  unsubscribePush: (token: string) => post<void>('/v1/push/unsubscribe', {}, token),
   groupEpoch: (token: string, groupId: string) =>
     post<{ epoch: number; last_commit_hash: string }>('/v1/groups/epoch', { group_id: groupId }, token),
   claim: (token: string, deviceIds: string[]) =>

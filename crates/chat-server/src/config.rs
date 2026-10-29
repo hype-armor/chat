@@ -10,6 +10,11 @@ pub struct Config {
     pub database_url: Option<String>,
     /// `CHAT_LOG_FORMAT`: `json` (default, for clusters) or `pretty`.
     pub json_logs: bool,
+    /// `CHAT_VAPID_PRIVATE_KEY`: base64url P-256 key for Web Push. Unset:
+    /// a random key is generated (development only).
+    pub vapid_private_key: Option<String>,
+    /// `CHAT_VAPID_SUBJECT`: contact for push services, e.g. `mailto:ops@example.com`.
+    pub vapid_subject: String,
 }
 
 impl Config {
@@ -23,6 +28,11 @@ impl Config {
             bind,
             database_url,
             json_logs,
+            vapid_private_key: std::env::var("CHAT_VAPID_PRIVATE_KEY")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            vapid_subject: std::env::var("CHAT_VAPID_SUBJECT")
+                .unwrap_or_else(|_| "mailto:admin@localhost".to_owned()),
         })
     }
 }
