@@ -204,7 +204,10 @@ async fn two_users_exchange_an_encrypted_message(pool: PgPool) {
     let got_hello = expect_delivery(&mut bob_ws).await;
     assert_eq!(
         envelope::open(&mut bob_conv, &bob, &got_hello).unwrap(),
-        Received::Application(b"hello bob".to_vec())
+        Received::Application {
+            sender: b"alice".to_vec(),
+            data: b"hello bob".to_vec()
+        }
     );
 
     // Live push while Bob is connected.
@@ -213,7 +216,10 @@ async fn two_users_exchange_an_encrypted_message(pool: PgPool) {
     let got_live = expect_delivery(&mut bob_ws).await;
     assert_eq!(
         envelope::open(&mut bob_conv, &bob, &got_live).unwrap(),
-        Received::Application(b"are you there?".to_vec())
+        Received::Application {
+            sender: b"alice".to_vec(),
+            data: b"are you there?".to_vec()
+        }
     );
 
     // Unacked envelopes are redelivered on reconnect; acked ones are not.

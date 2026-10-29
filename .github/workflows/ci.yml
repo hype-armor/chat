@@ -36,6 +36,14 @@ jobs:
 
   web:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 2s --health-timeout 5s --health-retries 30
     steps:
       - uses: actions/checkout@v4
       - run: rustup show
@@ -54,11 +62,22 @@ jobs:
       - run: pnpm build
       - name: Install browsers
         run: pnpm --filter web exec playwright install --with-deps chromium firefox webkit
+      - name: Upload server log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-server-log
+          path: target/e2e-server.log
+          if-no-files-found: ignore
+      - name: Build chat-server for messaging e2e tests
+        run: cargo build -p chat-server
       - name: End-to-end tests (Chromium, Firefox, WebKit)
         run: pnpm --filter web e2e
         env:
           PW_ALL_BROWSERS: "1"
           CI: "1"
+          E2E_SERVER: "1"
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
 
   helm:
     runs-on: ubuntu-latest

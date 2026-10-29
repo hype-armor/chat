@@ -1,5 +1,14 @@
 import { scriptUrl } from '../trusted-types'
-import type { BenchResult, CoreRequest, CoreResponseBody, CoreStatus, ResponseEnvelope } from './protocol'
+import type {
+  AppView,
+  BenchResult,
+  ChatMessage,
+  CoreEvent,
+  CoreRequest,
+  CoreResponseBody,
+  CoreStatus,
+  ResponseEnvelope,
+} from './protocol'
 import workerUrl from './worker.ts?worker&url'
 
 /** The subset of `Worker` the client uses, so tests can substitute a fake. */
@@ -8,13 +17,18 @@ export interface WorkerLike {
   addEventListener(type: 'message', listener: (event: MessageEvent<ResponseEnvelope>) => void): void
 }
 
-/** Promise-based access to the core worker. */
+/** Promise-based access to the core worker, plus its pushed events. */
 export class CoreClient {
   private nextId = 1
   private pending = new Map<number, (body: CoreResponseBody) => void>()
+  private listeners = new Set<(event: CoreEvent) => void>()
 
   constructor(private readonly worker: WorkerLike) {
     worker.addEventListener('message', ({ data }) => {
+      if ('event' in data) {
+        for (const listener of this.listeners) listener(data.event)
+        return
+      }
       const resolve = this.pending.get(data.id)
       if (resolve) {
         this.pending.delete(data.id)
@@ -27,16 +41,42 @@ export class CoreClient {
     return new CoreClient(new Worker(scriptUrl(workerUrl), { type: 'module' }))
   }
 
+  /** Subscribes to worker events; returns an unsubscribe function. */
+  subscribe(listener: (event: CoreEvent) => void): () => void {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+
+  async view(): Promise<AppView> {
+    return expect(await this.call({ type: 'view' }), 'view').view
+  }
+
+  async requestCode(phone: string) {
+    expect(await this.call({ type: 'requestCode', phone }), 'ok')
+  }
+
+  async verify(phone: string, code: string, displayName: string) {
+    expect(await this.call({ type: 'verify', phone, code, displayName }), 'ok')
+  }
+
+  async startChat(phone: string): Promise<string> {
+    return expect(await this.call({ type: 'startChat', phone }), 'conversation').conversationId
+  }
+
+  async messages(conversationId: string): Promise<ChatMessage[]> {
+    return expect(await this.call({ type: 'messages', conversationId }), 'messages').messages
+  }
+
+  async sendText(conversationId: string, text: string) {
+    expect(await this.call({ type: 'sendText', conversationId, text }), 'ok')
+  }
+
   async status(): Promise<CoreStatus> {
-    const body = await this.call({ type: 'status' })
-    if (body.type !== 'status') throw unexpected(body)
-    return body.status
+    return expect(await this.call({ type: 'status' }), 'status').status
   }
 
   async bench(members: number): Promise<BenchResult> {
-    const body = await this.call({ type: 'bench', members })
-    if (body.type !== 'bench') throw unexpected(body)
-    return body.result
+    return expect(await this.call({ type: 'bench', members }), 'bench').result
   }
 
   private call(request: CoreRequest): Promise<CoreResponseBody> {
@@ -48,6 +88,10 @@ export class CoreClient {
   }
 }
 
-function unexpected(body: CoreResponseBody): Error {
-  return new Error(body.type === 'error' ? body.message : `unexpected response: ${body.type}`)
+function expect<T extends CoreResponseBody['type']>(
+  body: CoreResponseBody,
+  type: T,
+): Extract<CoreResponseBody, { type: T }> {
+  if (body.type === type) return body as Extract<CoreResponseBody, { type: T }>
+  throw new Error(body.type === 'error' ? body.message : `unexpected response: ${body.type}`)
 }

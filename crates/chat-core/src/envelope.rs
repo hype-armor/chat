@@ -39,9 +39,10 @@ pub fn open(conv: &mut Conversation, device: &Device, envelope: &Envelope) -> Re
         return Err(Error::Malformed("envelope is for another conversation"));
     }
     match conv.receive(device, &envelope.ciphertext)? {
-        Received::Application(padded) => {
-            Ok(Received::Application(padding::unpad(&padded)?.to_vec()))
-        }
+        Received::Application { sender, data } => Ok(Received::Application {
+            sender,
+            data: padding::unpad(&data)?.to_vec(),
+        }),
         other => Ok(other),
     }
 }
@@ -75,7 +76,13 @@ mod tests {
         );
         let wire = encode(&env);
         let opened = open(&mut b, &bob, &decode(&wire).unwrap()).unwrap();
-        assert_eq!(opened, Received::Application(b"padded hello".to_vec()));
+        assert_eq!(
+            opened,
+            Received::Application {
+                sender: b"alice".to_vec(),
+                data: b"padded hello".to_vec()
+            }
+        );
     }
 
     #[test]

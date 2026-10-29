@@ -14,6 +14,11 @@ function productionHeaders(): Record<string, string> {
   return headers
 }
 
+// The web app talks to the server on the same origin (/v1). In development
+// and preview, proxy those requests to a locally running chat-server.
+const serverUrl = process.env.CHAT_SERVER_URL ?? 'http://127.0.0.1:8080'
+const proxy = { '/v1': { target: serverUrl, ws: true } }
+
 export default defineConfig({
   plugins: [
     react(),
@@ -46,7 +51,8 @@ export default defineConfig({
     }),
   ],
   worker: { format: 'es' },
-  preview: { headers: productionHeaders() },
+  server: { proxy },
+  preview: { headers: productionHeaders(), proxy },
   build: { target: 'es2022' },
   test: { include: ['src/**/*.test.ts'] },
 })

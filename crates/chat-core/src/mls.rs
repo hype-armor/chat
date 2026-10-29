@@ -4,7 +4,8 @@
 
 use openmls::prelude::{tls_codec::*, *};
 use openmls_basic_credential::SignatureKeyPair;
-use openmls_rust_crypto::OpenMlsRustCrypto;
+use openmls_rust_crypto::{MemoryStorage, RustCrypto};
+use openmls_traits::OpenMlsProvider;
 
 use crate::{Error, Result, mls_err};
 
@@ -15,17 +16,88 @@ pub const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_
 /// Exporter label for group-call frame keys (docs/05-media-and-calling.md §4).
 const CALL_KEY_LABEL: &str = "chat call sframe";
 
+/// OpenMLS provider whose in-memory key store can be exported and restored,
+/// so a browser can persist it between sessions.
+#[derive(Default)]
+pub struct Provider {
+    crypto: RustCrypto,
+    storage: MemoryStorage,
+}
+
+impl OpenMlsProvider for Provider {
+    type CryptoProvider = RustCrypto;
+    type RandProvider = RustCrypto;
+    type StorageProvider = MemoryStorage;
+
+    fn storage(&self) -> &MemoryStorage {
+        &self.storage
+    }
+
+    fn crypto(&self) -> &RustCrypto {
+        &self.crypto
+    }
+
+    fn rand(&self) -> &RustCrypto {
+        &self.crypto
+    }
+}
+
+impl Provider {
+    pub fn export(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+        let values = self
+            .storage
+            .values
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        values.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+    }
+
+    pub fn import(entries: Vec<(Vec<u8>, Vec<u8>)>) -> Self {
+        let provider = Self::default();
+        provider
+            .storage
+            .values
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .extend(entries);
+        provider
+    }
+}
+
+/// A signing key generated before the device has an identity: the public
+/// key is registered with the server, which then assigns the identity.
+pub struct PendingDevice {
+    signer: SignatureKeyPair,
+}
+
+impl PendingDevice {
+    pub fn generate() -> Result<Self> {
+        let signer = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm()).map_err(mls_err)?;
+        Ok(Self { signer })
+    }
+
+    pub fn public_key(&self) -> &[u8] {
+        self.signer.public()
+    }
+
+    pub fn into_device(self, identity: &[u8]) -> Result<Device> {
+        Device::with_signer(Provider::default(), self.signer, identity)
+    }
+}
+
 /// One device's MLS identity and key store.
 pub struct Device {
-    provider: OpenMlsRustCrypto,
+    provider: Provider,
     signer: SignatureKeyPair,
     credential: CredentialWithKey,
 }
 
 impl Device {
     pub fn new(identity: &[u8]) -> Result<Self> {
-        let provider = OpenMlsRustCrypto::default();
-        let signer = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm()).map_err(mls_err)?;
+        PendingDevice::generate()?.into_device(identity)
+    }
+
+    fn with_signer(provider: Provider, signer: SignatureKeyPair, identity: &[u8]) -> Result<Self> {
         signer.store(provider.storage()).map_err(mls_err)?;
         let credential = CredentialWithKey {
             credential: BasicCredential::new(identity.to_vec()).into(),
@@ -36,6 +108,29 @@ impl Device {
             signer,
             credential,
         })
+    }
+
+    /// Rebuilds a device from an exported key store.
+    pub fn restore(provider: Provider, identity: &[u8], public_key: &[u8]) -> Result<Self> {
+        let signer = SignatureKeyPair::read(
+            provider.storage(),
+            public_key,
+            CIPHERSUITE.signature_algorithm(),
+        )
+        .ok_or(Error::Malformed("signing key missing from snapshot"))?;
+        Self::with_signer(provider, signer, identity)
+    }
+
+    pub fn identity(&self) -> &[u8] {
+        credential_identity(&self.credential.credential)
+    }
+
+    pub fn public_key(&self) -> &[u8] {
+        self.signer.public()
+    }
+
+    pub fn provider(&self) -> &Provider {
+        &self.provider
     }
 
     /// A fresh single-use key package, as uploaded to the key directory.
@@ -62,6 +157,14 @@ impl Device {
     }
 }
 
+fn credential_identity(credential: &Credential) -> &[u8] {
+    // Only basic credentials are ever created; others have no identity.
+    match credential.credential_type() {
+        CredentialType::Basic => credential.serialized_content(),
+        _ => &[],
+    }
+}
+
 /// Output of a membership change: broadcast `commit` to existing members,
 /// send `welcome` to the new ones.
 pub struct MembershipChange {
@@ -72,7 +175,10 @@ pub struct MembershipChange {
 /// What an incoming message turned out to be.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Received {
-    Application(Vec<u8>),
+    Application {
+        sender: Vec<u8>,
+        data: Vec<u8>,
+    },
     /// A commit from another member was applied; the epoch advanced.
     EpochChanged(u64),
     /// A proposal was stored for a later commit.
@@ -116,6 +222,13 @@ impl Conversation {
         Ok(Self { group })
     }
 
+    /// Reloads a conversation from the device's key store.
+    pub fn load(device: &Device, id: &[u8]) -> Result<Option<Self>> {
+        let group =
+            MlsGroup::load(device.provider.storage(), &GroupId::from_slice(id)).map_err(mls_err)?;
+        Ok(group.map(|group| Self { group }))
+    }
+
     pub fn id(&self) -> Vec<u8> {
         self.group.group_id().as_slice().to_vec()
     }
@@ -126,6 +239,14 @@ impl Conversation {
 
     pub fn member_count(&self) -> usize {
         self.group.members().count()
+    }
+
+    /// Identities of all members, including this device.
+    pub fn member_identities(&self) -> Vec<Vec<u8>> {
+        self.group
+            .members()
+            .map(|m| credential_identity(&m.credential).to_vec())
+            .collect()
     }
 
     pub fn add_members(
@@ -185,10 +306,12 @@ impl Conversation {
             .group
             .process_message(&device.provider, message)
             .map_err(mls_err)?;
+        let sender = credential_identity(processed.credential()).to_vec();
         match processed.into_content() {
-            ProcessedMessageContent::ApplicationMessage(app) => {
-                Ok(Received::Application(app.into_bytes()))
-            }
+            ProcessedMessageContent::ApplicationMessage(app) => Ok(Received::Application {
+                sender,
+                data: app.into_bytes(),
+            }),
             ProcessedMessageContent::StagedCommitMessage(commit) => {
                 self.group
                     .merge_staged_commit(&device.provider, *commit)
@@ -212,55 +335,54 @@ impl Conversation {
 mod tests {
     use super::*;
 
-    #[test]
-    fn two_devices_exchange_messages() {
+    fn app(sender: &[u8], data: &[u8]) -> Received {
+        Received::Application {
+            sender: sender.to_vec(),
+            data: data.to_vec(),
+        }
+    }
+
+    fn pair() -> (Device, Conversation, Device, Conversation) {
         let alice = Device::new(b"alice").unwrap();
         let bob = Device::new(b"bob").unwrap();
-
-        let mut alice_conv = Conversation::create(&alice).unwrap();
-        let change = alice_conv
+        let mut a = Conversation::create(&alice).unwrap();
+        let change = a
             .add_members(&alice, &[&bob.key_package().unwrap()])
             .unwrap();
-        let mut bob_conv = Conversation::join(&bob, &change.welcome).unwrap();
+        let b = Conversation::join(&bob, &change.welcome).unwrap();
+        (alice, a, bob, b)
+    }
 
-        assert_eq!(alice_conv.id(), bob_conv.id());
-        assert_eq!(alice_conv.epoch(), bob_conv.epoch());
+    #[test]
+    fn two_devices_exchange_messages() {
+        let (alice, mut a, bob, mut b) = pair();
+        assert_eq!(a.id(), b.id());
+        assert_eq!(a.epoch(), b.epoch());
 
-        let ct = alice_conv.encrypt(&alice, b"hello bob").unwrap();
-        assert_eq!(
-            bob_conv.receive(&bob, &ct).unwrap(),
-            Received::Application(b"hello bob".to_vec())
-        );
-
-        let ct = bob_conv.encrypt(&bob, b"hi alice").unwrap();
-        assert_eq!(
-            alice_conv.receive(&alice, &ct).unwrap(),
-            Received::Application(b"hi alice".to_vec())
-        );
+        let ct = a.encrypt(&alice, b"hello bob").unwrap();
+        assert_eq!(b.receive(&bob, &ct).unwrap(), app(b"alice", b"hello bob"));
+        let ct = b.encrypt(&bob, b"hi alice").unwrap();
+        assert_eq!(a.receive(&alice, &ct).unwrap(), app(b"bob", b"hi alice"));
 
         assert_eq!(
-            alice_conv.export_call_key(&alice, b"call-1").unwrap(),
-            bob_conv.export_call_key(&bob, b"call-1").unwrap(),
+            a.export_call_key(&alice, b"call-1").unwrap(),
+            b.export_call_key(&bob, b"call-1").unwrap(),
         );
+        let mut members = b.member_identities();
+        members.sort();
+        assert_eq!(members, vec![b"alice".to_vec(), b"bob".to_vec()]);
     }
 
     #[test]
     fn self_update_advances_epoch_for_everyone() {
-        let alice = Device::new(b"alice").unwrap();
-        let bob = Device::new(b"bob").unwrap();
-        let mut alice_conv = Conversation::create(&alice).unwrap();
-        let change = alice_conv
-            .add_members(&alice, &[&bob.key_package().unwrap()])
-            .unwrap();
-        let mut bob_conv = Conversation::join(&bob, &change.welcome).unwrap();
-
-        let old_key = alice_conv.export_call_key(&alice, b"c").unwrap();
-        let commit = bob_conv.self_update(&bob).unwrap();
+        let (alice, mut a, bob, mut b) = pair();
+        let old_key = a.export_call_key(&alice, b"c").unwrap();
+        let commit = b.self_update(&bob).unwrap();
         assert_eq!(
-            alice_conv.receive(&alice, &commit).unwrap(),
-            Received::EpochChanged(bob_conv.epoch())
+            a.receive(&alice, &commit).unwrap(),
+            Received::EpochChanged(b.epoch())
         );
-        assert_ne!(alice_conv.export_call_key(&alice, b"c").unwrap(), old_key);
+        assert_ne!(a.export_call_key(&alice, b"c").unwrap(), old_key);
     }
 
     #[test]
@@ -280,7 +402,29 @@ mod tests {
         let ct = conv.encrypt(&creator, b"to all").unwrap();
         assert_eq!(
             last.receive(&others[48], &ct).unwrap(),
-            Received::Application(b"to all".to_vec())
+            app(b"creator", b"to all")
+        );
+    }
+
+    #[test]
+    fn device_and_conversation_survive_export_and_import() {
+        let (alice, mut a, bob, b) = pair();
+        let id = b.id();
+        let epoch = b.epoch();
+        let public_key = bob.public_key().to_vec();
+        let stored = bob.provider().export();
+        drop((bob, b));
+
+        let bob = Device::restore(Provider::import(stored), b"bob", &public_key).unwrap();
+        assert_eq!(bob.identity(), b"bob");
+        let mut b = Conversation::load(&bob, &id)
+            .unwrap()
+            .expect("conversation restored");
+        assert_eq!(b.epoch(), epoch);
+        let ct = a.encrypt(&alice, b"after restart").unwrap();
+        assert_eq!(
+            b.receive(&bob, &ct).unwrap(),
+            app(b"alice", b"after restart")
         );
     }
 

@@ -1,12 +1,30 @@
-// The Rust/WASM core runs here, off the UI thread (docs/03-architecture.md §3).
-import init, { core_version, GroupBench, self_test } from './pkg/chat_core.js'
-import type { CoreResponseBody, RequestEnvelope } from './protocol'
+// The core worker: hosts the engine (keys, storage, network) off the UI
+// thread (docs/03-architecture.md §3).
+import { GroupBench, core_version, self_test } from './pkg/chat_core.js'
+import { Engine, describeError } from './engine'
+import type { CoreEvent, CoreResponseBody, RequestEnvelope } from './protocol'
 
-const ready = init()
+const engine = new Engine((event: CoreEvent) => self.postMessage({ id: 0, event }))
+const started = engine.start()
 
 async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
-  await ready
+  await started
   switch (request.type) {
+    case 'view':
+      return { type: 'view', view: engine.view() }
+    case 'requestCode':
+      await engine.requestCode(request.phone)
+      return { type: 'ok' }
+    case 'verify':
+      await engine.verify(request.phone, request.code, request.displayName)
+      return { type: 'ok' }
+    case 'startChat':
+      return { type: 'conversation', conversationId: await engine.startChat(request.phone) }
+    case 'messages':
+      return { type: 'messages', messages: await engine.messages(request.conversationId) }
+    case 'sendText':
+      await engine.sendText(request.conversationId, request.text)
+      return { type: 'ok' }
     case 'status':
       return { type: 'status', status: { version: core_version(), selfTest: self_test() } }
     case 'bench': {
@@ -28,7 +46,7 @@ self.onmessage = async (event: MessageEvent<RequestEnvelope>) => {
   try {
     body = await handle(event.data)
   } catch (e) {
-    body = { type: 'error', message: e instanceof Error ? e.message : String(e) }
+    body = { type: 'error', message: describeError(e) }
   }
   self.postMessage({ id, body })
 }

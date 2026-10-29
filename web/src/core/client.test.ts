@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CoreClient, type WorkerLike } from './client'
-import type { RequestEnvelope, ResponseEnvelope } from './protocol'
+import type { CoreEvent, RequestEnvelope, ResponseEnvelope } from './protocol'
 
 class FakeWorker implements WorkerLike {
   sent: RequestEnvelope[] = []
@@ -37,5 +37,16 @@ describe('CoreClient', () => {
     const status = client.status()
     worker.reply({ id: worker.sent[0].id, body: { type: 'error', message: 'boom' } })
     await expect(status).rejects.toThrow('boom')
+  })
+
+  it('delivers pushed events to subscribers', () => {
+    const worker = new FakeWorker()
+    const client = new CoreClient(worker)
+    const seen: CoreEvent[] = []
+    const unsubscribe = client.subscribe((e) => seen.push(e))
+    worker.reply({ id: 0, event: { type: 'messages', conversationId: 'abc' } })
+    unsubscribe()
+    worker.reply({ id: 0, event: { type: 'messages', conversationId: 'def' } })
+    expect(seen).toEqual([{ type: 'messages', conversationId: 'abc' }])
   })
 })
