@@ -80,6 +80,17 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
     case 'setReadReceipts':
       await engine.setReadReceipts(request.on)
       return { type: 'ok' }
+    case 'setupBackup':
+      return { type: 'recoveryKey', key: await engine.setupBackup() }
+    case 'backupNow':
+      await engine.backupNow()
+      return { type: 'ok' }
+    case 'turnOffBackup':
+      await engine.turnOffBackup()
+      return { type: 'ok' }
+    case 'restore':
+      await engine.restore(request.username, request.recoveryKey)
+      return { type: 'ok' }
     case 'deleteAccount':
       await engine.deleteAccount(request.username)
       return { type: 'ok' }

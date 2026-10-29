@@ -4,6 +4,7 @@ import type { AppView, ChatMessage, ConversationSummary, MemberInfo } from '../c
 import { InstallBanner, StorageBanner } from './Banners'
 import { Devices } from './Devices'
 import { Invite } from './Invite'
+import { Backup } from './Backup'
 import { BlockedList, DeleteAccount, ReportForm } from './Safety'
 import { VerificationBadge, Verify } from './Verify'
 import { type NotificationState, enableNotifications, notificationState, refreshSubscription } from '../notifications'
@@ -48,6 +49,7 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
           </div>
         ))}
         <NotificationToggle core={core} />
+        <Backup core={core} backup={view.backup} />
         <Invite core={core} />
         <Devices core={core} />
         <Privacy core={core} readReceipts={view.readReceipts} />
@@ -632,7 +634,11 @@ function Conversation({
       <div ref={end} />
       {!active && (
         <p className="notice" role="note">
-          {status === 'left' ? 'You left this group.' : 'You were removed from this group.'}
+          {status === 'restoring'
+            ? 'Restored from your backup. Waiting for the others to add this device back; this takes a moment once they are online.'
+            : status === 'left'
+              ? 'You left this group.'
+              : 'You were removed from this group.'}
         </p>
       )}
       <form className="composer" onSubmit={send} hidden={!active || blocked || request}>

@@ -210,13 +210,12 @@ async fn sends_skip_removed_devices(pool: PgPool) {
 }
 
 #[sqlx::test]
-async fn members_see_each_others_devices_only(pool: PgPool) {
+async fn members_learn_each_others_devices(pool: PgPool) {
     let server = TestServer::start(pool).await;
     let (alice, alice_token) = server.register("alice.01").await;
     let (bob, bob_token) = server.register("bob.01").await;
     let (bob2, _) = link(&server, &bob_token).await;
     let (carol, _) = server.register("carol.01").await;
-    let (dave, dave_token) = server.register("dave.01").await;
     server.admit(b"g", &[alice, bob]).await;
     let account = |token: String, username: &'static str| {
         let server = &server;
@@ -232,8 +231,8 @@ async fn members_see_each_others_devices_only(pool: PgPool) {
         account(alice_token.clone(), "carol.01").await,
     );
 
-    // Bob shares a conversation with Alice: all his devices, including the
-    // new one that isn't in it yet. Carol shares none: absent.
+    // All of Bob's devices, including the new one that isn't in their
+    // conversation yet. (After a restore, a contact's only device is in none.)
     let ask = json!({ "account_ids": [bob_account, carol_account] });
     let (status, body) = server
         .post("/v1/devices/of", Some(&alice_token), ask.clone())
@@ -246,9 +245,8 @@ async fn members_see_each_others_devices_only(pool: PgPool) {
         .map(|d| d.as_str().unwrap())
         .collect();
     assert_eq!(bobs, [bob.to_string(), bob2.to_string()]);
-    assert!(body["devices"].get(&carol_account).is_none());
-    let (_, body) = server.post("/v1/devices/of", Some(&dave_token), ask).await;
-    assert_eq!(body["devices"], json!({}), "strangers learn nothing");
+    assert_eq!(body["devices"][&carol_account].as_array().unwrap().len(), 1);
+    assert_eq!(server.post("/v1/devices/of", None, ask).await.0, 401);
 
     // A deleted account disappears from the answer.
     let (status, _) = server
@@ -267,5 +265,5 @@ async fn members_see_each_others_devices_only(pool: PgPool) {
         )
         .await;
     assert_eq!(body["devices"], json!({}));
-    let _ = (carol, dave);
+    let _ = carol;
 }

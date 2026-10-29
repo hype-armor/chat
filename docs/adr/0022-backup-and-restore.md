@@ -63,7 +63,7 @@ to be rejoined.
 
 **Rejoining: members keep every member's devices.** Every device compares,
 for each group it is in, each member account's devices on the server
-(`POST /v1/devices/of`) with that account's leaves:
+(`POST /v1/devices/of`; any account id, since ids are learned only from groups or username lookups, which return devices anyway, and a restored account's new device is in no conversation yet) with that account's leaves:
 - it adds missing devices and removes deleted ones;
 - per account, the account's own lowest leaf acts if it has one in the
   group; otherwise the group's lowest-leaf member acts;

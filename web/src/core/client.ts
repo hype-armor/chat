@@ -168,6 +168,24 @@ export class CoreClient {
     expect(await this.call({ type: 'setReadReceipts', on }), 'ok')
   }
 
+  /** Turns backups on; returns the recovery key to show once (ADR-0022). */
+  async setupBackup(): Promise<string> {
+    return expect(await this.call({ type: 'setupBackup' }), 'recoveryKey').key
+  }
+
+  async backupNow() {
+    expect(await this.call({ type: 'backupNow' }), 'ok')
+  }
+
+  async turnOffBackup() {
+    expect(await this.call({ type: 'turnOffBackup' }), 'ok')
+  }
+
+  /** New device: restores the account from its backup (ADR-0022). */
+  async restore(username: string, recoveryKey: string) {
+    expect(await this.call({ type: 'restore', username, recoveryKey }), 'ok')
+  }
+
   /** Deletes the account and all its server data; `username` confirms it. */
   async deleteAccount(username: string) {
     expect(await this.call({ type: 'deleteAccount', username }), 'ok')

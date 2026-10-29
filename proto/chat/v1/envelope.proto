@@ -54,8 +54,12 @@ message ServerFrame {
     Pong pong = 4;
     Error error = 5;
     AuthResult auth_result = 6;
+    // Unsolicited: a member's devices changed; re-check groups (ADR-0022).
+    DevicesChanged devices_changed = 7;
   }
 }
+
+message DevicesChanged {}
 
 message Authenticate {
   // Device token from POST /v1/auth/verify.

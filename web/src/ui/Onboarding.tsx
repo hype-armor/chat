@@ -25,6 +25,7 @@ export function Onboarding({ core, notice }: { core: CoreClient; notice?: string
   const [username, setUsername] = useState('')
   const [invite, setInvite] = useState(inviteFromLink)
   const [linking, setLinking] = useState(false)
+  const [restoring, setRestoring] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
 
@@ -53,6 +54,8 @@ export function Onboarding({ core, notice }: { core: CoreClient; notice?: string
       )}
       {linking ? (
         <LinkThisDevice core={core} onCancel={() => setLinking(false)} />
+      ) : restoring ? (
+        <Restore core={core} onCancel={() => setRestoring(false)} />
       ) : (
         <form onSubmit={submit}>
           <label>
@@ -99,6 +102,9 @@ export function Onboarding({ core, notice }: { core: CoreClient; notice?: string
           <button type="button" className="link" onClick={() => setLinking(true)}>
             Already using Chat on another device? Link this one
           </button>
+          <button type="button" className="link" onClick={() => setRestoring(true)}>
+            Lost your devices? Restore from backup
+          </button>
         </form>
       )}
       {error && (
@@ -107,5 +113,68 @@ export function Onboarding({ core, notice }: { core: CoreClient; notice?: string
         </p>
       )}
     </main>
+  )
+}
+
+/** Restores an account from its backup onto this device (ADR-0022). */
+function Restore({ core, onCancel }: { core: CoreClient; onCancel: () => void }) {
+  const [username, setUsername] = useState('')
+  const [recoveryKey, setRecoveryKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setError(undefined)
+    try {
+      await core.restore(username, recoveryKey)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form onSubmit={submit} aria-label="Restore from backup">
+      <p>
+        Restoring signs out your other devices and brings back your chats as of the last backup. Your contacts' apps
+        then add this device back to your conversations.
+      </p>
+      <label>
+        Username
+        <input
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          required
+          autoComplete="username"
+          autoCapitalize="none"
+          spellCheck={false}
+        />
+      </label>
+      <label>
+        Recovery key
+        <input
+          value={recoveryKey}
+          onChange={(e) => setRecoveryKey(e.target.value)}
+          required
+          autoComplete="off"
+          autoCapitalize="characters"
+          spellCheck={false}
+          placeholder="ABCD-EFGH-…"
+        />
+      </label>
+      <button type="submit" disabled={busy}>
+        {busy ? 'Restoring…' : 'Restore'}
+      </button>
+      <button type="button" className="link" onClick={onCancel}>
+        Back
+      </button>
+      {error && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
+    </form>
   )
 }

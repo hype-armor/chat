@@ -26,6 +26,29 @@ async function post<T>(path: string, body: unknown, token?: string): Promise<T> 
   return json as T
 }
 
+async function bytes(method: 'GET' | 'PUT', path: string, token: string, body?: Uint8Array): Promise<Uint8Array> {
+  const headers: Record<string, string> = { authorization: `Bearer ${token}` }
+  if (body) headers['content-type'] = 'application/octet-stream'
+  const res = await fetch(path, { method, headers, body: body as BodyInit | undefined })
+  if (!res.ok) {
+    const json = await res.json().catch(() => undefined)
+    throw new ApiError(res.status, json?.error ?? `request failed (${res.status})`)
+  }
+  return new Uint8Array(await res.arrayBuffer())
+}
+
+async function putJson(path: string, body: unknown, token: string): Promise<void> {
+  const res = await fetch(path, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const json = await res.json().catch(() => undefined)
+    throw new ApiError(res.status, json?.error ?? `request failed (${res.status})`)
+  }
+}
+
 export type Registered = { account_id: string; device_id: string; token: string; username: string }
 
 export type ReportReason = 'spam' | 'harassment' | 'other'
@@ -41,6 +64,12 @@ export type ServerDevice = { device_id: string; added_on: string; last_seen_on: 
 export const api = {
   register: (username: string, invite: string | undefined, identityKey: string) =>
     post<Registered>('/v1/register', { username, invite, identity_key: identityKey }),
+  setBackupKey: (token: string, authHash: string) => putJson('/v1/backup/key', { auth_hash: authHash }, token),
+  uploadBackup: (token: string, sealed: Uint8Array) => bytes('PUT', '/v1/backup', token, sealed),
+  downloadBackup: (token: string) => bytes('GET', '/v1/backup', token),
+  deleteBackup: (token: string) => post<void>('/v1/backup/delete', {}, token),
+  restore: (username: string, auth: string, identityKey: string) =>
+    post<Registered>('/v1/backup/restore', { username, auth, identity_key: identityKey }),
   createInvite: (token: string) => post<{ code: string; expires_in_days: number }>('/v1/invites', {}, token),
   uploadKeyPackages: (token: string, keyPackages: string[]) =>
     post<void>('/v1/keys', { key_packages: keyPackages }, token),

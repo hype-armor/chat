@@ -42,6 +42,21 @@ Deleting the reports about an account favours the deleted user's privacy
 over moderation history. Revisit if abusers start deleting accounts to
 escape reports.
 
+### Backup and restore (ADR-0022)
+
+| Method & path | Auth | Body → Response |
+|---------------|------|-----------------|
+| `PUT /v1/backup/key` | ✓ | `{auth_hash}` (base64 SHA-256 of the auth secret derived from the recovery key) → `204`. Turns backups on, or switches keys: an older backup is deleted |
+| `PUT /v1/backup` | ✓ | raw encrypted bytes (≤ 25 MB) → `204`; `409` without a key |
+| `GET /v1/backup` | ✓ | → the account's backup (raw bytes) or `404` |
+| `POST /v1/backup/delete` | ✓ | → `204`: backups off |
+| `POST /v1/backup/restore` | — | `{username, auth, identity_key}` → `{account_id, device_id, token, username}`. With the right auth secret: deletes the account's devices, registers this one and tells members' open sessions (`DevicesChanged`). `401` for a wrong username or key alike |
+
+The server never sees the recovery key, the encryption key or anything
+readable in a backup. The web client derives keys with HKDF-SHA256 and seals
+the backup (gzip, AES-256-GCM). It uploads at most every 10 minutes when
+something changed, or on demand.
+
 ### Linked devices (ADR-0019)
 
 | Method & path | Auth | Body → Response |
@@ -52,7 +67,7 @@ escape reports.
 | `POST /v1/link/complete` | — | `{code, identity_key}` → `{account_id, device_id, token, username}`, like `register`. `409` until approved; `404` unknown, expired or used. The new device polls this |
 | `GET /v1/devices` | ✓ | → `{devices: [{device_id, added_on, last_seen_on, current}]}`: this account's devices (days only), oldest first |
 | `POST /v1/devices/remove` | ✓ | `{device_id}` → `204`. Another device of this account: deletes it with its token, queue, key packages and memberships, and closes its WebSocket. `400` for the calling device itself |
-| `POST /v1/devices/of` | ✓ | `{account_ids}` (1–200) → `{devices: {account_id: [device_id]}}`: current devices of accounts that share a conversation with the caller. Absent accounts share none or were deleted. Clients use it to keep every member's devices in their groups (ADR-0022) |
+| `POST /v1/devices/of` | ✓ | `{account_ids}` (1–200) → `{devices: {account_id: [device_id]}}`: current devices of the given accounts; absent accounts were deleted. Account ids are learned only from groups or a username lookup, which returns devices too. Clients use it to keep every member's devices in their groups (ADR-0022) |
 
 Sends to a removed device are not refused: the server drops it from the
 recipients until the account's remaining devices commit its removal from
@@ -106,7 +121,10 @@ deliveries have `request_id = 0`.
      envelope is silent.
    - Limits: ciphertext ≤ 128 KiB, ids ≤ 64 bytes, ≤ 500 recipients, frame
      ≤ 256 KiB. Attachments go to blob storage (Phase 2), not the socket.
-5. **Ping** → **Pong** at the application level. The server also sends
+5. **DevicesChanged** (server → client, unsolicited): a member's devices
+   changed (restore, link, removal, deletion). The client re-checks its
+   groups' devices (ADR-0022).
+6. **Ping** → **Pong** at the application level. The server also sends
    WebSocket pings every 30 s to keep proxies from closing idle sockets.
 
 Errors arrive as `Error{code, message}` with HTTP-style codes (400, 401,
@@ -169,6 +187,7 @@ across restarts and replicas. Exceeding one gives `429` (HTTP) or
 | `POST /v1/link/start` | 20 per hour | client IP |
 | `POST /v1/reports` | 20 per day | device |
 | `POST /v1/devices/of` | 120 per hour | device |
+| `POST /v1/backup/restore` | 10 per hour; 10 per day | client IP; account |
 
 The client IP is the socket peer, or the last `X-Forwarded-For` entry when
 `CHAT_TRUST_PROXY_HEADERS=true` (Helm `server.trustProxyHeaders`, on by

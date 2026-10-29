@@ -64,9 +64,23 @@ export class SecureStore {
     return bytes && (JSON.parse(new TextDecoder().decode(bytes)) as T)
   }
 
+  /** A non-extractable CryptoKey kept beside the storage key (e.g. the backup key). */
+  async getKey(name: string): Promise<CryptoKey | undefined> {
+    return (await request(this.db.transaction('keys', 'readonly').objectStore('keys').get(name))) as
+      | CryptoKey
+      | undefined
+  }
+
+  async putKey(name: string, key: CryptoKey | undefined): Promise<void> {
+    const store = this.db.transaction('keys', 'readwrite').objectStore('keys')
+    if (key) await request(store.put(key, name))
+    else await request(store.delete(name))
+  }
+
   /** Deletes everything except the storage key (signing out). */
   async clear(): Promise<void> {
     await request(this.db.transaction('kv', 'readwrite').objectStore('kv').clear())
+    await this.putKey('backup', undefined)
   }
 
   putJson(name: string, value: unknown): Promise<void> {

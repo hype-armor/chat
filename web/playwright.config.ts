@@ -28,6 +28,7 @@ export default defineConfig({
               CHAT_LIMIT_REGISTRATIONS_PER_IP_PER_HOUR: '100000',
               CHAT_LIMIT_REGISTRATIONS_PER_DAY: '100000',
               CHAT_LIMIT_INVITES_PER_DAY: '100000',
+              CHAT_LIMIT_RESTORES_PER_IP_PER_HOUR: '100000',
               CHAT_LIMIT_LINKS_PER_IP_PER_HOUR: '100000',
             },
           },
