@@ -7,6 +7,7 @@ pub mod client;
 pub mod envelope;
 pub mod mls;
 pub mod padding;
+pub mod qr;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 

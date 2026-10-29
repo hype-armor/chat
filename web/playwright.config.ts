@@ -27,6 +27,7 @@ export default defineConfig({
               CHAT_LIMIT_CODES_PER_IP_PER_HOUR: '100000',
               CHAT_LIMIT_CODES_PER_PREFIX_PER_HOUR: '100000',
               CHAT_LIMIT_CODES_PER_DAY: '100000',
+              CHAT_LIMIT_LINKS_PER_IP_PER_HOUR: '100000',
             },
           },
         ]

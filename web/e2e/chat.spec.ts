@@ -1,41 +1,8 @@
-import { readFile } from 'node:fs/promises'
-import { type Browser, type Page, expect, test } from '@playwright/test'
+import { expect, test } from '@playwright/test'
+import { messages, randomPhone, signUp } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
-const SERVER_LOG = new URL('../../target/e2e-server.log', import.meta.url)
-
-function randomPhone(): string {
-  return `+1555${String(Math.floor(Math.random() * 1e7)).padStart(7, '0')}`
-}
-
-/** Reads the code the development log sender wrote for `phone`. */
-async function verificationCode(phone: string): Promise<string> {
-  for (let attempt = 0; attempt < 50; attempt++) {
-    const lines = (await readFile(SERVER_LOG, 'utf8').catch(() => '')).split('\n')
-    for (const line of lines.reverse()) {
-      if (!line.includes(phone)) continue
-      const fields = JSON.parse(line).fields
-      if (fields?.phone === phone && fields.code) return fields.code
-    }
-    await new Promise((r) => setTimeout(r, 200))
-  }
-  throw new Error(`no verification code logged for ${phone}`)
-}
-
-async function signUp(browser: Browser, name: string, phone: string): Promise<Page> {
-  const page = await (await browser.newContext()).newPage()
-  await page.goto('/')
-  await page.getByLabel('Your name').fill(name)
-  await page.getByLabel('Phone number').fill(phone)
-  await page.getByRole('button', { name: 'Send code' }).click()
-  await page.getByLabel('Verification code').fill(await verificationCode(phone))
-  await page.getByRole('button', { name: 'Verify' }).click()
-  await expect(page.getByRole('status')).toHaveText('online')
-  return page
-}
-
-const messages = (page: Page) => page.getByTestId('message')
 
 test('two people exchange encrypted messages, and history survives a reload', async ({ browser }) => {
   const alicePhone = randomPhone()

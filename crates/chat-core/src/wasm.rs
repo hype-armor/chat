@@ -1,8 +1,8 @@
 //! JavaScript bindings used by the web client's core worker.
 
 use chat_proto::v1::{
-    Ack, Authenticate, ClientFrame, Content, ContentType, Envelope, GroupInfo, Ping, Profile,
-    SendEnvelope, ServerFrame, Text, client_frame, content, server_frame,
+    Ack, Authenticate, ClientFrame, Content, ContentType, DeviceSync, Envelope, GroupInfo, Ping,
+    Profile, SendEnvelope, ServerFrame, Text, client_frame, content, server_frame,
 };
 use js_sys::{Array, Uint8Array};
 use prost::Message;
@@ -193,6 +193,9 @@ pub struct EventView {
     /// Admin account ids from a `GroupInfo`, 16 bytes each, concatenated.
     #[wasm_bindgen(getter_with_clone, js_name = groupAdmins)]
     pub group_admins: Vec<u8>,
+    /// `DeviceSync` state from one of the account's own devices.
+    #[wasm_bindgen(getter_with_clone, js_name = deviceSync)]
+    pub device_sync: Option<Vec<u8>>,
 }
 
 impl EventView {
@@ -206,6 +209,7 @@ impl EventView {
             display_name: None,
             group_name: None,
             group_admins: Vec::new(),
+            device_sync: None,
         }
     }
 }
@@ -409,6 +413,23 @@ impl CoreClient {
         )
     }
 
+    /// For the account's self conversation only (ADR-0019).
+    #[wasm_bindgen(js_name = sendDeviceSync)]
+    pub fn send_device_sync(
+        &mut self,
+        conversation_id: &[u8],
+        state: Vec<u8>,
+        sent_at_ms: f64,
+        message_id: Vec<u8>,
+    ) -> Result<Vec<u8>, JsError> {
+        self.send(
+            conversation_id,
+            sent_at_ms,
+            content::Body::DeviceSync(DeviceSync { state }),
+            message_id,
+        )
+    }
+
     /// Decrypts an encoded `Envelope`.
     pub fn receive(&mut self, envelope: &[u8]) -> Result<EventView, JsError> {
         let env = Envelope::decode(envelope).map_err(|e| JsError::new(&e.to_string()))?;
@@ -428,6 +449,7 @@ impl CoreClient {
                         view.group_name = Some(g.name);
                         view.group_admins = g.admins.concat();
                     }
+                    Some(content::Body::DeviceSync(d)) => view.device_sync = Some(d.state),
                     None => view.kind = "ignored".to_owned(),
                 }
                 view
@@ -601,4 +623,35 @@ pub fn decode_server_frame(bytes: &[u8]) -> Result<ServerFrameView, JsError> {
         None => {}
     }
     Ok(view)
+}
+
+// ---- QR codes (ADR-0019) ----------------------------------------------------
+
+/// A QR code's modules: `size` × `size`, row-major, 1 for dark.
+#[wasm_bindgen]
+pub struct QrView {
+    pub size: u32,
+    #[wasm_bindgen(getter_with_clone)]
+    pub modules: Vec<u8>,
+}
+
+#[wasm_bindgen(js_name = encodeQr)]
+pub fn encode_qr(text: &str) -> Result<QrView, JsError> {
+    let m = crate::qr::encode(text).ok_or_else(|| JsError::new("text too long for a QR code"))?;
+    Ok(QrView {
+        size: m.size as u32,
+        modules: m.dark.into_iter().map(u8::from).collect(),
+    })
+}
+
+/// Reads the first QR code in an RGBA image (e.g. a camera frame).
+#[wasm_bindgen(js_name = decodeQr)]
+pub fn decode_qr(rgba: &[u8], width: u32, height: u32) -> Option<String> {
+    let luma: Vec<u8> = rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|p| ((u16::from(p[0]) * 77 + u16::from(p[1]) * 150 + u16::from(p[2]) * 29) >> 8) as u8)
+        .collect();
+    crate::qr::decode(&luma, width as usize, height as usize)
 }

@@ -11,6 +11,7 @@ message Content {
     Text text = 2;
     Profile profile = 3;
     GroupInfo group_info = 4;
+    DeviceSync device_sync = 5;
   }
 }
 
@@ -28,4 +29,11 @@ message GroupInfo {
   string name = 1;
   // Admin account ids (16 bytes each), in priority order (ADR-0016).
   repeated bytes admins = 2;
+}
+
+// State shared between one account's own devices, sent only in their
+// private self conversation (ADR-0019). `state` is a JSON document owned by
+// the client (display name, contact names, conversation metadata).
+message DeviceSync {
+  bytes state = 1;
 }

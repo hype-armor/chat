@@ -19,7 +19,7 @@ export function App() {
   return (
     <>
       {view.phase === 'loading' && <p className="muted center">Loading…</p>}
-      {view.phase === 'signed-out' && <Onboarding core={core} />}
+      {view.phase === 'signed-out' && <Onboarding core={core} notice={view.notice} />}
       {view.phase === 'ready' && <Chat core={core} view={view} />}
       <footer className="footer">
         <button type="button" className="link small" onClick={() => setShowDiagnostics((v) => !v)}>

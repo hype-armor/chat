@@ -64,6 +64,11 @@ export class SecureStore {
     return bytes && (JSON.parse(new TextDecoder().decode(bytes)) as T)
   }
 
+  /** Deletes everything except the storage key (signing out). */
+  async clear(): Promise<void> {
+    await request(this.db.transaction('kv', 'readwrite').objectStore('kv').clear())
+  }
+
   putJson(name: string, value: unknown): Promise<void> {
     return this.putBytes(name, new TextEncoder().encode(JSON.stringify(value)))
   }

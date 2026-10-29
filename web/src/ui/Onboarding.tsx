@@ -1,12 +1,13 @@
 import { type FormEvent, useState } from 'react'
 import type { CoreClient } from '../core/client'
+import { LinkThisDevice } from './LinkDevice'
 
 /** Phone verification (FR-ID-1). */
-export function Onboarding({ core }: { core: CoreClient }) {
+export function Onboarding({ core, notice }: { core: CoreClient; notice?: string }) {
   const [phone, setPhone] = useState('')
   const [name, setName] = useState('')
   const [code, setCode] = useState('')
-  const [step, setStep] = useState<'phone' | 'code'>('phone')
+  const [step, setStep] = useState<'phone' | 'code' | 'link'>('phone')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
 
@@ -27,7 +28,14 @@ export function Onboarding({ core }: { core: CoreClient }) {
     <main className="onboarding">
       <h1>Chat</h1>
       <p className="muted">End-to-end encrypted. Your messages never reach our servers in readable form.</p>
-      {step === 'phone' ? (
+      {notice && (
+        <p role="status" className="notice">
+          {notice}
+        </p>
+      )}
+      {step === 'link' ? (
+        <LinkThisDevice core={core} onCancel={() => setStep('phone')} />
+      ) : step === 'phone' ? (
         <form onSubmit={run(async () => {
           await core.requestCode(phone.trim())
           setStep('code')
@@ -51,6 +59,9 @@ export function Onboarding({ core }: { core: CoreClient }) {
           </label>
           <button type="submit" disabled={busy}>
             Send code
+          </button>
+          <button type="button" className="link" onClick={() => setStep('link')}>
+            Already using Chat on another device? Link this one
           </button>
         </form>
       ) : (
