@@ -36,6 +36,8 @@ pub struct Limits {
     pub invites_per_day: i32,
     /// Device link codes per client IP per hour (ADR-0019).
     pub links_per_ip_per_hour: i32,
+    /// Member device-list checks per device per hour (ADR-0022).
+    pub device_lists_per_hour: i32,
     /// User reports per device per day (FR-ID-8).
     pub reports_per_day: i32,
     /// Trust `X-Forwarded-For` from the ingress for the client IP.
@@ -54,6 +56,7 @@ impl Default for Limits {
             invites_per_day: 10,
             links_per_ip_per_hour: 20,
             reports_per_day: 20,
+            device_lists_per_hour: 120,
             trust_proxy_headers: false,
         }
     }

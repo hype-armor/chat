@@ -23,6 +23,7 @@ fn tight() -> Limits {
         invites_per_day: 2,
         links_per_ip_per_hour: 2,
         reports_per_day: 2,
+        device_lists_per_hour: 2,
         trust_proxy_headers: true,
     }
 }

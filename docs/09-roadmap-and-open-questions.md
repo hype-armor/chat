@@ -69,7 +69,7 @@ surviving reloads; three-engine browser CI against a real server.
     update banner (FR-PLAT-2/3).
 14. [x] Key-package replenishment driven by a server-reported count.
 15. [x] Retry and clear feedback for messages the server rejects.
-16. [ ] ~~Real SMS provider~~ replaced by usernames and invite-only sign-up
+16. [x] ~~Real SMS provider~~ replaced by usernames and invite-only sign-up
     (ADR-0021); no SMS anywhere.
 
 **Exit:** internal dogfood on the dev cluster; delivery p95 < 1 s.
@@ -77,6 +77,29 @@ surviving reloads; three-engine browser CI against a real server.
 **Can slip to later phases (should-haves):** typing indicators, reply/quote,
 reactions, edit and delete-for-everyone, disappearing messages, mentions and
 mute, local search, IP-hiding relay option.
+
+## 2.2 Phase 2 checklist (2026-10-29)
+
+Media, location and backup; exit: feature-complete beta. Worked in this
+order; tick items as their PRs merge.
+
+1. [x] Members keep every member's devices in each group: add contacts' new
+   devices, remove deleted ones (prerequisite for restore; ADR-0022).
+2. [ ] Encrypted backup with a recovery key, and restore onto a new device
+   (FR-MSG-13, ADR-0010, ADR-0022).
+3. [ ] Blob storage for encrypted attachments: upload and download, 100 MB
+   limit, 30-day expiry (FR-MED-2/3, S3-compatible; MinIO on k3s).
+4. [ ] Images and files: encrypted on the device, EXIF stripped,
+   thumbnails sent encrypted (FR-MED-1/2/4/8).
+5. [ ] Voice notes and audio/video clips (FR-MED-1).
+6. [ ] Resumable transfers and an auto-download policy (FR-MED-5/6, should).
+7. [ ] Share location once, with self-hosted map tiles (FR-LOC-1/4/5,
+   ADR-0008).
+8. [ ] Live location for 15 min / 1 h / 8 h while the app is open, with a
+   persistent indicator (FR-LOC-2/3/6).
+9. [ ] Move backups into blob storage (they start in PostgreSQL).
+
+**Exit:** feature-complete beta.
 
 **Phase 0 spikes still open** (block later phases, not Phase 1): (b)
 SQLite3MultipleCiphers on OPFS (deferred; IndexedDB snapshots suffice for

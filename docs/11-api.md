@@ -52,6 +52,7 @@ escape reports.
 | `POST /v1/link/complete` | — | `{code, identity_key}` → `{account_id, device_id, token, username}`, like `register`. `409` until approved; `404` unknown, expired or used. The new device polls this |
 | `GET /v1/devices` | ✓ | → `{devices: [{device_id, added_on, last_seen_on, current}]}`: this account's devices (days only), oldest first |
 | `POST /v1/devices/remove` | ✓ | `{device_id}` → `204`. Another device of this account: deletes it with its token, queue, key packages and memberships, and closes its WebSocket. `400` for the calling device itself |
+| `POST /v1/devices/of` | ✓ | `{account_ids}` (1–200) → `{devices: {account_id: [device_id]}}`: current devices of accounts that share a conversation with the caller. Absent accounts share none or were deleted. Clients use it to keep every member's devices in their groups (ADR-0022) |
 
 Sends to a removed device are not refused: the server drops it from the
 recipients until the account's remaining devices commit its removal from
@@ -167,6 +168,7 @@ across restarts and replicas. Exceeding one gives `429` (HTTP) or
 | `POST /v1/invites` | 10 per day (and 5 unused at once) | account |
 | `POST /v1/link/start` | 20 per hour | client IP |
 | `POST /v1/reports` | 20 per day | device |
+| `POST /v1/devices/of` | 120 per hour | device |
 
 The client IP is the socket peer, or the last `X-Forwarded-For` entry when
 `CHAT_TRUST_PROXY_HEADERS=true` (Helm `server.trustProxyHeaders`, on by

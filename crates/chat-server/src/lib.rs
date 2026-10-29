@@ -93,6 +93,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/link/complete", post(devices::complete))
         .route("/v1/devices", get(devices::list))
         .route("/v1/devices/remove", post(devices::remove))
+        .route("/v1/devices/of", post(devices::of))
         .route("/v1/reports", post(reports::create))
         .route("/v1/account/delete", post(account::delete))
         .route("/v1/push/key", get(push::public_key))

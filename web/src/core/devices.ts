@@ -21,25 +21,39 @@ export function deviceHex(uuid: string): string {
 
 export type Member = { account: string; device: string }
 
+/** What this device should change in a group for one member account. */
+export type DevicePlan = { account: string; missing: string[]; stale: string[] }
+
 /**
- * How this device should bring a group's set of this account's devices in
- * line with the account's current devices (`mine`, hex): which to remove and
- * which to add. Only the account's device with the lowest leaf index acts
- * (`members` is in leaf order), so devices don't race each other; others get
- * `undefined`.
+ * Keeps every member's devices in a group in line with the server's device
+ * lists (ADR-0022). `live` maps each account to its current devices (hex);
+ * an account missing from it no longer exists. For each account the actor
+ * is its own lowest leaf that is still a live device or, if it has none
+ * (all lost or deleted), the group's lowest live leaf: so only one device
+ * acts, and a restored or deleted account is still handled. Returns the
+ * changes this device should make (`members` is in leaf order).
  */
-export function ownDevicePlan(
+export function memberDevicePlan(
   members: Member[],
-  me: string,
+  live: Record<string, string[]>,
   thisDevice: string,
-  mine: string[],
-): { stale: string[]; missing: string[] } | undefined {
-  const own = members.filter((m) => m.account === me).map((m) => m.device)
-  if (own[0] !== thisDevice) return undefined
-  return {
-    stale: own.filter((d) => !mine.includes(d)),
-    missing: mine.filter((d) => !own.includes(d)),
-  }
+): DevicePlan[] {
+  const isLive = (m: Member) => (live[m.account] ?? []).includes(m.device)
+  const groupActor = members.find(isLive)?.device
+  const accounts = [...new Set(members.map((m) => m.account))]
+  return accounts.flatMap((account) => {
+    const leaves = members.filter((m) => m.account === account)
+    const actor = leaves.find(isLive)?.device ?? groupActor
+    if (actor !== thisDevice) return []
+    const devices = live[account] ?? []
+    const inGroup = leaves.map((m) => m.device)
+    const plan = {
+      account,
+      missing: devices.filter((d) => !inGroup.includes(d)),
+      stale: inGroup.filter((d) => !devices.includes(d)),
+    }
+    return plan.missing.length + plan.stale.length > 0 ? [plan] : []
+  })
 }
 
 /** State shared between an account's devices over their self conversation. */

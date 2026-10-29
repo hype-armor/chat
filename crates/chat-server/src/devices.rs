@@ -1,6 +1,8 @@
 //! Linked devices (ADR-0019): one-time link codes, and listing and removing
 //! an account's devices.
 
+use std::collections::HashMap;
+
 use axum::{Json, extract::State, http::StatusCode};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
@@ -228,4 +230,59 @@ pub async fn remove(
     }
     state.hub.disconnect(&req.device_id);
     Ok(StatusCode::NO_CONTENT)
+}
+
+const MAX_ACCOUNTS: usize = 200;
+
+#[derive(Deserialize)]
+pub struct DevicesOf {
+    account_ids: Vec<Uuid>,
+}
+
+#[derive(Serialize)]
+pub struct AccountDevices {
+    /// Account id → its devices, oldest first. Accounts that share no
+    /// conversation with the caller (including deleted ones) are absent.
+    devices: HashMap<Uuid, Vec<Uuid>>,
+}
+
+/// `POST /v1/devices/of`: other members' current devices, so clients can
+/// keep every member's devices in their groups (ADR-0022).
+pub async fn of(
+    State(state): State<AppState>,
+    AuthDevice(device): AuthDevice,
+    Json(req): Json<DevicesOf>,
+) -> Result<Json<AccountDevices>, ApiError> {
+    if req.account_ids.is_empty() || req.account_ids.len() > MAX_ACCOUNTS {
+        return Err(ApiError::BadRequest("ask for 1 to 200 accounts"));
+    }
+    let db = db(&state)?;
+    let key = format!("devices-of:{device}");
+    limits::take(
+        db,
+        &key,
+        1,
+        state.limits.device_lists_per_hour,
+        limits::HOUR,
+    )
+    .await?;
+    // Only accounts sharing a conversation with the caller: no enumeration.
+    let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
+        "SELECT d.account_id, d.device_id FROM devices d
+         WHERE d.account_id = ANY($1) AND EXISTS (
+             SELECT 1 FROM conversation_members mine
+             JOIN conversation_members theirs USING (conversation_id)
+             JOIN devices td ON td.device_id = theirs.device_id
+             WHERE mine.device_id = $2 AND td.account_id = d.account_id)
+         ORDER BY d.created_at, d.device_id",
+    )
+    .bind(&req.account_ids)
+    .bind(device)
+    .fetch_all(db)
+    .await?;
+    let mut devices: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+    for (account, device) in rows {
+        devices.entry(account).or_default().push(device);
+    }
+    Ok(Json(AccountDevices { devices }))
 }

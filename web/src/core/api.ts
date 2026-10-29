@@ -53,6 +53,8 @@ export const api = {
   groupEpoch: (token: string, groupId: string) =>
     post<{ epoch: number; last_commit_hash: string }>('/v1/groups/epoch', { group_id: groupId }, token),
   devices: (token: string) => get<{ devices: ServerDevice[] }>('/v1/devices', token),
+  devicesOf: (token: string, accountIds: string[]) =>
+    post<{ devices: Record<string, string[]> }>('/v1/devices/of', { account_ids: accountIds }, token),
   removeDevice: (token: string, deviceId: string) => post<void>('/v1/devices/remove', { device_id: deviceId }, token),
   linkStart: () => post<{ code: string }>('/v1/link/start', {}),
   linkApprove: (token: string, code: string) => post<void>('/v1/link/approve', { code }, token),
