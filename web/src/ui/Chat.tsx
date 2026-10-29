@@ -608,7 +608,13 @@ function Conversation({
                   minute: '2-digit',
                 })}
                 {STATUS_LABEL[m.status] && ` · ${STATUS_LABEL[m.status]}`}
+                {m.status === 'failed' && m.error && `: ${m.error}`}
               </span>
+              {m.status === 'failed' && active && (
+                <button type="button" className="link small" onClick={() => void core.retryMessage(id, m.id)}>
+                  Retry
+                </button>
+              )}
             </li>
           ),
         )}

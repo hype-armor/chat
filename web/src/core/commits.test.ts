@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { commitWasAccepted, retryDelay, throwUnlessAccepted } from './commits'
+import { commitWasAccepted, retryDelay, sendOutcome, throwUnlessAccepted } from './commits'
 
 describe('commitWasAccepted', () => {
   it('only when the server recorded exactly our commit', () => {
@@ -22,5 +22,18 @@ describe('throwUnlessAccepted', () => {
 describe('retryDelay', () => {
   it('doubles from 5 s and caps at 2 min', () => {
     expect([0, 1, 2, 3, 4, 5, 10].map(retryDelay)).toEqual([5_000, 10_000, 20_000, 40_000, 80_000, 120_000, 120_000])
+  })
+})
+
+describe('sendOutcome', () => {
+  it('retries rate limits and server trouble, explains refusals', () => {
+    expect(sendOutcome({ kind: 'send_result', accepted: true })).toEqual({ kind: 'sent' })
+    for (const errorCode of [429, 500, 503]) expect(sendOutcome({ kind: 'error', errorCode })).toEqual({ kind: 'retry' })
+    expect(sendOutcome({ kind: 'error', errorCode: 403 })).toEqual({
+      kind: 'failed',
+      reason: "You're no longer in this conversation",
+    })
+    expect(sendOutcome({ kind: 'error', errorCode: 400 }).kind).toBe('failed')
+    expect(sendOutcome({ kind: 'send_result', accepted: false }).kind).toBe('failed')
   })
 })

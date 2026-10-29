@@ -15,7 +15,15 @@ import init, {
   safetyNumber,
 } from './pkg/chat_core.js'
 import { ApiError, type Registered, api, fromBase64, toBase64 } from './api'
-import { type CommitOutcome, RATE_LIMITED, commitWasAccepted, retryDelay, throwUnlessAccepted } from './commits'
+import {
+  type CommitOutcome,
+  MAX_SEND_RETRIES,
+  RATE_LIMITED,
+  commitWasAccepted,
+  retryDelay,
+  sendOutcome,
+  throwUnlessAccepted,
+} from './commits'
 import { RecentIds, fromHex, makeIdentity, plain, randomId, splitIdentity, toHex } from './ids'
 import { type DeviceSync, deviceHex, linkText, ownDevicePlan, parseDeviceSync, parseLinkCode } from './devices'
 import { applyReceipt, splitIds } from './receipts'
@@ -41,6 +49,8 @@ import type {
 import { acceptsGroupInfo, designatedCommitter, parseAdmins } from './roles'
 import { SecureStore } from './storage'
 
+/** How long the server may take to answer a request before we reconnect. */
+const REQUEST_TIMEOUT_MS = 20_000
 /** Check the server's key-package count this often while connected. */
 const KEY_PACKAGE_CHECK_MS = 6 * 60 * 60_000
 const MAX_RECONNECT_MS = 30_000
@@ -84,6 +94,8 @@ type Outgoing = {
   recipients: string[]
   /** No Web Push for offline recipients (receipts). */
   silent?: boolean
+  /** Transient failures so far (rate limits, server trouble). */
+  attempts?: number
 }
 
 /**
@@ -165,9 +177,9 @@ export class Engine {
   private nextRequestId = 1
   private waiters = new Map<number, (frame: ServerFrameView | undefined) => void>()
   private reconnectMs = 1000
+  private reconnectTimer?: ReturnType<typeof setTimeout>
   private flushing = false
-  /** Consecutive rate-limited sends, and the timer for the next attempt. */
-  private limitedSends = 0
+  /** Timer for re-sending after a transient failure. */
   private retryTimer?: ReturnType<typeof setTimeout>
   private replenishing = false
   private keyCheckTimer?: ReturnType<typeof setInterval>
@@ -188,6 +200,13 @@ export class Engine {
   constructor(private readonly emit: (event: CoreEvent) => void) {}
 
   async start() {
+    // Back on the network: reconnect now rather than after the back-off.
+    self.addEventListener('online', () => {
+      if (this.ws || !this.account) return
+      clearTimeout(this.reconnectTimer)
+      this.reconnectMs = 1000
+      this.connect()
+    })
     await init()
     this.store = await SecureStore.open()
     this.account = await this.store.getJson<Account>('account')
@@ -1109,6 +1128,34 @@ export class Engine {
     void this.flushOutbox()
   }
 
+  /**
+   * Sends a message again after it failed for good: re-encrypted for the
+   * group as it is now, under the same message id.
+   */
+  async retryMessage(conversationId: string, messageId: string) {
+    const { core } = this.ready()
+    const conv = this.group(conversationId)
+    if (conv.status) throw new Error("You're no longer in this conversation")
+    await this.exclusive(async () => {
+      const list = await this.messages(conversationId)
+      const message = list.find((m) => m.id === messageId && m.from === 'me' && m.status === 'failed')
+      if (!message) return
+      const envelope = core.sendText(fromHex(conversationId), message.text, message.sentAt, fromHex(messageId))
+      this.state.outbox.push({
+        messageId,
+        conversationId,
+        envelope: toBase64(envelope),
+        recipients: this.recipients(conversationId),
+      })
+      message.status = 'sending'
+      message.error = undefined
+      await this.store.putJson(`messages:${conversationId}`, list)
+      await this.persist()
+    })
+    this.emit({ type: 'messages', conversationId })
+    void this.flushOutbox()
+  }
+
   // ---- WebSocket -------------------------------------------------------------
 
   private connect() {
@@ -1131,7 +1178,7 @@ export class Engine {
       for (const resolve of this.waiters.values()) resolve(undefined)
       this.waiters.clear()
       this.setConnection('offline')
-      setTimeout(() => this.connect(), this.reconnectMs)
+      this.reconnectTimer = setTimeout(() => this.connect(), this.reconnectMs)
       this.reconnectMs = Math.min(this.reconnectMs * 2, MAX_RECONNECT_MS)
     }
   }
@@ -1288,6 +1335,16 @@ export class Engine {
         this.emitView()
       }
     } else if (event.kind === 'message') {
+      // Messages from earlier epochs still decrypt (for late delivery), so a
+      // removed member could keep posting with the keys they last had. The
+      // server can't read commits to stop them: drop what doesn't come from
+      // a current member.
+      const sender = toHex(event.sender)
+      const current = (this.core!.members(event.conversationId) as Uint8Array[]).map(toHex)
+      if (!current.includes(sender)) {
+        console.warn('dropping a message from a former member')
+        return
+      }
       const from = splitIdentity(event.sender).account
       const conv = this.state.conversations[conversationId]
       const mine = from === this.myAccount()
@@ -1346,18 +1403,23 @@ export class Engine {
           encodeSend(id, fromBase64(item.envelope), item.recipients.map(fromHex), item.silent ?? false),
         )
         if (!result) return // disconnected: retry after reconnecting
-        if (result.kind === 'error' && result.errorCode === RATE_LIMITED) {
-          // Keep the message queued and try again later, in order.
-          clearTimeout(this.retryTimer)
-          this.retryTimer = setTimeout(() => void this.flushOutbox(), retryDelay(this.limitedSends++))
-          return
+        let outcome = sendOutcome(result)
+        if (outcome.kind === 'retry') {
+          item.attempts = (item.attempts ?? 0) + 1
+          if (item.attempts <= MAX_SEND_RETRIES) {
+            // Keep it queued and try again later, in order.
+            clearTimeout(this.retryTimer)
+            this.retryTimer = setTimeout(() => void this.flushOutbox(), retryDelay(item.attempts - 1))
+            return
+          }
+          outcome = { kind: 'failed', reason: "Couldn't reach the server" }
         }
-        this.limitedSends = 0
-        const ok = result.kind === 'send_result' && result.accepted
-        if (!ok) console.warn('send rejected', result.errorCode, result.errorMessage)
+        if (outcome.kind === 'failed') console.warn('send failed', result.errorCode, result.errorMessage)
         const settle = async () => {
           this.state.outbox.shift()
-          await this.setStatus(item.conversationId, item.messageId, ok ? 'sent' : 'failed')
+          if (outcome.kind === 'failed')
+            await this.setStatus(item.conversationId, item.messageId, 'failed', outcome.reason)
+          else await this.setStatus(item.conversationId, item.messageId, 'sent')
           await this.persist()
         }
         await (locked ? settle() : this.exclusive(settle))
@@ -1372,7 +1434,18 @@ export class Engine {
     if (!ws || ws.readyState !== WebSocket.OPEN) return Promise.resolve(undefined)
     const id = this.requestId()
     return new Promise((resolve) => {
-      this.waiters.set(id, resolve)
+      // A connection that stops answering is replaced; the request counts
+      // as lost and whatever sent it retries after reconnecting.
+      const timeout = setTimeout(() => {
+        if (!this.waiters.delete(id)) return
+        resolve(undefined)
+        console.warn('request timed out; reconnecting')
+        ws.close()
+      }, REQUEST_TIMEOUT_MS)
+      this.waiters.set(id, (frame) => {
+        clearTimeout(timeout)
+        resolve(frame)
+      })
       ws.send(plain(encode(id)))
     })
   }
@@ -1569,12 +1642,13 @@ export class Engine {
     this.emitView()
   }
 
-  private async setStatus(conversationId: string, messageId: string, status: ChatMessage['status']) {
+  private async setStatus(conversationId: string, messageId: string, status: ChatMessage['status'], error?: string) {
     const list = await this.messages(conversationId)
     const message = list.find((m) => m.id === messageId)
     // A receipt may already have moved it past 'sent'.
     if (!message || (status === 'sent' && message.status !== 'sending')) return
     message.status = status
+    message.error = error
     await this.store.putJson(`messages:${conversationId}`, list)
     this.emit({ type: 'messages', conversationId })
   }

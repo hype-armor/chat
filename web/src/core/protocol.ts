@@ -84,6 +84,8 @@ export type ChatMessage = {
   readBy?: string[]
   /** Received messages: this user has seen it (a read receipt was due). */
   seen?: boolean
+  /** Why it wasn't sent ('failed' only). */
+  error?: string
 }
 
 export type CoreStatus = { version: string; selfTest: boolean }
@@ -118,6 +120,7 @@ export type CoreRequest =
   | { type: 'acceptRequest'; conversationId: string }
   | { type: 'deleteAccount'; phone: string }
   | { type: 'markRead'; conversationId: string }
+  | { type: 'retryMessage'; conversationId: string; messageId: string }
   | { type: 'setReadReceipts'; on: boolean }
   | { type: 'block'; account: string }
   | { type: 'unblock'; account: string }

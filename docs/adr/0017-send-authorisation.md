@@ -35,8 +35,12 @@ Option 2 for Phase 1:
   reachable before anyone sees the commit. This also removes the race where
   members reacted to a commit before the welcome arrived, and simplifies
   recovering a commit whose answer was lost.
-- Removed members stay on the server's list. They can still send noise to
-  former groupmates, but clients can't decrypt it.
+- Removed members stay on the server's list, since the server can't read
+  commits to see who was removed. Their messages can still decrypt for a
+  while, because clients keep recent epochs' secrets for late delivery.
+  So clients drop application messages from senders who are not in the
+  group's current roster. (Corrected 2026-10-29: this said clients
+  couldn't decrypt them.)
 
 ## Consequences
 The server stores conversation membership (device level). Revisit with

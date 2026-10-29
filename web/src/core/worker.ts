@@ -72,6 +72,9 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
     case 'verifyScanned':
       await engine.verifyScanned(request.conversationId, request.account, request.text)
       return { type: 'ok' }
+    case 'retryMessage':
+      await engine.retryMessage(request.conversationId, request.messageId)
+      return { type: 'ok' }
     case 'markRead':
       await engine.markRead(request.conversationId)
       return { type: 'ok' }
