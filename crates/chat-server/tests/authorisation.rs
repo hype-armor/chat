@@ -44,8 +44,7 @@ fn plain(env: Envelope, to: &[Uuid]) -> SendEnvelope {
     SendEnvelope {
         envelope: Some(env),
         recipient_devices: ids(to),
-        welcome: None,
-        welcome_recipients: vec![],
+        ..Default::default()
     }
 }
 
@@ -152,6 +151,7 @@ async fn commit_and_welcome_are_accepted_together(pool: PgPool) {
         recipient_devices: ids(&[bob]),
         welcome: Some(envelope(b"group", ContentType::Welcome, 0)),
         welcome_recipients: ids(&[carol]),
+        silent: false,
     };
     // Without a claim the whole send fails, and the epoch doesn't advance.
     assert_eq!(send(&mut alice_ws, with_welcome(commit(1))).await, Err(403));
@@ -182,6 +182,7 @@ async fn commit_and_welcome_are_accepted_together(pool: PgPool) {
         recipient_devices: ids(&[bob]),
         welcome: Some(envelope(b"group", ContentType::Welcome, 0)),
         welcome_recipients: ids(&[carol]),
+        silent: false,
     };
     assert_eq!(send(&mut alice_ws, bad).await, Err(400));
 }

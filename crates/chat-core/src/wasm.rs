@@ -2,7 +2,8 @@
 
 use chat_proto::v1::{
     Ack, Authenticate, ClientFrame, Content, ContentType, DeviceSync, Envelope, GroupInfo, Ping,
-    Profile, SendEnvelope, ServerFrame, Text, client_frame, content, server_frame,
+    Profile, Receipt, SendEnvelope, ServerFrame, Text, client_frame, content, receipt,
+    server_frame,
 };
 use js_sys::{Array, Uint8Array};
 use prost::Message;
@@ -196,6 +197,12 @@ pub struct EventView {
     /// `DeviceSync` state from one of the account's own devices.
     #[wasm_bindgen(getter_with_clone, js_name = deviceSync)]
     pub device_sync: Option<Vec<u8>>,
+    /// Receipts: 0 delivered, 1 read.
+    #[wasm_bindgen(js_name = receiptKind)]
+    pub receipt_kind: Option<u8>,
+    /// Receipted message ids, 16 bytes each, concatenated.
+    #[wasm_bindgen(getter_with_clone, js_name = receiptIds)]
+    pub receipt_ids: Vec<u8>,
 }
 
 impl EventView {
@@ -210,6 +217,8 @@ impl EventView {
             group_name: None,
             group_admins: Vec::new(),
             device_sync: None,
+            receipt_kind: None,
+            receipt_ids: Vec::new(),
         }
     }
 }
@@ -425,6 +434,32 @@ impl CoreClient {
         )
     }
 
+    /// `read`: read receipt, else delivered. Ids are 16-byte message ids.
+    #[wasm_bindgen(js_name = sendReceipt)]
+    pub fn send_receipt(
+        &mut self,
+        conversation_id: &[u8],
+        read: bool,
+        message_ids: &Array,
+        sent_at_ms: f64,
+        message_id: Vec<u8>,
+    ) -> Result<Vec<u8>, JsError> {
+        let kind = if read {
+            receipt::Kind::Read
+        } else {
+            receipt::Kind::Delivered
+        };
+        self.send(
+            conversation_id,
+            sent_at_ms,
+            content::Body::Receipt(Receipt {
+                kind: kind.into(),
+                message_ids: array_bytes(message_ids),
+            }),
+            message_id,
+        )
+    }
+
     /// For the account's self conversation only (ADR-0019).
     #[wasm_bindgen(js_name = sendDeviceSync)]
     pub fn send_device_sync(
@@ -462,6 +497,16 @@ impl CoreClient {
                         view.group_admins = g.admins.concat();
                     }
                     Some(content::Body::DeviceSync(d)) => view.device_sync = Some(d.state),
+                    Some(content::Body::Receipt(r)) => {
+                        view.receipt_kind =
+                            Some(u8::from(r.kind == i32::from(receipt::Kind::Read)));
+                        view.receipt_ids = r
+                            .message_ids
+                            .into_iter()
+                            .filter(|id| id.len() == 16)
+                            .flatten()
+                            .collect();
+                    }
                     None => view.kind = "ignored".to_owned(),
                 }
                 view
@@ -524,11 +569,13 @@ pub fn encode_send(
     request_id: u32,
     envelope: &[u8],
     recipients: &Array,
+    silent: bool,
 ) -> Result<Vec<u8>, JsError> {
     let envelope = Envelope::decode(envelope).map_err(|e| JsError::new(&e.to_string()))?;
     let send = SendEnvelope {
         envelope: Some(envelope),
         recipient_devices: array_bytes(recipients),
+        silent,
         ..Default::default()
     };
     Ok(client_frame(request_id, client_frame::Body::Send(send)))
@@ -550,6 +597,7 @@ pub fn encode_send_with_welcome(
         recipient_devices: array_bytes(recipients),
         welcome: Some(decode(welcome)?),
         welcome_recipients: array_bytes(welcome_recipients),
+        silent: false,
     };
     Ok(client_frame(request_id, client_frame::Body::Send(send)))
 }

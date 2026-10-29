@@ -12,6 +12,7 @@ message Content {
     Profile profile = 3;
     GroupInfo group_info = 4;
     DeviceSync device_sync = 5;
+    Receipt receipt = 6;
   }
 }
 
@@ -36,4 +37,15 @@ message GroupInfo {
 // the client (display name, contact names, conversation metadata).
 message DeviceSync {
   bytes state = 1;
+}
+
+// Delivery and read receipts (FR-MSG-5) for messages in the same
+// conversation, by their envelope message ids.
+message Receipt {
+  enum Kind {
+    DELIVERED = 0;
+    READ = 1;
+  }
+  Kind kind = 1;
+  repeated bytes message_ids = 2;
 }

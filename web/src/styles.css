@@ -542,3 +542,18 @@ button.danger {
   justify-content: center;
   align-items: center;
 }
+
+/* Receipts and unread counts (FR-MSG-5) */
+.badge.unread {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.devices .choice {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  font-weight: normal;
+  margin-top: 0.75rem;
+}

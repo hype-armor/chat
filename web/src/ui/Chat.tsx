@@ -11,6 +11,8 @@ type Ready = Extract<AppView, { phase: 'ready' }>
 const STATUS_LABEL: Record<ChatMessage['status'], string> = {
   sending: 'Sending…',
   sent: 'Sent',
+  delivered: 'Delivered',
+  read: 'Read',
   failed: 'Not sent',
   received: '',
 }
@@ -43,6 +45,7 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
         ))}
         <NotificationToggle core={core} />
         <Devices core={core} />
+        <Privacy core={core} readReceipts={view.readReceipts} />
         <BlockedList core={core} />
         <DeleteAccount core={core} />
         <NewChat core={core} onStarted={setSelected} />
@@ -94,12 +97,42 @@ function ConversationList({
       {conversations.map((c) => (
         <li key={c.id}>
           <button type="button" className={c.id === selected ? 'active' : ''} onClick={() => onSelect(c.id)}>
-            <span className="title">{c.title}</span>
+            <span className="title">
+              {c.title}
+              {c.unread > 0 && (
+                <span className="badge small unread" aria-label={`${c.unread} unread`}>
+                  {c.unread}
+                </span>
+              )}
+            </span>
             <span className="muted small preview">{c.lastText ?? 'No messages yet'}</span>
           </button>
         </li>
       ))}
     </ul>
+  )
+}
+
+function Privacy({ core, readReceipts }: { core: CoreClient; readReceipts: boolean }) {
+  // Local state so the box flips at once; the worker's view follows.
+  const [on, setOn] = useState(readReceipts)
+  useEffect(() => setOn(readReceipts), [readReceipts])
+  return (
+    <details className="devices">
+      <summary>Privacy</summary>
+      <label className="choice">
+        <input
+          type="checkbox"
+          checked={on}
+          onChange={(e) => {
+            setOn(e.target.checked)
+            void core.setReadReceipts(e.target.checked)
+          }}
+        />
+        Send read receipts
+      </label>
+      <p className="muted small">Others still see when your devices received their messages.</p>
+    </details>
   )
 }
 
@@ -434,6 +467,15 @@ function Conversation({
       unsubscribe()
     }
   }, [core, id])
+
+  // Seen while visible: read receipts go out (FR-MSG-5).
+  useEffect(() => {
+    if (request) return
+    const mark = () => document.visibilityState === 'visible' && void core.markRead(id)
+    mark()
+    document.addEventListener('visibilitychange', mark)
+    return () => document.removeEventListener('visibilitychange', mark)
+  }, [core, id, messages, request])
 
   useEffect(() => {
     // Block body: scrollIntoView may return a Promise, which React would

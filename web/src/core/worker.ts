@@ -72,6 +72,12 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
     case 'verifyScanned':
       await engine.verifyScanned(request.conversationId, request.account, request.text)
       return { type: 'ok' }
+    case 'markRead':
+      await engine.markRead(request.conversationId)
+      return { type: 'ok' }
+    case 'setReadReceipts':
+      await engine.setReadReceipts(request.on)
+      return { type: 'ok' }
     case 'deleteAccount':
       await engine.deleteAccount(request.phone)
       return { type: 'ok' }
