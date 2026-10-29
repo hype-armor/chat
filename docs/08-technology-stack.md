@@ -26,7 +26,7 @@ cost to operate**.
 | Maps | **MapLibre GL JS + Protomaps PMTiles** (self-hosted OSM tiles) | 0008 |
 | Federation | Not in v1; self-hosting in v1 | 0009 |
 | Backup | Encrypted backup with user-held recovery key | 0010 |
-| Identity | Phone number + SMS/voice one-time code via pluggable provider | 0011 |
+| Identity | Username (`name.NN`) with invite-only sign-up; no SMS (ADR-0021) | 0021 |
 | Licence | AGPL-3.0-or-later for code; CC BY 4.0 for the protocol spec | 0012 |
 | Runtime / hosting | Self-hosted **k3s** (Kubernetes) in the **US**; CloudNativePG, cert-manager, LiveKit chart | 0014, 0015 |
 | Native wrappers (later) | **Capacitor** (Android/iOS), **Tauri** (desktop), reusing the web UI and core | 0013 |

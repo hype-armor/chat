@@ -13,14 +13,14 @@ Items marked **[ASSUMPTION]** need stakeholder confirmation (see doc 09).
 
 | ID | Requirement | Pri |
 |----|-------------|-----|
-| FR-ID-1 | A user registers with a **phone number**, verified by SMS (voice-call fallback) one-time code. | M |
-| FR-ID-1a | The phone number is never shown to strangers (including in offline mode); users have a display name and avatar for that. | M |
+| FR-ID-1 | A user registers with a unique **username** (`name.NN`). Sign-up needs an invite from an existing user while registration is invite-only (ADR-0021). | M |
+| FR-ID-1a | Users have a display name and avatar for chats; the username is only for finding someone and is never shown to strangers (including in offline mode). | M |
 | FR-ID-2 | Each device (browser profile / installed PWA) generates its own long-term identity key pair locally; private keys never leave the device unencrypted. | M |
 | FR-ID-3 | A user can link multiple devices/browsers to one account by scanning a QR code; each device is a separate cryptographic participant. | M |
 | FR-ID-4 | A user can view and remove linked devices; removal revokes the device from all conversations. | S |
 | FR-ID-5 | Users can verify each other's identity out-of-band (QR code scan or comparing a safety number). | M |
 | FR-ID-6 | Users are warned when a contact's identity key changes. | M |
-| FR-ID-7 | Users find contacts by entering a phone number, or (where the browser supports the Contact Picker API) by picking contacts; the address book is never uploaded in bulk or in plaintext. | S |
+| FR-ID-7 | Users find contacts by exact username, invite link or QR code; there is no directory search or address-book upload. | S |
 | FR-ID-8 | A user can block and report another user. | M |
 | FR-ID-9 | A user can delete their account and all server-held data. | M |
 
@@ -185,7 +185,7 @@ Items marked **[ASSUMPTION]** need stakeholder confirmation (see doc 09).
 |----|-------------|-----|
 | NFR-LEG-1 | GDPR / CCPA compliance for server-held personal data (export, deletion). | M |
 | NFR-LEG-2 | Browser permission best practice (ask in context); app-store policy compliance once native wrappers ship. | M |
-| NFR-LEG-5 | SMS-pumping / toll-fraud protection on phone verification. | M |
+| NFR-LEG-5 | ~~SMS-pumping protection~~: no longer applies (no SMS since ADR-0021). | — |
 | NFR-LEG-3 | Export-control review for cryptography (e.g., US EAR self-classification). | M |
 | NFR-LEG-4 | Dependency licences compatible with our distribution model (note: AGPL libraries). | M |
 

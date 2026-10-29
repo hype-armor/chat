@@ -109,6 +109,9 @@ kubectl apply -n chat -f deploy/k8s/postgres-cluster.yaml
 helm upgrade --install chat deploy/helm/chat -n chat \
   -f deploy/helm/chat/values-k3s.yaml --set host=chat.example.com \
   --set server.vapid.existingSecret=chat-vapid --atomic
+# Sign-up is invite-only (ADR-0021): create the first invite, open the
+# printed link and sign up; invite everyone else from the app.
+kubectl -n chat exec deploy/chat-server -- chat-server create-invite https://chat.example.com
 ```
 
 ## 4. Calls (Phase 3)

@@ -113,7 +113,7 @@ export function BlockedList({ core }: { core: CoreClient }) {
 
 /** Deleting the account and all its server data (FR-ID-9). */
 export function DeleteAccount({ core }: { core: CoreClient }) {
-  const [phone, setPhone] = useState('')
+  const [username, setUsername] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
 
@@ -122,7 +122,7 @@ export function DeleteAccount({ core }: { core: CoreClient }) {
     setBusy(true)
     setError(undefined)
     try {
-      await core.deleteAccount(phone)
+      await core.deleteAccount(username)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       setBusy(false)
@@ -138,8 +138,14 @@ export function DeleteAccount({ core }: { core: CoreClient }) {
           server. Messages on this device are erased. This can't be undone.
         </p>
         <label>
-          Type your phone number to confirm
-          <input value={phone} onChange={(e) => setPhone(e.target.value)} type="tel" required autoComplete="off" />
+          Type your username to confirm
+          <input
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            required
+            autoComplete="off"
+            autoCapitalize="none"
+          />
         </label>
         <button type="submit" className="danger" disabled={busy}>
           {busy ? 'Deleting…' : 'Delete my account'}

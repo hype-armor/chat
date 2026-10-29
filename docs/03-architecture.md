@@ -95,8 +95,8 @@ flowchart LR
 | Component | Responsibility | State |
 |-----------|---------------|-------|
 | Edge gateway | TLS termination, long-lived WebSocket connections, auth, rate limiting, routing to services | Stateless (connection registry in cache) |
-| Account & auth | Phone verification (SMS/voice OTP via pluggable provider), device linking, auth tokens, account deletion | Accounts DB |
-| Contact lookup | Rate-limited phone-number → account lookup | Accounts DB |
+| Account & auth | Sign-up by username with invites (ADR-0021), device linking, auth tokens, account deletion | Accounts DB |
+| Contact lookup | Rate-limited exact username → account lookup | Accounts DB |
 | Key directory | Publishes per-device public identity keys and one-time key packages/prekeys; optional key-transparency log | Key DB, append-only log |
 | Delivery service | Accepts encrypted envelopes, fans out per recipient device, stores until acked, **orders group handshake messages** (required by MLS) | Message queue store |
 | Group state service | Stores the *encrypted* group state / ordering epoch counter; never sees membership in plaintext if we adopt encrypted group metadata | Small KV |
@@ -159,7 +159,8 @@ applies it and sends the welcome; otherwise it discards it.
 
 | Entity | Fields | Retention |
 |--------|--------|-----------|
-| Account | account_id, phone number (needed for login + SMS), created_at, auth credential | Until deletion |
+| Account | account_id, username, created_at | Until deletion |
+| Invite | hash of the code, creating account, expiry (deleted when used) | 7 days |
 | Device | device_id, account_id, identity public key, Web Push subscription, last_seen (coarse) | Until unlinked |
 | KeyPackage | device_id, package bytes, expires_at | Until consumed/expired |
 | QueuedEnvelope | recipient_device_id, envelope bytes, received_at | Until acked or 30 days |
@@ -179,8 +180,8 @@ lists, plaintext group names/members (goal), locations, call content.
 - **Observability:** metrics on queue depth, delivery latency, error rates;
   no per-user content or identifiers in logs.
 - **Rate limiting & abuse:** per-account and per-IP token buckets at the edge;
-  SMS-pumping protection (per-prefix limits, CAPTCHA/proof-of-work before
-  sending a code, block premium-rate ranges).
+  invite-only sign-up at launch (ADR-0021), proof-of-work in front of
+  open sign-up later.
 - **Deployment:** every component ships as a container. Production runs
   on Kubernetes via a Helm chart (doc 10, ADR-0014); a Docker Compose file
   runs the full stack for local development.

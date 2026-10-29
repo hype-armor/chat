@@ -2,21 +2,39 @@ import { type FormEvent, useState } from 'react'
 import type { CoreClient } from '../core/client'
 import { LinkThisDevice } from './LinkDevice'
 
-/** Phone verification (FR-ID-1). */
+/** The invite code from an invite link (`/#invite=<code>`), if any. */
+function inviteFromLink(): string {
+  return new URLSearchParams(location.hash.slice(1)).get('invite') ?? ''
+}
+
+/** Suggests a username from a display name: `alex.27`. */
+export function suggestUsername(name: string): string {
+  const base = name
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[^a-z0-9_]/g, '')
+    .replace(/^[^a-z]+/, '')
+    .slice(0, 20)
+  if (base.length < 3) return ''
+  return `${base}.${String(Math.floor(Math.random() * 100)).padStart(2, '0')}`
+}
+
+/** Sign-up with a username and an invite (FR-ID-1, ADR-0021). */
 export function Onboarding({ core, notice }: { core: CoreClient; notice?: string }) {
-  const [phone, setPhone] = useState('')
   const [name, setName] = useState('')
-  const [code, setCode] = useState('')
-  const [step, setStep] = useState<'phone' | 'code' | 'link'>('phone')
+  const [username, setUsername] = useState('')
+  const [invite, setInvite] = useState(inviteFromLink)
+  const [linking, setLinking] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
 
-  const run = (action: () => Promise<void>) => async (e: FormEvent) => {
+  const submit = async (e: FormEvent) => {
     e.preventDefault()
     setBusy(true)
     setError(undefined)
     try {
-      await action()
+      await core.signUp(username, name.trim(), invite)
+      history.replaceState(null, '', location.pathname)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -33,56 +51,53 @@ export function Onboarding({ core, notice }: { core: CoreClient; notice?: string
           {notice}
         </p>
       )}
-      {step === 'link' ? (
-        <LinkThisDevice core={core} onCancel={() => setStep('phone')} />
-      ) : step === 'phone' ? (
-        <form onSubmit={run(async () => {
-          await core.requestCode(phone.trim())
-          setStep('code')
-        })}>
+      {linking ? (
+        <LinkThisDevice core={core} onCancel={() => setLinking(false)} />
+      ) : (
+        <form onSubmit={submit}>
           <label>
             Your name
-            <input value={name} onChange={(e) => setName(e.target.value)} required maxLength={64} autoComplete="name" />
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onBlur={() => username || setUsername(suggestUsername(name))}
+              required
+              maxLength={64}
+              autoComplete="name"
+            />
           </label>
           <label>
-            Phone number
+            Username
             <input
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
               required
-              type="tel"
-              placeholder="+15551234567"
-              pattern="\+[1-9][0-9]{7,14}"
-              title="International format, starting with +"
-              autoComplete="tel"
+              placeholder="alex.27"
+              pattern="[A-Za-z][A-Za-z0-9_]{2,19}\.[0-9]{2,4}"
+              title="A name of 3-20 letters, digits or _, then a dot and 2-4 digits, like alex.27"
+              autoComplete="username"
+              autoCapitalize="none"
+              spellCheck={false}
+            />
+          </label>
+          <p className="muted small">
+            People add you by your username, so share it only with people you want to hear from.
+          </p>
+          <label>
+            Invite code
+            <input
+              value={invite}
+              onChange={(e) => setInvite(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="From your invite link"
             />
           </label>
           <button type="submit" disabled={busy}>
-            Send code
+            Sign up
           </button>
-          <button type="button" className="link" onClick={() => setStep('link')}>
+          <button type="button" className="link" onClick={() => setLinking(true)}>
             Already using Chat on another device? Link this one
-          </button>
-        </form>
-      ) : (
-        <form onSubmit={run(() => core.verify(phone.trim(), code.trim(), name.trim()))}>
-          <p>We sent a 6-digit code to {phone}.</p>
-          <label>
-            Verification code
-            <input
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              required
-              inputMode="numeric"
-              pattern="[0-9]{6}"
-              autoComplete="one-time-code"
-            />
-          </label>
-          <button type="submit" disabled={busy}>
-            Verify
-          </button>
-          <button type="button" className="link" onClick={() => setStep('phone')}>
-            Use a different number
           </button>
         </form>
       )}

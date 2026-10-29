@@ -17,13 +17,13 @@ async fn reports_are_stored_with_chosen_evidence(pool: PgPool) {
         },
     )
     .await;
-    let (_, token) = server.register("+15550005001").await;
-    server.register("+15550005002").await;
+    let (_, token) = server.register("u5550005001.10").await;
+    server.register("u5550005002.10").await;
     let (_, spammer) = server
         .post(
             "/v1/lookup",
             Some(&token),
-            json!({ "phone": "+15550005002" }),
+            json!({ "username": "u5550005002.10" }),
         )
         .await;
     let account = spammer["account_id"].clone();

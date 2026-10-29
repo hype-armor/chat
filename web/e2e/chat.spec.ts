@@ -1,21 +1,21 @@
 import { expect, test } from '@playwright/test'
-import { messages, openChat, randomPhone, signUp } from './support'
+import { messages, openChat, randomUsername, signUp } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
 
 test('two people exchange encrypted messages, and history survives a reload', async ({ browser }) => {
-  const alicePhone = randomPhone()
-  const bobPhone = randomPhone()
-  const alice = await signUp(browser, 'Alice', alicePhone)
-  const bob = await signUp(browser, 'Bob', bobPhone)
+  const aliceUsername = randomUsername()
+  const bobUsername = randomUsername()
+  const alice = await signUp(browser, 'Alice', aliceUsername)
+  const bob = await signUp(browser, 'Bob', bobUsername)
 
-  await alice.getByLabel("Contact's phone number").fill(bobPhone)
+  await alice.getByLabel("Contact's username").fill(bobUsername)
   await alice.getByRole('button', { name: 'Start chat' }).click()
   await alice.getByLabel('Message').fill('Hello Bob')
   await alice.getByRole('button', { name: 'Send' }).click()
   await expect(messages(alice).filter({ hasText: 'Hello Bob' })).toContainText('Sent')
-  // Bob's profile arrives once he joins, replacing the phone number.
+  // Bob's profile arrives once he joins, replacing the username.
   await expect(alice.getByRole('heading', { name: 'Bob' })).toBeVisible()
 
   await openChat(bob, /Alice/)
@@ -34,23 +34,23 @@ test('two people exchange encrypted messages, and history survives a reload', as
   await expect(messages(bob)).toHaveText([/Hello Bob/, /Hi Alice/, /Still there\?/])
 })
 
-test('unknown numbers are reported', async ({ browser }) => {
-  const page = await signUp(browser, 'Carol', randomPhone())
-  await page.getByLabel("Contact's phone number").fill(randomPhone())
+test('unknown usernames are reported', async ({ browser }) => {
+  const page = await signUp(browser, 'Carol', randomUsername())
+  await page.getByLabel("Contact's username").fill(randomUsername())
   await page.getByRole('button', { name: 'Start chat' }).click()
-  await expect(page.getByRole('alert')).toHaveText('no account for that number')
+  await expect(page.getByRole('alert')).toHaveText('no one has that username')
 })
 
 test('groups: create, talk, and add someone later', async ({ browser }) => {
-  const [annPhone, benPhone, catPhone, danPhone] = [randomPhone(), randomPhone(), randomPhone(), randomPhone()]
-  const ann = await signUp(browser, 'Ann', annPhone)
-  const ben = await signUp(browser, 'Ben', benPhone)
-  const cat = await signUp(browser, 'Cat', catPhone)
-  const dan = await signUp(browser, 'Dan', danPhone)
+  const [annUsername, benUsername, catUsername, danUsername] = [randomUsername(), randomUsername(), randomUsername(), randomUsername()]
+  const ann = await signUp(browser, 'Ann', annUsername)
+  const ben = await signUp(browser, 'Ben', benUsername)
+  const cat = await signUp(browser, 'Cat', catUsername)
+  const dan = await signUp(browser, 'Dan', danUsername)
 
   await ann.getByText('New group').click()
   await ann.getByLabel('Group name').fill('Trip')
-  await ann.getByLabel("Members' phone numbers").fill(`${benPhone}\n${catPhone}`)
+  await ann.getByLabel("Members' usernames").fill(`${benUsername}\n${catUsername}`)
   await ann.getByRole('button', { name: 'Create group' }).click()
   await expect(ann.getByRole('heading', { name: 'Trip' })).toBeVisible()
   await ann.getByLabel('Message').fill('Hi team')
@@ -68,7 +68,7 @@ test('groups: create, talk, and add someone later', async ({ browser }) => {
 
   // Adding Dan needs a commit the server orders; he sees only later messages.
   await ann.getByRole('button', { name: 'Add people' }).click()
-  await ann.getByLabel('Phone numbers to add').fill(danPhone)
+  await ann.getByLabel('Usernames to add').fill(danUsername)
   await ann.getByRole('button', { name: 'Add', exact: true }).click()
   await expect(ann.getByText('4 people')).toBeVisible()
   await dan.getByRole('button', { name: /Trip/ }).click()
@@ -81,16 +81,16 @@ test('groups: create, talk, and add someone later', async ({ browser }) => {
 
 test('group admin: rename, promote, remove, and members leaving', async ({ browser }) => {
   test.setTimeout(60_000) // four sign-ups plus several server round trips
-  const phones = [randomPhone(), randomPhone(), randomPhone(), randomPhone()]
+  const usernames = [randomUsername(), randomUsername(), randomUsername(), randomUsername()]
   const [ann, ben, cat, dee] = [
-    await signUp(browser, 'Ann', phones[0]),
-    await signUp(browser, 'Ben', phones[1]),
-    await signUp(browser, 'Cat', phones[2]),
-    await signUp(browser, 'Dee', phones[3]),
+    await signUp(browser, 'Ann', usernames[0]),
+    await signUp(browser, 'Ben', usernames[1]),
+    await signUp(browser, 'Cat', usernames[2]),
+    await signUp(browser, 'Dee', usernames[3]),
   ]
   await ann.getByText('New group').click()
   await ann.getByLabel('Group name').fill('Club')
-  await ann.getByLabel("Members' phone numbers").fill(phones.slice(1).join('\n'))
+  await ann.getByLabel("Members' usernames").fill(usernames.slice(1).join('\n'))
   await ann.getByRole('button', { name: 'Create group' }).click()
   await expect(ann.getByRole('heading', { name: 'Club' })).toBeVisible()
   for (const page of [ben, cat, dee]) await openChat(page, /Club/)

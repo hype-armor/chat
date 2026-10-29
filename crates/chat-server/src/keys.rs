@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::{AuthDevice, db, valid_phone},
+    auth::{AuthDevice, db, normalize_username},
     error::ApiError,
     limits,
 };
@@ -160,7 +160,7 @@ pub async fn claim(
 
 #[derive(Deserialize)]
 pub struct Lookup {
-    phone: String,
+    username: String,
 }
 
 #[derive(Serialize)]
@@ -169,29 +169,28 @@ pub struct Account {
     device_ids: Vec<Uuid>,
 }
 
-/// Finds one contact by phone number. No bulk lookup (docs/04 §4).
+/// Finds one contact by exact username. No search or bulk lookup (ADR-0021).
 pub async fn lookup(
     State(state): State<AppState>,
     AuthDevice(device): AuthDevice,
     Json(req): Json<Lookup>,
 ) -> Result<Json<Account>, ApiError> {
     let db = db(&state)?;
-    if !valid_phone(&req.phone) {
-        return Err(ApiError::BadRequest("phone must be in E.164 format"));
-    }
+    let username = normalize_username(&req.username)
+        .ok_or(ApiError::BadRequest("usernames look like name.42"))?;
     // Contact discovery must not be an enumeration oracle (docs/04 §4).
     let key = format!("lookup:{device}");
     limits::take(db, &key, 1, state.limits.lookups_per_hour, limits::HOUR).await?;
     let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
         "SELECT a.account_id, d.device_id FROM accounts a
-         JOIN devices d USING (account_id) WHERE a.phone_number = $1 ORDER BY d.created_at",
+         JOIN devices d USING (account_id) WHERE a.username = $1 ORDER BY d.created_at",
     )
-    .bind(&req.phone)
+    .bind(&username)
     .fetch_all(db)
     .await?;
     let account_id = rows
         .first()
-        .ok_or(ApiError::NotFound("no account for that number"))?
+        .ok_or(ApiError::NotFound("no one has that username"))?
         .0;
     Ok(Json(Account {
         account_id,

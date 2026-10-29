@@ -9,6 +9,7 @@ import type {
   CoreResponseBody,
   CoreStatus,
   DeviceInfo,
+  InviteOffer,
   LinkOffer,
   ResponseEnvelope,
   SafetyNumber,
@@ -57,24 +58,24 @@ export class CoreClient {
     return expect(await this.call({ type: 'view' }), 'view').view
   }
 
-  async requestCode(phone: string) {
-    expect(await this.call({ type: 'requestCode', phone }), 'ok')
+  async signUp(username: string, displayName: string, invite?: string) {
+    expect(await this.call({ type: 'signUp', username, displayName, invite }), 'ok')
   }
 
-  async verify(phone: string, code: string, displayName: string) {
-    expect(await this.call({ type: 'verify', phone, code, displayName }), 'ok')
+  async createInvite(): Promise<InviteOffer> {
+    return expect(await this.call({ type: 'createInvite' }), 'invite').offer
   }
 
-  async startChat(phone: string): Promise<string> {
-    return expect(await this.call({ type: 'startChat', phone }), 'conversation').conversationId
+  async startChat(username: string): Promise<string> {
+    return expect(await this.call({ type: 'startChat', username }), 'conversation').conversationId
   }
 
-  async createGroup(name: string, phones: string[]): Promise<string> {
-    return expect(await this.call({ type: 'createGroup', name, phones }), 'conversation').conversationId
+  async createGroup(name: string, usernames: string[]): Promise<string> {
+    return expect(await this.call({ type: 'createGroup', name, usernames }), 'conversation').conversationId
   }
 
-  async addMembers(conversationId: string, phones: string[]) {
-    expect(await this.call({ type: 'addMembers', conversationId, phones }), 'ok')
+  async addMembers(conversationId: string, usernames: string[]) {
+    expect(await this.call({ type: 'addMembers', conversationId, usernames }), 'ok')
   }
 
   async pushKey(): Promise<string> {
@@ -167,9 +168,9 @@ export class CoreClient {
     expect(await this.call({ type: 'setReadReceipts', on }), 'ok')
   }
 
-  /** Deletes the account and all its server data; `phone` confirms it. */
-  async deleteAccount(phone: string) {
-    expect(await this.call({ type: 'deleteAccount', phone }), 'ok')
+  /** Deletes the account and all its server data; `username` confirms it. */
+  async deleteAccount(username: string) {
+    expect(await this.call({ type: 'deleteAccount', username }), 'ok')
   }
 
   async acceptRequest(conversationId: string) {

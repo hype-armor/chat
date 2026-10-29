@@ -21,8 +21,8 @@ fn sample(text: &str, name: &str) -> f64 {
 #[sqlx::test]
 async fn sends_deliveries_and_connections_are_measured(pool: PgPool) {
     let server = TestServer::start(pool).await;
-    let (alice, alice_token) = server.register("+15550009001").await;
-    let (bob, bob_token) = server.register("+15550009002").await;
+    let (alice, alice_token) = server.register("u5550009001.10").await;
+    let (bob, bob_token) = server.register("u5550009002.10").await;
     server.admit(b"m", &[alice, bob]).await;
     let mut a = server.connect(&alice_token).await;
     let mut b = server.connect(&bob_token).await;

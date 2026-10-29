@@ -85,8 +85,8 @@ membership changes deferred until online).
 | Encrypted group state (membership, name, avatar inside MLS) | Group membership from server | S |
 | Content-free push notifications | Content from Apple/Google | M |
 | Padding message sizes to buckets | Message length leakage | S |
-| Phone-number contact lookup: one number at a time, strictly rate-limited; no bulk address-book upload. (Hashing phone numbers does not hide them — the space is small enough to brute-force.) | Address book | M |
-| Phone number never transmitted in offline mode or shown to strangers | Identity of offline users | M |
+| Contact lookup by exact username only, strictly rate-limited; no search, directory or address-book upload (ADR-0021). The server holds no phone numbers or emails. | Social graph | M |
+| Username never transmitted in offline mode or shown to strangers | Identity of offline users | M |
 | Delete delivery records on ack | Historical metadata | M |
 | Optional IP-hiding relay for calls | User IP from call peer | S |
 

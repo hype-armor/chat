@@ -11,7 +11,7 @@ use uuid::Uuid;
 #[sqlx::test]
 async fn devices_learn_how_many_key_packages_they_have_left(pool: PgPool) {
     let server = TestServer::start(pool).await;
-    let (device, token) = server.register("+15550003001").await;
+    let (device, token) = server.register("u5550003001.10").await;
     let count = |token: String| {
         let server = &server;
         async move {

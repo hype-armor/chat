@@ -42,6 +42,8 @@ spec:
               value: {{ .Values.server.logLevel | quote }}
             - name: CHAT_METRICS_BIND
               value: {{ if .Values.server.metrics.enabled }}{{ printf "0.0.0.0:%v" .Values.server.metrics.port | quote }}{{ else }}""{{ end }}
+            - name: CHAT_REGISTRATION
+              value: {{ .Values.server.registration | quote }}
             - name: CHAT_TRUST_PROXY_HEADERS
               value: {{ .Values.server.trustProxyHeaders | quote }}
             - name: CHAT_VAPID_SUBJECT

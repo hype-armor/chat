@@ -48,72 +48,40 @@ async fn expect_delivery(client: &mut Client) -> Envelope {
 }
 
 #[sqlx::test]
-async fn phone_verification(pool: PgPool) {
+async fn signing_up_with_a_username(pool: PgPool) {
     let server = TestServer::start(pool).await;
-    let phone = "+15550001111";
-
-    let (status, _) = server
-        .post(
-            "/v1/auth/request-code",
-            None,
-            json!({ "phone": "5550001111" }),
-        )
-        .await;
-    assert_eq!(status, 400);
-
-    let (status, _) = server
-        .post("/v1/auth/request-code", None, json!({ "phone": phone }))
-        .await;
-    assert_eq!(status, 204);
     let key = STANDARD.encode(b"k");
-    let (status, _) = server
-        .post(
-            "/v1/auth/verify",
-            None,
-            json!({ "phone": phone, "code": "000000x", "identity_key": key }),
-        )
-        .await;
-    assert_eq!(status, 401);
+    let sign_up = |username: &str| json!({ "username": username, "identity_key": key });
 
-    let code = server.last_code(phone);
-    let (status, first) = server
-        .post(
-            "/v1/auth/verify",
-            None,
-            json!({ "phone": phone, "code": code, "identity_key": key }),
-        )
-        .await;
-    assert_eq!(status, 200);
-    // Codes are single-use.
-    let (status, _) = server
-        .post(
-            "/v1/auth/verify",
-            None,
-            json!({ "phone": phone, "code": code, "identity_key": key }),
-        )
-        .await;
-    assert_eq!(status, 401);
+    for bad in ["alex", "al.27", "1alex.27", "alex.2", "al-ex.27"] {
+        let (status, _) = server.post("/v1/register", None, sign_up(bad)).await;
+        assert_eq!(status, 400, "{bad}");
+    }
+    // Stored lowercase; the same name in another case is taken.
+    let (status, first) = server.post("/v1/register", None, sign_up("Alex.27")).await;
+    assert_eq!(status, 200, "{first}");
+    assert_eq!(first["username"], "alex.27");
+    let (status, _) = server.post("/v1/register", None, sign_up("ALEX.27")).await;
+    assert_eq!(status, 409);
 
-    // A second device joins the same account.
-    let (_, second_token) = server.register(phone).await;
+    // Others find the account by its exact username only.
+    let (_, other) = server.register("bob.10").await;
     let (status, lookup) = server
-        .post("/v1/lookup", Some(&second_token), json!({ "phone": phone }))
+        .post("/v1/lookup", Some(&other), json!({ "username": "alex.27" }))
         .await;
     assert_eq!(status, 200);
     assert_eq!(lookup["account_id"], first["account_id"]);
-    assert_eq!(lookup["device_ids"].as_array().unwrap().len(), 2);
-
-    // Third request within 15 minutes is still allowed, the fourth is not.
-    server
-        .post("/v1/auth/request-code", None, json!({ "phone": phone }))
-        .await;
+    assert_eq!(lookup["device_ids"].as_array().unwrap().len(), 1);
     let (status, _) = server
-        .post("/v1/auth/request-code", None, json!({ "phone": phone }))
+        .post("/v1/lookup", Some(&other), json!({ "username": "alex.28" }))
         .await;
-    assert_eq!(status, 429);
-
+    assert_eq!(status, 404);
     let (status, _) = server
-        .post("/v1/lookup", Some("bogus"), json!({ "phone": phone }))
+        .post(
+            "/v1/lookup",
+            Some("bogus"),
+            json!({ "username": "alex.27" }),
+        )
         .await;
     assert_eq!(status, 401);
 }
@@ -121,8 +89,8 @@ async fn phone_verification(pool: PgPool) {
 #[sqlx::test]
 async fn two_users_exchange_an_encrypted_message(pool: PgPool) {
     let server = TestServer::start(pool).await;
-    let (_alice_dev, alice_token) = server.register("+15550002222").await;
-    let (bob_dev, bob_token) = server.register("+15550003333").await;
+    let (_alice_dev, alice_token) = server.register("u5550002222.10").await;
+    let (bob_dev, bob_token) = server.register("u5550003333.10").await;
     let alice = Device::new(b"alice").unwrap();
     let bob = Device::new(b"bob").unwrap();
 
@@ -140,7 +108,7 @@ async fn two_users_exchange_an_encrypted_message(pool: PgPool) {
         .post(
             "/v1/lookup",
             Some(&alice_token),
-            json!({ "phone": "+15550003333" }),
+            json!({ "username": "u5550003333.10" }),
         )
         .await;
     assert_eq!(lookup["device_ids"][0], bob_dev.to_string());
@@ -260,7 +228,7 @@ async fn two_users_exchange_an_encrypted_message(pool: PgPool) {
 #[sqlx::test]
 async fn one_commit_per_epoch(pool: PgPool) {
     let server = TestServer::start(pool).await;
-    let (dev, token) = server.register("+15550004444").await;
+    let (dev, token) = server.register("u5550004444.10").await;
     server.admit(b"group-1", &[dev]).await;
     let mut ws = server.connect(&token).await;
     let commit = |epoch: u64| Envelope {
@@ -340,7 +308,7 @@ async fn websocket_requires_authentication(pool: PgPool) {
 #[sqlx::test]
 async fn commit_survives_a_lost_reply(pool: PgPool) {
     let server = TestServer::start(pool).await;
-    let (dev, token) = server.register("+15550005555").await;
+    let (dev, token) = server.register("u5550005555.10").await;
     server.admit(b"group-2", &[dev]).await;
     let mut ws = server.connect(&token).await;
     let commit = Envelope {
@@ -389,10 +357,10 @@ async fn concurrent_sends_all_reach_a_connected_device(pool: PgPool) {
     const SENDERS: usize = 20;
     const EACH: usize = 20;
     let server = TestServer::start(pool).await;
-    let (bob, bob_token) = server.register("+15550007000").await;
+    let (bob, bob_token) = server.register("u5550007000.10").await;
     let mut senders = Vec::new();
     for i in 0..SENDERS {
-        let (dev, token) = server.register(&format!("+1555000{:04}", 7001 + i)).await;
+        let (dev, token) = server.register(&format!("u555000{:04}.10", 7001 + i)).await;
         senders.push((dev, token));
     }
     let mut members: Vec<Uuid> = senders.iter().map(|(d, _)| *d).collect();

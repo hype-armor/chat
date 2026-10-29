@@ -1,8 +1,6 @@
-use std::sync::Arc;
-
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chat_server::{
-    AppState, Config, connect_db, push::PushSender, router, run_maintenance, sms::LogSender,
+    AppState, Config, connect_db, invites, push::PushSender, router, run_maintenance,
 };
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
@@ -16,6 +14,22 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
     let config = Config::from_env()?;
+    if std::env::args().nth(1).as_deref() == Some("create-invite") {
+        // The operator's invite for the first account (ADR-0021). Usage:
+        // chat-server create-invite [https://chat.example.com]
+        let url = config
+            .database_url
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("DATABASE_URL is required"))?;
+        let code = invites::create_invite(&connect_db(url).await?, None)
+            .await
+            .map_err(|e| anyhow::anyhow!("creating the invite failed: {}", e.message()))?;
+        let base = std::env::args()
+            .nth(2)
+            .unwrap_or_else(|| "https://<host>".into());
+        println!("invite code: {code}\nlink (valid 7 days): {base}/#invite={code}");
+        return Ok(());
+    }
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     if config.json_logs {
         tracing_subscriber::fmt()
@@ -54,7 +68,11 @@ async fn main() -> anyhow::Result<()> {
             PushSender::generate(config.vapid_subject.clone(), false)?
         }
     };
-    let state = AppState::new(db, Arc::new(LogSender))
+    if config.open_registration {
+        tracing::warn!("CHAT_REGISTRATION=open: anyone can sign up without an invite");
+    }
+    let state = AppState::new(db)
+        .with_open_registration(config.open_registration)
         .with_push(push)
         .with_limits(config.limits.clone());
     if let Some(addr) = config.metrics_bind {

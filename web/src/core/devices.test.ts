@@ -42,14 +42,14 @@ describe('parseDeviceSync', () => {
       encode({
         displayName: 'Ann',
         names: { cafe: 'Bob', 'not hex': 'x', beef: 42 },
-        phones: { cafe: '+15551234567' },
+        usernames: { cafe: '+15551234567' },
         conversations: { '01': { name: 'Team', admins: [admin, 'nope'] }, zz: {} },
       }),
     )
     expect(sync).toEqual({
       displayName: 'Ann',
       names: { cafe: 'Bob' },
-      phones: { cafe: '+15551234567' },
+      usernames: { cafe: '+15551234567' },
       conversations: { '01': { name: 'Team', admins: [admin] } },
       blocked: undefined,
     })

@@ -1,7 +1,8 @@
 //! Account deletion (FR-ID-9): removes everything the server holds for an
 //! account. Devices, tokens, queued envelopes, key packages, memberships,
-//! links and reports about it go by cascade. Rate-limit windows naming its
-//! devices expire within two days.
+//! links, unused invites and reports about it go by cascade; its username
+//! becomes free. Rate-limit windows naming its devices expire within two
+//! days.
 
 use axum::{Json, extract::State, http::StatusCode};
 use serde::Deserialize;
@@ -15,8 +16,8 @@ use crate::{
 
 #[derive(Deserialize)]
 pub struct Delete {
-    /// The account's phone number, typed again to confirm.
-    phone: String,
+    /// The account's username, typed again to confirm.
+    username: String,
 }
 
 pub async fn delete(
@@ -26,17 +27,15 @@ pub async fn delete(
 ) -> Result<StatusCode, ApiError> {
     let mut tx = db(&state)?.begin().await?;
     let row: Option<(Uuid, String)> = sqlx::query_as(
-        "SELECT a.account_id, a.phone_number FROM accounts a
+        "SELECT a.account_id, a.username FROM accounts a
          JOIN devices d USING (account_id) WHERE d.device_id = $1 FOR UPDATE OF a",
     )
     .bind(device)
     .fetch_optional(&mut *tx)
     .await?;
-    let (account, phone) = row.ok_or(ApiError::Unauthorized("invalid token"))?;
-    if req.phone.trim() != phone {
-        return Err(ApiError::BadRequest(
-            "that is not this account's phone number",
-        ));
+    let (account, username) = row.ok_or(ApiError::Unauthorized("invalid token"))?;
+    if req.username.trim().to_ascii_lowercase() != username {
+        return Err(ApiError::BadRequest("that is not this account's username"));
     }
     let devices: Vec<(Uuid,)> =
         sqlx::query_as("SELECT device_id FROM devices WHERE account_id = $1")
@@ -47,12 +46,6 @@ pub async fn delete(
         .bind(account)
         .execute(&mut *tx)
         .await?;
-    for table in ["verification_codes", "code_requests"] {
-        sqlx::query(&format!("DELETE FROM {table} WHERE phone_number = $1"))
-            .bind(&phone)
-            .execute(&mut *tx)
-            .await?;
-    }
     tx.commit().await?;
     for (device,) in devices {
         state.hub.disconnect(&device);

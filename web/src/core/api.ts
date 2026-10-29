@@ -26,7 +26,7 @@ async function post<T>(path: string, body: unknown, token?: string): Promise<T> 
   return json as T
 }
 
-export type Registered = { account_id: string; device_id: string; token: string; phone: string }
+export type Registered = { account_id: string; device_id: string; token: string; username: string }
 
 export type ReportReason = 'spam' | 'harassment' | 'other'
 
@@ -39,13 +39,13 @@ export type ReportBody = {
 export type ServerDevice = { device_id: string; added_on: string; last_seen_on: string | null; current: boolean }
 
 export const api = {
-  requestCode: (phone: string) => post<void>('/v1/auth/request-code', { phone }),
-  verify: (phone: string, code: string, identityKey: string) =>
-    post<Registered>('/v1/auth/verify', { phone, code, identity_key: identityKey }),
+  register: (username: string, invite: string | undefined, identityKey: string) =>
+    post<Registered>('/v1/register', { username, invite, identity_key: identityKey }),
+  createInvite: (token: string) => post<{ code: string; expires_in_days: number }>('/v1/invites', {}, token),
   uploadKeyPackages: (token: string, keyPackages: string[]) =>
     post<void>('/v1/keys', { key_packages: keyPackages }, token),
-  lookup: (token: string, phone: string) =>
-    post<{ account_id: string; device_ids: string[] }>('/v1/lookup', { phone }, token),
+  lookup: (token: string, username: string) =>
+    post<{ account_id: string; device_ids: string[] }>('/v1/lookup', { username }, token),
   pushKey: () => get<{ public_key: string }>('/v1/push/key'),
   subscribePush: (token: string, subscription: PushSubscriptionJSON) =>
     post<void>('/v1/push/subscription', subscription, token),
@@ -59,7 +59,7 @@ export const api = {
   linkStatus: (token: string, code: string) => post<{ device_id: string | null }>('/v1/link/status', { code }, token),
   linkComplete: (code: string, identityKey: string) =>
     post<Registered>('/v1/link/complete', { code, identity_key: identityKey }),
-  deleteAccount: (token: string, phone: string) => post<void>('/v1/account/delete', { phone }, token),
+  deleteAccount: (token: string, username: string) => post<void>('/v1/account/delete', { username }, token),
   report: (token: string, report: ReportBody) => post<void>('/v1/reports', report, token),
   keyCount: (token: string) => get<{ available: number }>('/v1/keys/count', token),
   claim: (token: string, deviceIds: string[]) =>

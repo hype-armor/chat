@@ -134,21 +134,21 @@ pub async fn complete(
     let hash = link_hash(&req.code)?;
     let mut tx = db(&state)?.begin().await?;
     let row: Option<(Option<Uuid>, Option<Uuid>, Option<String>)> = sqlx::query_as(
-        "SELECT l.account_id, l.device_id, a.phone_number FROM link_requests l
+        "SELECT l.account_id, l.device_id, a.username FROM link_requests l
          LEFT JOIN accounts a USING (account_id)
          WHERE l.code_hash = $1 AND l.expires_at > now() FOR UPDATE OF l",
     )
     .bind(&hash)
     .fetch_optional(&mut *tx)
     .await?;
-    let (account_id, phone) = match row {
+    let (account_id, username) = match row {
         None | Some((_, Some(_), _)) => {
             return Err(ApiError::NotFound("unknown, expired or used link code"));
         }
         Some((None, _, _)) => return Err(ApiError::Conflict("waiting for approval")),
-        Some((Some(account), None, phone)) => (account, phone.unwrap_or_default()),
+        Some((Some(account), None, username)) => (account, username.unwrap_or_default()),
     };
-    let registered = create_device(&mut tx, account_id, phone, identity_key).await?;
+    let registered = create_device(&mut tx, account_id, username, identity_key).await?;
     sqlx::query("UPDATE link_requests SET device_id = $2 WHERE code_hash = $1")
         .bind(&hash)
         .bind(registered.device_id)

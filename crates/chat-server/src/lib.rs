@@ -9,12 +9,12 @@ mod devices;
 mod error;
 mod groups;
 mod hub;
+pub mod invites;
 pub mod keys;
 pub mod limits;
 pub mod metrics;
 pub mod push;
 mod reports;
-pub mod sms;
 mod ws;
 
 use std::{sync::Arc, time::Duration};
@@ -32,25 +32,31 @@ pub use config::Config;
 #[derive(Clone)]
 pub struct AppState {
     pub db: Option<PgPool>,
-    pub sms: Arc<dyn sms::CodeSender>,
     pub hub: hub::Hub,
     pub push: Option<Arc<push::PushSender>>,
     pub limits: limits::Limits,
     pub send_buckets: Arc<limits::SendBuckets>,
     pub metrics: Arc<metrics::Metrics>,
+    /// Sign-up without an invite (ADR-0021); off in production.
+    pub open_registration: bool,
 }
 
 impl AppState {
-    pub fn new(db: Option<PgPool>, sms: Arc<dyn sms::CodeSender>) -> Self {
+    pub fn new(db: Option<PgPool>) -> Self {
         Self {
             db,
-            sms,
+            open_registration: false,
             hub: hub::Hub::default(),
             push: None,
             limits: limits::Limits::default(),
             send_buckets: Arc::default(),
             metrics: Arc::default(),
         }
+    }
+
+    pub fn with_open_registration(mut self, open: bool) -> Self {
+        self.open_registration = open;
+        self
     }
 
     pub fn with_limits(mut self, limits: limits::Limits) -> Self {
@@ -66,7 +72,7 @@ impl AppState {
 
 impl Default for AppState {
     fn default() -> Self {
-        Self::new(None, Arc::new(sms::LogSender))
+        Self::new(None)
     }
 }
 
@@ -74,8 +80,8 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/readyz", get(readyz))
-        .route("/v1/auth/request-code", post(auth::request_code))
-        .route("/v1/auth/verify", post(auth::verify))
+        .route("/v1/register", post(auth::register))
+        .route("/v1/invites", post(invites::create))
         .route("/v1/keys", post(keys::upload))
         .route("/v1/keys/claim", post(keys::claim))
         .route("/v1/keys/count", get(keys::count))
