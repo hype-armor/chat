@@ -65,7 +65,7 @@ surviving reloads; three-engine browser CI against a real server.
     Reports carry only messages the reporter includes; franking (FR-SAF-1) later.
 11. [x] Delete account and all server data (FR-ID-9).
 12. [x] Delivered/read receipts (FR-MSG-5).
-13. [ ] PWA polish: install prompt, persistent-storage request and warning,
+13. [x] PWA polish: install prompt, persistent-storage request and warning,
     update banner (FR-PLAT-2/3).
 14. [ ] Key-package replenishment driven by a server-reported count.
 15. [ ] Retry and clear feedback for messages the server rejects.

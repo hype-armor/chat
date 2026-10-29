@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { CoreClient } from './core/client'
 import type { AppView } from './core/protocol'
+import { UpdateBanner } from './ui/Banners'
 import { Chat } from './ui/Chat'
 import { Diagnostics } from './ui/Diagnostics'
 import { Onboarding } from './ui/Onboarding'
@@ -18,6 +19,7 @@ export function App() {
 
   return (
     <>
+      <UpdateBanner />
       {view.phase === 'loading' && <p className="muted center">Loading…</p>}
       {view.phase === 'signed-out' && <Onboarding core={core} notice={view.notice} />}
       {view.phase === 'ready' && <Chat core={core} view={view} />}

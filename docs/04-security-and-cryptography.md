@@ -136,7 +136,9 @@ Layered mitigations:
    release signature and transparency-log inclusion; the UI shows the
    version hash. Limitation: browsers re-check the service worker script
    itself periodically, so this raises the bar rather than eliminating the
-   risk.
+   risk. *Status (Phase 1):* a new version waits until the user taps
+   "Update now"; signature and log verification before that come in
+   Phase 5.
 4. **Independent verifier extension** (C): a browser extension that checks
    loaded assets against the published log (cf. Meta's Code Verify).
 5. **Native wrappers / signed web bundles** for high-risk users: code
