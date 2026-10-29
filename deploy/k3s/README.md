@@ -1,6 +1,31 @@
 # Self-hosting on k3s
 
-Single-node k3s in the USA (ADR-0015). Commands below are the intended
+Single-node k3s (ADR-0015). Used first for **development and initial
+testing**; the production host is still open (k3s on your own hardware or
+on a Linode VM — doc 10 §2).
+
+## Development / test cluster
+
+Follow §1–§3 below with these differences:
+
+1. No public domain needed: apply `deploy/k3s/dev-ca.yaml` instead of
+   `deploy/k8s/cluster-issuer.yaml`, and point `chat.test` (and
+   `rtc.chat.test`) at the host's LAN IP in your router's DNS or each
+   device's hosts file.
+2. Trust the dev CA's root certificate on every test phone and browser
+   (command in `dev-ca.yaml`). Without it, the service worker, camera and
+   WebRTC won't work on other devices.
+3. Build and deploy local code with `scripts/k3s-dev-deploy.sh` instead of
+   the `helm upgrade` in §3. It imports images straight into k3s, so no
+   registry is needed.
+4. Ports only need to be reachable on the LAN; skip the router port
+   forwarding and §5 backups until real users arrive.
+
+Alternative to a private CA: a real domain with cert-manager's DNS-01
+challenge gives publicly trusted certificates without opening any ports.
+
+## Production
+ Commands below are the intended
 procedure; run them on a fresh Linux host (Ubuntu 24.04 LTS or Debian 13,
 4 vCPU / 8 GB RAM / 100 GB+ SSD).
 

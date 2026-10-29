@@ -55,8 +55,10 @@ docker compose -f deploy/compose/docker-compose.yml up --build
 
 ## Deployment
 
-Production runs on self-hosted, single-node **k3s** in the US — follow
-[`deploy/k3s/README.md`](deploy/k3s/README.md). Background and other
+Development and initial testing run on a self-hosted, single-node **k3s**
+cluster: set it up with [`deploy/k3s/README.md`](deploy/k3s/README.md), then
+deploy local code with `scripts/k3s-dev-deploy.sh`. The production host is
+still open (self-hosted k3s or Linode). Background and other
 clusters: [docs/10-deployment-kubernetes.md](docs/10-deployment-kubernetes.md).
 
 ## Licence

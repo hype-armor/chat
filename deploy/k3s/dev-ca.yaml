@@ -1,0 +1,37 @@
+# Private certificate authority for development/test clusters, so phones
+# and browsers on the LAN get HTTPS (required for the service worker,
+# camera, microphone and WebRTC). Requires cert-manager.
+#
+# Export the root certificate and install it as trusted on each test device:
+#   kubectl -n cert-manager get secret dev-ca-root -o jsonpath='{.data.ca\.crt}' | base64 -d > dev-ca.crt
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: dev-ca-root
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: Chat Dev CA
+  secretName: dev-ca-root
+  duration: 87600h   # 10 years; dev only
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: selfsigned
+    kind: ClusterIssuer
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: dev-ca
+spec:
+  ca:
+    secretName: dev-ca-root

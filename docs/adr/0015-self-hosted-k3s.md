@@ -15,7 +15,13 @@ The 100-user launch needs one node. Managed Kubernetes costs $65–450/month
 3. **MicroK8s / Talos** — viable, smaller community for single-node self-hosting (MicroK8s) or a steeper start (Talos).
 
 ## Decision
-k3s on one US-located Linux host, using its bundled Traefik, ServiceLB and
+k3s for **development and initial testing** now (2026-10-29), on a
+self-hosted machine. The production host stays open: self-hosted k3s, or
+Linode (k3s on a Linode VM, ~$29–34/month for 30 users on the 4 GB plan,
+~$65 for 100 users on 8 GB; or managed LKE). Whichever is chosen runs the
+same chart.
+
+k3s on one Linux host (US for production), using its bundled Traefik, ServiceLB and
 local-path storage. The Helm chart is unchanged; `values-k3s.yaml` adapts
 it. Setup steps: `deploy/k3s/README.md`.
 

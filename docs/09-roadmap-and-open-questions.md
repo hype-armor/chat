@@ -18,7 +18,7 @@
 | Launch scale (2026-10-29) | 100 users | 02 NFR-SCALE-1, §5 below |
 | Runtime (2026-10-29) | Kubernetes | ADR-0014, doc 10 |
 | Hosting (2026-10-29) | United States | ADR-0014, doc 10 §6 |
-| Cluster (2026-10-29) | Self-hosted single-node k3s | ADR-0015, deploy/k3s |
+| Cluster (2026-10-29) | Self-hosted single-node k3s for development and initial testing; production host open (Linode kept as an option) | ADR-0015, deploy/k3s |
 | Remaining placeholders (2026-10-29) | Confirmed: no content scanning, 16 video tiles, mesh limits (7 hops, 24 h, 50 MB, 8 peers) | 04, 05, 07 |
 
 ## 2. Phased roadmap
@@ -26,7 +26,7 @@
 | Phase | Scope | Exit criteria |
 |-------|-------|---------------|
 | **0. Spikes** | Scaffold in place (see repo README). (a) OpenMLS in WASM in all 3 browser engines, 50-member commit timing — *Chromium done: 17 ms on desktop*; (b) SQLite3MultipleCiphers on OPFS; (c) QR-paired WebRTC on a phone hotspot with no internet (iOS Safari PWA + Android Chrome), third peer joining via the mesh; (d) SFrame-encrypted 3-party call through LiveKit | All four demoed; ADRs confirmed or superseded |
-| **1. MVP messaging (web)** | Phone sign-up, device keys, 1:1 + groups (MLS), Web Push, encrypted local DB, PWA install, device linking by QR | Internal dogfood; delivery p95 < 1 s |
+| **1. MVP messaging (web)** | Deployed continuously to the dev k3s cluster. Phone sign-up, device keys, 1:1 + groups (MLS), Web Push, encrypted local DB, PWA install, device linking by QR | Internal dogfood; delivery p95 < 1 s |
 | **2. Media, location, backup** | Encrypted attachments, voice notes, one-shot + live location (foreground), encrypted backup | Feature-complete beta |
 | **3. Calling** | 1:1 P2P calls, then group calls via LiveKit with SFrame | Call success ≥ 99% |
 | **4. Local mode (Tier 1 offline)** | QR rooms, contacts + strangers, mesh relay, local calls, sync back online | Field test with 20+ devices |
@@ -49,8 +49,8 @@
 
 ## 4. Remaining open questions
 
-1. **Where the k3s host runs**: own hardware vs. a rented US server
-   (doc 10 §2.0). Needed by the first deployment in Phase 1.
+1. **Production host**: self-hosted k3s vs. Linode (doc 10 §2). Needed
+   before real users; development and testing proceed on self-hosted k3s.
 2. **Off-site backup target** (an S3-compatible bucket in another
    location).
 3. **Funding**: covers SMS costs, hosting, and the external security audit

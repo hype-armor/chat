@@ -6,16 +6,17 @@
 
 | Topic | Decision |
 |-------|----------|
-| Platform | Kubernetes for production — **self-hosted single-node k3s** (ADR-0015); Docker Compose for local development only |
+| Platform | Kubernetes. **Development and initial testing: self-hosted single-node k3s** (ADR-0015). Production host: open — self-hosted k3s or Linode. Docker Compose remains for quick local runs |
 | Region | United States (single region at launch) |
 | Packaging | Helm chart `deploy/helm/chat` for our components; operators/charts for datastores |
 | Images | `ghcr.io/hype-armor/chat-server`, `ghcr.io/hype-armor/chat-web`, built by `.github/workflows/images.yml` |
 
 ## 2. Cluster choice
 
-**Decided: self-hosted k3s** — setup guide in
-[`deploy/k3s/README.md`](../deploy/k3s/README.md). The chart still runs on
-any conformant cluster; the options considered were:
+**Development and testing: self-hosted k3s** — setup guide in
+[`deploy/k3s/README.md`](../deploy/k3s/README.md). **Production: open**,
+with Linode as the leading hosted option (see the 30-user note under
+§2.1). The chart runs unchanged on any conformant cluster; options:
 
 | Option | Fit |
 |--------|-----|
@@ -68,6 +69,12 @@ regional map tiles).
 Not included, common to all: SMS verification (≈ $5–10/month at 100
 users), domain, and the external security audit (Phase 5, one-off and by
 far the largest cost).
+
+**30-user scenario (Linode, k3s on a VM):** a shared 4 GB plan (2 vCPU,
+~4 TB transfer) fits the whole stack at ~2.7–3.2 GB RAM, with 0.06–0.75 TB
+of egress a month. About **$24 VM + ~$5 off-site backup storage (+ ~$5
+optional Linode Backups) ≈ $29–34/month**; no load balancer needed because
+k3s serves ports 80/443 itself. Resize to 8 GB (~$53–58) when needed.
 
 **Recommendation:** Akamai LKE or DigitalOcean DOKS. Both have US regions,
 a free control plane, and enough included egress to cover even heavy call
