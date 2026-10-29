@@ -24,6 +24,10 @@ pub struct Config {
     /// the client IP from `X-Forwarded-For`; each number can be overridden
     /// with `CHAT_LIMIT_<FIELD>`, e.g. `CHAT_LIMIT_REGISTRATIONS_PER_IP_PER_HOUR`.
     pub limits: Limits,
+    /// `CHAT_BLOB_STORE`: where encrypted attachments go (ADR-0023):
+    /// `s3://bucket` (with `AWS_*` variables), `file:///path` or `memory`
+    /// (default, development only: lost on restart).
+    pub blob_store: String,
     /// `CHAT_REGISTRATION`: `invite` (default) or `open` (development and
     /// tests): whether sign-up needs an invite (ADR-0021).
     pub open_registration: bool,
@@ -49,6 +53,7 @@ impl Config {
                 Err(_) => Some(SocketAddr::from(([0, 0, 0, 0], 9090))),
             },
             limits: limits_from_env()?,
+            blob_store: std::env::var("CHAT_BLOB_STORE").unwrap_or_else(|_| "memory".to_owned()),
             open_registration: match std::env::var("CHAT_REGISTRATION").as_deref() {
                 Ok("open") => true,
                 Ok("invite") | Err(_) => false,
@@ -76,6 +81,7 @@ fn limits_from_env() -> anyhow::Result<Limits> {
         links_per_ip_per_hour: limit_var("LINKS_PER_IP_PER_HOUR", d.links_per_ip_per_hour)?,
         reports_per_day: limit_var("REPORTS_PER_DAY", d.reports_per_day)?,
         device_lists_per_hour: limit_var("DEVICE_LISTS_PER_HOUR", d.device_lists_per_hour)?,
+        blob_mb_per_day: limit_var("BLOB_MB_PER_DAY", d.blob_mb_per_day)?,
         restores_per_ip_per_hour: limit_var(
             "RESTORES_PER_IP_PER_HOUR",
             d.restores_per_ip_per_hour,

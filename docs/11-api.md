@@ -42,6 +42,17 @@ Deleting the reports about an account favours the deleted user's privacy
 over moderation history. Revisit if abusers start deleting accounts to
 escape reports.
 
+### Attachments (FR-MED-2/3, ADR-0023)
+
+| Method & path | Auth | Body → Response |
+|---------------|------|-----------------|
+| `PUT /v1/blobs` | ✓ | raw encrypted bytes, `Content-Length` required (≤ 100 MB + 1 MB overhead) → `{blob_id, expires_in_days: 30}` |
+| `GET /v1/blobs/{blob_id}` | ✓ | → the bytes, or `404` once expired |
+
+The server only ever sees ciphertext. The key and hash travel inside the
+E2EE message that references the blob. Blobs are deleted 30 days after
+upload, whether or not they were fetched.
+
 ### Backup and restore (ADR-0022)
 
 | Method & path | Auth | Body → Response |
@@ -188,6 +199,7 @@ across restarts and replicas. Exceeding one gives `429` (HTTP) or
 | `POST /v1/reports` | 20 per day | device |
 | `POST /v1/devices/of` | 120 per hour | device |
 | `POST /v1/backup/restore` | 10 per hour; 10 per day | client IP; account |
+| `PUT /v1/blobs` | 2048 MB per day | device |
 
 The client IP is the socket peer, or the last `X-Forwarded-For` entry when
 `CHAT_TRUST_PROXY_HEADERS=true` (Helm `server.trustProxyHeaders`, on by

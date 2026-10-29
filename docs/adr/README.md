@@ -29,3 +29,4 @@ revisited; do it with a new ADR that supersedes the old one.
 | [0020](0020-safety-numbers.md) | Safety numbers per pair of accounts; warnings on new device keys | Accepted |
 | [0021](0021-usernames-and-invites.md) | Usernames and invite-only sign-up (replaces phone numbers) | Accepted |
 | [0022](0022-backup-and-restore.md) | Backup of history under a recovery key; restore as a new device that members re-add | Accepted |
+| [0023](0023-blob-transfer-through-server.md) | Attachments stream through the server (not pre-signed URLs) | Accepted |

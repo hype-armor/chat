@@ -60,6 +60,26 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.server.database.existingSecret }}
                   key: {{ .Values.server.database.secretKey }}
+            {{- with .Values.server.blobs }}
+            {{- if .bucket }}
+            - name: CHAT_BLOB_STORE
+              value: {{ printf "s3://%s" .bucket | quote }}
+            - name: AWS_REGION
+              value: {{ .region | quote }}
+            {{- with .endpoint }}
+            - name: AWS_ENDPOINT
+              value: {{ . | quote }}
+            - name: AWS_ALLOW_HTTP
+              value: {{ hasPrefix "http://" . | quote }}
+            {{- end }}
+            {{- with .existingSecret }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: { secretKeyRef: { name: {{ . }}, key: AWS_ACCESS_KEY_ID } }
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: {{ . }}, key: AWS_SECRET_ACCESS_KEY } }
+            {{- end }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.server.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
