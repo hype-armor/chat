@@ -45,6 +45,8 @@ test('photos lose their metadata, and files arrive intact', async ({ browser }) 
   await alice.getByLabel('Message').fill('The view')
   await alice.getByTestId('attach-input').setInputFiles({ name: 'beach.jpg', mimeType: 'image/jpeg', buffer: photo })
   const sent = messages(alice).filter({ hasText: 'The view' })
+  await expect(sent.or(alice.getByRole('alert'))).toBeVisible()
+  expect(await alice.getByRole('alert').allTextContents()).toEqual([])
   await expect(sent).toContainText('Sent')
   await expect(sent.getByRole('img', { name: 'beach.jpg' })).toBeVisible()
 

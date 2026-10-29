@@ -81,15 +81,22 @@ export class SecureStore {
 
   /** A sealed attachment, by message id. */
   async getFile(id: string): Promise<Blob | undefined> {
-    return (await request(this.db.transaction('files', 'readonly').objectStore('files').get(id))) as
+    const value = (await request(this.db.transaction('files', 'readonly').objectStore('files').get(id))) as
       | Blob
+      | ArrayBuffer
       | undefined
+    return value instanceof ArrayBuffer ? new Blob([value]) : value
   }
 
   async putFile(id: string, sealed: Blob | undefined): Promise<void> {
-    const store = this.db.transaction('files', 'readwrite').objectStore('files')
-    if (sealed) await request(store.put(sealed, id))
-    else await request(store.delete(id))
+    const store = () => this.db.transaction('files', 'readwrite').objectStore('files')
+    if (!sealed) return void (await request(store().delete(id)))
+    try {
+      await request(store().put(sealed, id))
+    } catch {
+      // WebKit can't store Blobs in private (ephemeral) sessions: keep bytes.
+      await request(store().put(await sealed.arrayBuffer(), id))
+    }
   }
 
   /** Deletes everything except the storage key (signing out). */
