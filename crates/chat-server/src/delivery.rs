@@ -87,15 +87,14 @@ const CLAIM_VALID_DAYS: i32 = 7;
 pub async fn send(db: &PgPool, req: Send<'_>) -> Result<SendOutcome, ApiError> {
     let env = req.envelope;
     let content_type = validate(env)?;
-    if let Some((welcome, _)) = req.welcome {
-        if content_type != ContentType::Handshake
+    if let Some((welcome, _)) = req.welcome
+        && (content_type != ContentType::Handshake
             || validate(welcome)? != ContentType::Welcome
-            || welcome.conversation_id != env.conversation_id
-        {
-            return Err(ApiError::BadRequest(
-                "a welcome can only accompany a commit for the same conversation",
-            ));
-        }
+            || welcome.conversation_id != env.conversation_id)
+    {
+        return Err(ApiError::BadRequest(
+            "a welcome can only accompany a commit for the same conversation",
+        ));
     }
     let welcome_recipients = req.welcome.map_or(&[][..], |(_, r)| r);
     let mut tx = db.begin().await?;
