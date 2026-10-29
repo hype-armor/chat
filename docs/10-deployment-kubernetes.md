@@ -27,6 +27,43 @@ persistent volumes for PostgreSQL.
 Starting size: **1 node, 4 vCPU / 8 GB**, matching doc 09 §5. A second node
 later lets LiveKit run on its own host-networked node.
 
+### 2.1 Cost estimate for the 100-user launch (list prices, Oct 2026)
+
+**Bandwidth assumption** (monthly data sent out of the cluster): text and
+push ≈ 10 GB; attachments 50–400 GB; group-call media through LiveKit at
+~0.55 GB per participant-hour received (1:1 calls are mostly peer-to-peer).
+
+| Usage | Group-call hours per user / month | Outbound total |
+|-------|-----------------------------------|----------------|
+| Light | 2 | ~0.2 TB |
+| Typical | 10 | ~0.8 TB |
+| Heavy | 30 | ~2.5 TB |
+
+**Baseline resources:** one 4 vCPU / 8 GB node, one load balancer, ~20 GB
+block storage (PostgreSQL), ~100 GB object storage (attachments, backups,
+regional map tiles).
+
+| Provider | Control plane | Node | LB + storage + IPs | Egress | **Light** | **Typical** | **Heavy** |
+|----------|--------------|------|--------------------|--------|-----------|-------------|-----------|
+| Akamai/Linode LKE | free (HA +$60) | $48 (5 TB incl.) | ~$17 | included | **~$65** | **~$65** | **~$65** |
+| DigitalOcean DOKS | free | $48 (5 TB incl.) | ~$19 | included | **~$67** | **~$67** | **~$67** |
+| Vultr VKE | free | $40–48 (4–6 TB incl.) | ~$17 | included | **~$57–65** | **~$57–65** | **~$57–65** |
+| k3s on Hetzner US (self-run) | you run it | ~$72 (CPX31, after June 2026 increase) | ~$10 | small allowance in US; verify | **~$85+** | **~$85+** | **verify** |
+| Google GKE (zonal) | free tier credit | ~$81 (e2 custom 4/8) | ~$25 | $0.12→0.11/GiB | **~$130** | **~$205** | **~$395** |
+| Azure AKS (Free tier) | $0 (Standard SLA +$73) | ~$124 (F4s v2) | ~$27 | $0.087/GB after 100 GB | **~$160** | **~$212** | **~$360** |
+| AWS EKS | $73 | ~$130 (c7i.xlarge) | ~$31 | $0.09/GB after 100 GB | **~$245** | **~$300** | **~$450** |
+
+Not included, common to all: SMS verification (≈ $5–10/month at 100
+users), domain, and the external security audit (Phase 5, one-off and by
+far the largest cost).
+
+**Recommendation:** Akamai LKE or DigitalOcean DOKS. Both have US regions,
+a free control plane, and enough included egress to cover even heavy call
+usage, so the bill stays flat at about $65/month. Hyperscalers cost 2–7×
+more, mostly from the control-plane fee and per-GB egress on call media;
+they only make sense with startup credits. Prices moved sharply in 2026
+(memory costs), so re-check before signing up.
+
 ## 3. Layout
 
 ```
