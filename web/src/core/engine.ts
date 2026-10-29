@@ -568,18 +568,24 @@ export class Engine {
 
   /** Marks received messages seen; sends read receipts if enabled. */
   async markRead(conversationId: string) {
-    const conv = this.state.conversations[conversationId]
-    if (!conv) return
-    const list = await this.messages(conversationId)
-    const unseen = list.filter((m) => m.status === 'received' && !m.seen && m.kind !== 'notice')
-    if (unseen.length === 0 && !conv.unread) return
-    for (const m of unseen) m.seen = true
-    await this.store.putJson(`messages:${conversationId}`, list)
-    conv.unread = 0
-    if (!conv.request && this.state.readReceipts) {
-      for (const m of unseen) this.queueReceipt(conversationId, 'read', m.id)
-    }
-    this.emitView()
+    // Under the lock: the read-modify-write of the message list must not
+    // interleave with a delivery appending to it.
+    const changed = await this.exclusive(async () => {
+      const conv = this.state.conversations[conversationId]
+      if (!conv) return false
+      const list = await this.messages(conversationId)
+      const unseen = list.filter((m) => m.status === 'received' && !m.seen && m.kind !== 'notice')
+      if (unseen.length === 0 && !conv.unread) return false
+      for (const m of unseen) m.seen = true
+      await this.store.putJson(`messages:${conversationId}`, list)
+      conv.unread = 0
+      await this.persist()
+      if (!conv.request && this.state.readReceipts) {
+        for (const m of unseen) this.queueReceipt(conversationId, 'read', m.id)
+      }
+      return true
+    })
+    if (changed) this.emitView()
   }
 
   async setReadReceipts(on: boolean) {
