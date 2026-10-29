@@ -1,0 +1,15 @@
+# Deploys new commits on main to the dev cluster (scripts/k3s-dev-update.sh).
+# Install: deploy/k3s/README.md, "Continuous deployment".
+[Unit]
+Description=Deploy the latest chat build to the dev k3s cluster
+Wants=network-online.target
+After=network-online.target k3s.service
+
+[Service]
+Type=oneshot
+# A user who can read the kubeconfig, and a clone used only by this unit.
+User=chat-deploy
+Environment=KUBECONFIG=/home/chat-deploy/.kube/config
+ExecStart=/home/chat-deploy/chat/scripts/k3s-dev-update.sh
+StateDirectory=chat-dev-update
+TimeoutStartSec=15min

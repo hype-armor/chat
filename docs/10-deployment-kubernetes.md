@@ -128,6 +128,8 @@ cluster-wide: cert-manager, ingress/gateway controller, CloudNativePG operator
 
 ## 5. Rollout
 
+- The dev cluster deploys every merge to `main` with a pull-based timer
+  (ADR-0018, `scripts/k3s-dev-update.sh`).
 - `helm upgrade --install` with `--atomic`. The server shuts down
   gracefully on SIGTERM (30 s grace period) so WebSockets reconnect to new
   pods.
