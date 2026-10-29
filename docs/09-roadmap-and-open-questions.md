@@ -59,7 +59,8 @@ surviving reloads; three-engine browser CI against a real server.
    (doc 12: p95 16 ms at 800 deliveries/s; Prometheus metrics on :9090).
 8. [x] Device linking by QR (FR-ID-3/4): self-sync of sent messages, list
    and remove devices (ADR-0019).
-9. [ ] Safety numbers / QR verification and key-change warnings (FR-ID-5/6).
+9. [x] Safety numbers / QR verification and key-change warnings (FR-ID-5/6,
+   ADR-0020).
 10. [ ] Block and report (FR-ID-8); message requests (FR-SAF-3, should).
 11. [ ] Delete account and all server data (FR-ID-9).
 12. [ ] Delivered/read receipts (FR-MSG-5).

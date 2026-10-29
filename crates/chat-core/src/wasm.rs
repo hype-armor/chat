@@ -256,6 +256,18 @@ impl CoreClient {
 
     /// Stages adding devices; see `Client::add_members`. Returns encoded
     /// commit and welcome envelopes.
+    /// `[identity, signatureKey]` pairs, in leaf order (ADR-0020).
+    #[wasm_bindgen(js_name = memberKeys)]
+    pub fn member_keys(&self, conversation_id: &[u8]) -> Result<Array, JsError> {
+        Ok(self
+            .inner
+            .member_keys(conversation_id)
+            .map_err(js_err)?
+            .into_iter()
+            .map(|(identity, key)| bytes_array([identity, key]))
+            .collect())
+    }
+
     #[wasm_bindgen(js_name = addMembers)]
     pub fn add_members(
         &mut self,
@@ -654,4 +666,20 @@ pub fn decode_qr(rgba: &[u8], width: u32, height: u32) -> Option<String> {
         .map(|p| ((u16::from(p[0]) * 77 + u16::from(p[1]) * 150 + u16::from(p[2]) * 29) >> 8) as u8)
         .collect();
     crate::qr::decode(&luma, width as usize, height as usize)
+}
+
+/// Safety number for two accounts' device signature keys (ADR-0020).
+#[wasm_bindgen(js_name = safetyNumber)]
+pub fn safety_number(
+    my_account: &[u8],
+    my_keys: &Array,
+    their_account: &[u8],
+    their_keys: &Array,
+) -> String {
+    crate::safety::safety_number(
+        my_account,
+        &array_bytes(my_keys),
+        their_account,
+        &array_bytes(their_keys),
+    )
 }

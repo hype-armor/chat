@@ -11,6 +11,7 @@ import type {
   DeviceInfo,
   LinkOffer,
   ResponseEnvelope,
+  SafetyNumber,
 } from './protocol'
 import workerUrl from './worker.ts?worker&url'
 
@@ -135,6 +136,23 @@ export class CoreClient {
   /** Reads a QR code from an RGBA camera frame, in the worker. */
   async decodeQr(rgba: Uint8Array, width: number, height: number): Promise<string | undefined> {
     return expect(await this.call({ type: 'decodeQr', rgba, width, height }), 'qr').text
+  }
+
+  async safetyNumber(conversationId: string, account: string): Promise<SafetyNumber> {
+    return expect(await this.call({ type: 'safetyNumber', conversationId, account }), 'safety').safety
+  }
+
+  async markVerified(conversationId: string, account: string) {
+    expect(await this.call({ type: 'markVerified', conversationId, account }), 'ok')
+  }
+
+  /** Throws if the scanned code doesn't match. */
+  async verifyScanned(conversationId: string, account: string, text: string) {
+    expect(await this.call({ type: 'verifyScanned', conversationId, account, text }), 'ok')
+  }
+
+  async dismissAlert(id: string) {
+    expect(await this.call({ type: 'dismissAlert', id }), 'ok')
   }
 
   async status(): Promise<CoreStatus> {

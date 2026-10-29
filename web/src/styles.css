@@ -437,3 +437,55 @@ button.danger {
   word-break: break-all;
   user-select: all;
 }
+
+/* Safety numbers (ADR-0020) */
+.verify {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  gap: 0.75rem;
+  justify-items: center;
+  text-align: center;
+}
+
+.verify .actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.safety-number {
+  margin: 0;
+  max-width: 20rem;
+  font-family: ui-monospace, monospace;
+  font-size: 1.1rem;
+  letter-spacing: 0.05em;
+  word-spacing: 0.4em;
+}
+
+.badge.verified {
+  color: var(--accent);
+}
+
+.badge.changed,
+.notice.warning,
+.alert {
+  color: var(--danger);
+}
+
+.alert {
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.alert p {
+  margin: 0 0 0.25rem;
+}
+
+.messages .notice-msg {
+  align-self: center;
+  max-width: 90%;
+  color: var(--muted);
+  text-align: center;
+  background: none;
+}

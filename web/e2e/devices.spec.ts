@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { messages, randomPhone, signUp } from './support'
+import { linkDevice, messages, randomPhone, signUp } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -15,20 +15,10 @@ test('linking a second device by code, then removing it (ADR-0019)', async ({ br
   await expect(alice.getByRole('heading', { name: 'Bob' })).toBeVisible()
 
   // The new device shows a code; the first device approves it.
-  const laptop = await (await browser.newContext()).newPage()
-  await laptop.goto('/')
-  await laptop.getByRole('button', { name: /Link this one/ }).click()
-  const code = (await laptop.getByTestId('link-code').textContent())!.trim()
-  await alice.getByText('Linked devices').click()
-  await alice.getByRole('button', { name: 'Link a new device' }).click()
-  await alice.getByLabel('Or type the code shown on the new device').fill(code)
-  await expect(alice.getByRole('note')).toContainText('read every message')
-  await alice.getByRole('button', { name: 'Link device' }).click()
-  await expect(alice.getByRole('button', { name: 'Link a new device' })).toBeVisible({ timeout: 30_000 })
+  const laptop = await linkDevice(browser, alice)
   await expect(alice.getByRole('list', { name: 'Devices' }).getByRole('listitem')).toHaveCount(2)
 
   // The laptop is signed in as Alice, in her conversation with Bob.
-  await expect(laptop.getByRole('status')).toHaveText('online')
   await expect(laptop.getByText(alicePhone)).toBeVisible()
   await expect(laptop.getByRole('button', { name: /Bob/ })).toBeVisible({ timeout: 15_000 })
   // Her name arrives from the first device over the self conversation.

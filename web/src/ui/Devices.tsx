@@ -3,6 +3,8 @@ import type { CoreClient } from '../core/client'
 import { parseLinkCode } from '../core/devices'
 import type { DeviceInfo } from '../core/protocol'
 
+const isLinkCode = (text: string) => parseLinkCode(text) !== undefined
+
 /** This account's devices, and linking a new one (FR-ID-3/4, ADR-0019). */
 export function Devices({ core }: { core: CoreClient }) {
   const [devices, setDevices] = useState<DeviceInfo[]>([])
@@ -99,7 +101,9 @@ function LinkNewDevice({
 
   return (
     <form className="link-new" onSubmit={submit}>
-      {scanning && !code && <Scanner core={core} onCode={setText} onClose={() => setScanning(false)} />}
+      {scanning && !code && (
+        <Scanner core={core} accept={isLinkCode} onCode={setText} onClose={() => setScanning(false)} />
+      )}
       {!code ? (
         <>
           <button type="button" onClick={() => setScanning(true)} disabled={scanning}>
@@ -129,7 +133,18 @@ function LinkNewDevice({
 }
 
 /** Reads QR codes from the camera; frames are decoded in the core worker. */
-function Scanner({ core, onCode, onClose }: { core: CoreClient; onCode: (text: string) => void; onClose: () => void }) {
+export function Scanner({
+  core,
+  accept,
+  onCode,
+  onClose,
+}: {
+  core: CoreClient
+  /** Codes this scanner is looking for; others are ignored. */
+  accept: (text: string) => boolean
+  onCode: (text: string) => void
+  onClose: () => void
+}) {
   const video = useRef<HTMLVideoElement>(null)
   const [error, setError] = useState<string>()
 
@@ -150,7 +165,7 @@ function Scanner({ core, onCode, onClose }: { core: CoreClient; onCode: (text: s
           ctx.drawImage(v, 0, 0, canvas.width, canvas.height)
           const frame = ctx.getImageData(0, 0, canvas.width, canvas.height)
           const text = await core.decodeQr(new Uint8Array(frame.data.buffer), frame.width, frame.height)
-          if (live && text && parseLinkCode(text)) {
+          if (live && text && accept(text)) {
             onCode(text)
             return
           }
@@ -173,7 +188,7 @@ function Scanner({ core, onCode, onClose }: { core: CoreClient; onCode: (text: s
       clearTimeout(timer)
       for (const track of stream?.getTracks() ?? []) track.stop()
     }
-  }, [core, onCode])
+  }, [core, accept, onCode])
 
   return (
     <div className="scanner">
