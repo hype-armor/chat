@@ -24,6 +24,31 @@ Follow §1–§3 below with these differences:
 Alternative to a private CA: a real domain with cert-manager's DNS-01
 challenge gives publicly trusted certificates without opening any ports.
 
+### Continuous deployment (ADR-0018)
+
+Every merge to `main` publishes `ghcr.io/hype-armor/chat-{server,web}:sha-<commit>`
+(Images workflow). A systemd timer on the k3s host deploys the newest
+published commit every 5 minutes; nothing outside the LAN needs to reach the
+cluster. Set it up once:
+
+```sh
+sudo useradd --create-home --shell /usr/sbin/nologin chat-deploy
+sudo -u chat-deploy git clone https://github.com/hype-armor/chat /home/chat-deploy/chat
+sudo install -d -o chat-deploy -m 700 /home/chat-deploy/.kube
+sudo install -o chat-deploy -m 600 /etc/rancher/k3s/k3s.yaml /home/chat-deploy/.kube/config
+sudo cp /home/chat-deploy/chat/deploy/k3s/chat-dev-update.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now chat-dev-update.timer
+journalctl -u chat-dev-update -f     # "<commit>: deployed"
+```
+
+Needs `git`, `curl` and `helm` on the host. The clone is checked out at
+each deployed commit, so don't edit it; use another checkout and
+`scripts/k3s-dev-deploy.sh` to try local changes (the next new commit on
+`main` replaces them). `--atomic` rolls a release back if its pods don't
+become ready; the timer tries again only when `main` moves, or run
+`sudo -u chat-deploy KUBECONFIG=/home/chat-deploy/.kube/config
+/home/chat-deploy/chat/scripts/k3s-dev-update.sh --force`.
+
 ## Production
  Commands below are the intended
 procedure; run them on a fresh Linux host (Ubuntu 24.04 LTS or Debian 13,

@@ -24,3 +24,4 @@ revisited; do it with a new ADR that supersedes the old one.
 | [0015](0015-self-hosted-k3s.md) | Self-host on single-node k3s | Accepted |
 | [0016](0016-group-roles-and-leaving.md) | Group roles, removal and leaving (v1) | Accepted |
 | [0017](0017-send-authorisation.md) | Send authorisation by conversation membership | Accepted |
+| [0018](0018-pull-based-dev-deployment.md) | Pull-based continuous deployment to the dev cluster | Accepted |
