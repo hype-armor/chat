@@ -11,7 +11,11 @@ use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::{AppState, error::ApiError};
+use crate::{
+    AppState,
+    error::ApiError,
+    limits::{self, ClientIp},
+};
 
 const CODE_TTL_MINUTES: i32 = 10;
 const MAX_CODE_ATTEMPTS: i32 = 5;
@@ -53,6 +57,7 @@ pub struct RequestCode {
 
 pub async fn request_code(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Json(req): Json<RequestCode>,
 ) -> Result<StatusCode, ApiError> {
     let db = db(&state)?;
@@ -73,6 +78,21 @@ pub async fn request_code(
             "too many codes requested; try again later",
         ));
     }
+    // SMS-pumping protection beyond per-number limits (NFR-LEG-5).
+    let caps = &state.limits;
+    if let Some(ip) = ip {
+        limits::take(
+            db,
+            &format!("code-ip:{ip}"),
+            1,
+            caps.codes_per_ip_per_hour,
+            limits::HOUR,
+        )
+        .await?;
+    }
+    let prefix = format!("code-prefix:{}", limits::phone_prefix(&req.phone));
+    limits::take(db, &prefix, 1, caps.codes_per_prefix_per_hour, limits::HOUR).await?;
+    limits::take(db, "code-all", 1, caps.codes_per_day, limits::DAY).await?;
 
     let code = format!("{:06}", rand::random_range(0..1_000_000u32));
     let mut tx = db.begin().await?;

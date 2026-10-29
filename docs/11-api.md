@@ -78,15 +78,38 @@ and fetches the queue. A `404`/`410` from the push service deletes the
 subscription. Configure `CHAT_VAPID_PRIVATE_KEY` (from
 `chat-server generate-vapid-key`) and `CHAT_VAPID_SUBJECT`.
 
+## Abuse limits (FR-SAF-2)
+
+Counted in PostgreSQL in fixed windows (table `rate_limits`), so they hold
+across restarts and replicas. Exceeding one gives `429` (HTTP) or
+`Error{429}` (WebSocket); nothing is counted for a refused request.
+
+| What | Limit | Key |
+|------|-------|-----|
+| `POST /v1/lookup` | 30 per hour | device |
+| `POST /v1/keys/claim` | 300 devices per hour | device |
+| Welcomes (first contacts) | 200 recipient devices per day | device |
+| Sends over the WebSocket | 600 per minute (token bucket, in memory) | device |
+| `POST /v1/auth/request-code` | 10 per hour | client IP |
+| `POST /v1/auth/request-code` | 50 per hour | first 5 characters of the number (country and area code) |
+| `POST /v1/auth/request-code` | 1000 per day | whole server |
+
+The client IP is the socket peer, or the last `X-Forwarded-For` entry when
+`CHAT_TRUST_PROXY_HEADERS=true` (Helm `server.trustProxyHeaders`, on by
+default behind the ingress). Each limit can be changed with
+`CHAT_LIMIT_<NAME>`, e.g. `CHAT_LIMIT_CODES_PER_IP_PER_HOUR` (see
+`crates/chat-server/src/config.rs`). The web client keeps a rate-limited message
+queued and re-sends it after 5 s, doubling to 2 minutes.
+
 ## Retention
 
 An hourly job deletes queue entries older than 30 days (FR-MSG-9), expired
-key packages and codes, and code-request logs older than a day.
+key packages and codes, code-request logs older than a day and rate-limit
+windows older than two days.
 
 ## Not yet implemented
 
 - Sealed sender: the server stores which devices belong to which
   conversation (ADR-0017).
-- Per-device rate limits on lookup/claim (Valkey), device removal, account
-  deletion, a real SMS provider.
+- Device removal, account deletion, a real SMS provider.
 - Multi-replica fan-out (PostgreSQL LISTEN/NOTIFY or Valkey pub/sub).

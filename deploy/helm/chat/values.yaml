@@ -20,6 +20,9 @@ server:
     secretKey: uri
   logFormat: json
   logLevel: info
+  # Take the client IP (for per-IP limits) from the last X-Forwarded-For
+  # entry. True when the server is only reachable through the ingress.
+  trustProxyHeaders: true
   # Web Push (VAPID) key. Create one with `chat-server generate-vapid-key`
   # and store it in a Secret; without it a random key is used and push
   # subscriptions break whenever the pod restarts.

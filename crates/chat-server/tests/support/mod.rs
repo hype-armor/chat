@@ -54,8 +54,21 @@ impl TestServer {
         pool: PgPool,
         push: Option<chat_server::push::PushSender>,
     ) -> Self {
+        Self::start_with(pool, push, chat_server::limits::Limits::default()).await
+    }
+
+    #[allow(dead_code)]
+    pub async fn start_with_limits(pool: PgPool, limits: chat_server::limits::Limits) -> Self {
+        Self::start_with(pool, None, limits).await
+    }
+
+    pub async fn start_with(
+        pool: PgPool,
+        push: Option<chat_server::push::PushSender>,
+        limits: chat_server::limits::Limits,
+    ) -> Self {
         let codes = Arc::new(CapturedCodes::default());
-        let mut state = AppState::new(Some(pool), codes.clone());
+        let mut state = AppState::new(Some(pool), codes.clone()).with_limits(limits);
         if let Some(push) = push {
             state = state.with_push(push);
         }
@@ -71,7 +84,20 @@ impl TestServer {
     }
 
     pub async fn post(&self, path: &str, token: Option<&str>, body: Value) -> (u16, Value) {
+        self.post_with_headers(path, token, body, &[]).await
+    }
+
+    pub async fn post_with_headers(
+        &self,
+        path: &str,
+        token: Option<&str>,
+        body: Value,
+        headers: &[(&str, &str)],
+    ) -> (u16, Value) {
         let mut req = Request::post(path).header("content-type", "application/json");
+        for (name, value) in headers {
+            req = req.header(*name, *value);
+        }
         if let Some(token) = token {
             req = req.header("authorization", format!("Bearer {token}"));
         }

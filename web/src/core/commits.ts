@@ -8,12 +8,21 @@ export function commitWasAccepted(ourHash: string, serverHash: string | undefine
   return serverHash !== undefined && serverHash === ourHash
 }
 
-export type CommitOutcome = 'accepted' | 'conflict' | 'rejected' | 'lost'
+export type CommitOutcome = 'accepted' | 'conflict' | 'limited' | 'rejected' | 'lost'
+
+/** The server's error code for a rate limit (HTTP 429 semantics). */
+export const RATE_LIMITED = 429
+
+/** Back-off before re-sending a rate-limited message: 5 s doubling to 2 min. */
+export function retryDelay(attempt: number): number {
+  return Math.min(5_000 * 2 ** attempt, 120_000)
+}
 
 /** Turns a commit outcome into the error a user sees (none if accepted). */
 export function throwUnlessAccepted(outcome: CommitOutcome, action: string) {
   if (outcome === 'accepted') return
   if (outcome === 'lost') throw new Error(`Connection lost while ${action}; this will finish when you are back online`)
   if (outcome === 'conflict') throw new Error('Someone else changed the group at the same moment; try again')
+  if (outcome === 'limited') throw new Error('You have added a lot of new people recently; try again later')
   throw new Error(`Could not finish ${action} right now; try again`)
 }

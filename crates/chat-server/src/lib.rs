@@ -8,6 +8,7 @@ mod error;
 mod groups;
 mod hub;
 mod keys;
+pub mod limits;
 pub mod push;
 pub mod sms;
 mod ws;
@@ -30,6 +31,8 @@ pub struct AppState {
     pub sms: Arc<dyn sms::CodeSender>,
     pub hub: hub::Hub,
     pub push: Option<Arc<push::PushSender>>,
+    pub limits: limits::Limits,
+    pub send_buckets: Arc<limits::SendBuckets>,
 }
 
 impl AppState {
@@ -39,7 +42,14 @@ impl AppState {
             sms,
             hub: hub::Hub::default(),
             push: None,
+            limits: limits::Limits::default(),
+            send_buckets: Arc::default(),
         }
+    }
+
+    pub fn with_limits(mut self, limits: limits::Limits) -> Self {
+        self.limits = limits;
+        self
     }
 
     pub fn with_push(mut self, push: push::PushSender) -> Self {

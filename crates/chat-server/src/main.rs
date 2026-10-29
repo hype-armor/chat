@@ -54,8 +54,12 @@ async fn main() -> anyhow::Result<()> {
             PushSender::generate(config.vapid_subject.clone(), false)?
         }
     };
-    let state = AppState::new(db, Arc::new(LogSender)).with_push(push);
-    axum::serve(listener, router(state))
+    let state = AppState::new(db, Arc::new(LogSender))
+        .with_push(push)
+        .with_limits(config.limits.clone());
+    // Peer addresses feed per-IP limits when no trusted proxy header is set.
+    let app = router(state).into_make_service_with_connect_info::<std::net::SocketAddr>();
+    axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())

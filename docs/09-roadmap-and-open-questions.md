@@ -50,7 +50,7 @@ surviving reloads; three-engine browser CI against a real server.
 3. [x] Web Push notifications without content (FR-NOT-1/2).
 4. [x] Send authorisation: devices may only send to members of
    conversations they share; basic anti-spam.
-5. [ ] Server rate limits per device on lookup, claim and send; SMS-pumping
+5. [x] Server rate limits per device on lookup, claim and send; SMS-pumping
    protection beyond per-number limits (FR-SAF-2, NFR-LEG-5).
 6. [ ] Continuous deployment to the dev k3s cluster: build images, run
    `scripts/k3s-dev-deploy.sh` for real.

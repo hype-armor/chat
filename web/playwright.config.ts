@@ -20,7 +20,14 @@ export default defineConfig({
             url: 'http://127.0.0.1:8080/readyz',
             timeout: 300_000,
             reuseExistingServer: !process.env.CI,
-            env: { CHAT_BIND: '127.0.0.1:8080', CHAT_LOG_FORMAT: 'json' },
+            env: {
+              CHAT_BIND: '127.0.0.1:8080',
+              CHAT_LOG_FORMAT: 'json',
+              // Every test signs up from 127.0.0.1 with +1555 numbers.
+              CHAT_LIMIT_CODES_PER_IP_PER_HOUR: '100000',
+              CHAT_LIMIT_CODES_PER_PREFIX_PER_HOUR: '100000',
+              CHAT_LIMIT_CODES_PER_DAY: '100000',
+            },
           },
         ]
       : []),
