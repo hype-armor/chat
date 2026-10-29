@@ -19,6 +19,36 @@ const MAX_UPLOAD: usize = 100;
 const MAX_STORED_PER_DEVICE: i64 = 200;
 const MAX_CLAIM: usize = 200;
 const KEY_PACKAGE_TTL_DAYS: i32 = 30;
+/// Packages expiring sooner than this don't count as available.
+const KEY_PACKAGE_MARGIN_DAYS: i32 = 3;
+
+/// A device's key packages that others can still claim for a while.
+pub async fn available(db: &sqlx::PgPool, device: Uuid) -> Result<u32, ApiError> {
+    let (n,): (i64,) = sqlx::query_as(
+        "SELECT count(*) FROM key_packages
+         WHERE device_id = $1 AND expires_at > now() + make_interval(days => $2)",
+    )
+    .bind(device)
+    .bind(KEY_PACKAGE_MARGIN_DAYS)
+    .fetch_one(db)
+    .await?;
+    Ok(u32::try_from(n).unwrap_or(0))
+}
+
+#[derive(Serialize)]
+pub struct Count {
+    available: u32,
+}
+
+/// `GET /v1/keys/count`: how many key packages this device has left.
+pub async fn count(
+    State(state): State<AppState>,
+    AuthDevice(device): AuthDevice,
+) -> Result<Json<Count>, ApiError> {
+    Ok(Json(Count {
+        available: available(db(&state)?, device).await?,
+    }))
+}
 
 #[derive(Deserialize)]
 pub struct Upload {

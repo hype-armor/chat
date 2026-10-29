@@ -9,7 +9,7 @@ mod devices;
 mod error;
 mod groups;
 mod hub;
-mod keys;
+pub mod keys;
 pub mod limits;
 pub mod metrics;
 pub mod push;
@@ -78,6 +78,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/auth/verify", post(auth::verify))
         .route("/v1/keys", post(keys::upload))
         .route("/v1/keys/claim", post(keys::claim))
+        .route("/v1/keys/count", get(keys::count))
         .route("/v1/lookup", post(keys::lookup))
         .route("/v1/groups/epoch", post(groups::epoch))
         .route("/v1/link/start", post(devices::start))

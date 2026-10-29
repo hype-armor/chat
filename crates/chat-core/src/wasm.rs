@@ -639,6 +639,9 @@ pub struct ServerFrameView {
     pub error_code: u32,
     #[wasm_bindgen(getter_with_clone, js_name = errorMessage)]
     pub error_message: String,
+    /// `auth`: this device's available key packages.
+    #[wasm_bindgen(js_name = keyPackages)]
+    pub key_packages: u32,
 }
 
 #[wasm_bindgen(js_name = decodeServerFrame)]
@@ -656,11 +659,13 @@ pub fn decode_server_frame(bytes: &[u8]) -> Result<ServerFrameView, JsError> {
         epoch_conflict: false,
         error_code: 0,
         error_message: String::new(),
+        key_packages: 0,
     };
     match frame.body {
         Some(server_frame::Body::AuthResult(a)) => {
             view.kind = "auth".to_owned();
             view.device_id = a.device_id;
+            view.key_packages = a.key_packages;
         }
         Some(server_frame::Body::Deliver(env)) => {
             view.kind = "deliver".to_owned();

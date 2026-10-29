@@ -19,7 +19,15 @@ import { type CommitOutcome, RATE_LIMITED, commitWasAccepted, retryDelay, throwU
 import { RecentIds, fromHex, makeIdentity, plain, randomId, splitIdentity, toHex } from './ids'
 import { type DeviceSync, deviceHex, linkText, ownDevicePlan, parseDeviceSync, parseLinkCode } from './devices'
 import { applyReceipt, splitIds } from './receipts'
-import { type KeyBook, observeKeys, scannedMatches, verification, verifyText } from './keys'
+import {
+  KEY_PACKAGE_TARGET,
+  type KeyBook,
+  keyPackagesToUpload,
+  observeKeys,
+  scannedMatches,
+  verification,
+  verifyText,
+} from './keys'
 import type {
   AppView,
   ChatMessage,
@@ -33,7 +41,8 @@ import type {
 import { acceptsGroupInfo, designatedCommitter, parseAdmins } from './roles'
 import { SecureStore } from './storage'
 
-const INITIAL_KEY_PACKAGES = 20
+/** Check the server's key-package count this often while connected. */
+const KEY_PACKAGE_CHECK_MS = 6 * 60 * 60_000
 const MAX_RECONNECT_MS = 30_000
 const MAX_GROUP_MEMBERS = 50
 /** Envelopes held for conversations not yet joined (see `onDeliver`). */
@@ -160,6 +169,8 @@ export class Engine {
   /** Consecutive rate-limited sends, and the timer for the next attempt. */
   private limitedSends = 0
   private retryTimer?: ReturnType<typeof setTimeout>
+  private replenishing = false
+  private keyCheckTimer?: ReturnType<typeof setInterval>
   /** Pending own-device reconciliation (see `syncOwnDevices`). */
   private syncTimer?: ReturnType<typeof setTimeout>
   /** Sync runs, one after another (a caller may need the next one to finish). */
@@ -249,7 +260,7 @@ export class Engine {
         token: reg.token,
       }
       this.state = emptyState()
-      const packages = this.core.keyPackages(INITIAL_KEY_PACKAGES) as Uint8Array[]
+      const packages = this.core.keyPackages(KEY_PACKAGE_TARGET) as Uint8Array[]
       await this.persist()
       await this.store.putJson('account', this.account)
       await api.uploadKeyPackages(reg.token, packages.map(toBase64))
@@ -564,6 +575,35 @@ export class Engine {
     if ((conv.admins ?? []).length === 0 && meta.admins?.length) conv.admins = meta.admins
   }
 
+  // ---- key packages ------------------------------------------------------------
+
+  /**
+   * Keeps enough key packages on the server for others to start chats with
+   * this device: they are used up by claims, including lookups that never
+   * lead to a chat, and expire after 30 days.
+   */
+  private async replenishKeyPackages(known?: number) {
+    if (this.replenishing || !this.account) return
+    this.replenishing = true
+    try {
+      const token = this.account.token
+      const available = known ?? (await api.keyCount(token)).available
+      const count = keyPackagesToUpload(available)
+      if (count === 0) return
+      const packages = await this.exclusive(async () => {
+        const fresh = this.core!.keyPackages(count) as Uint8Array[]
+        // Their private keys must be stored before anyone can use them.
+        await this.persist()
+        return fresh
+      })
+      await api.uploadKeyPackages(token, packages.map(toBase64))
+    } catch (e) {
+      console.warn('key package top-up failed', e)
+    } finally {
+      this.replenishing = false
+    }
+  }
+
   // ---- receipts (FR-MSG-5) -------------------------------------------------
 
   /** Marks received messages seen; sends read receipts if enabled. */
@@ -620,7 +660,13 @@ export class Engine {
         ] as const) {
           if (ids.length === 0) continue
           const messageId = randomId()
-          const envelope = this.core!.sendReceipt(fromHex(conversationId), isRead, ids.map(fromHex), Date.now(), messageId)
+          const envelope = this.core!.sendReceipt(
+            fromHex(conversationId),
+            isRead,
+            ids.map(fromHex),
+            Date.now(),
+            messageId,
+          )
           this.state.outbox.push({
             messageId: toHex(messageId),
             conversationId,
@@ -1075,6 +1121,9 @@ export class Engine {
     this.setConnection('connecting')
 
     ws.onopen = () => ws.send(plain(encodeAuthenticate(this.requestId(), this.account!.token)))
+    this.keyCheckTimer ??= setInterval(() => {
+      if (this.connection === 'online') void this.replenishKeyPackages()
+    }, KEY_PACKAGE_CHECK_MS)
     ws.onmessage = (event) => this.onFrame(decodeServerFrame(new Uint8Array(event.data as ArrayBuffer)))
     ws.onclose = () => {
       if (this.ws !== ws) return // replaced or signed out
@@ -1092,6 +1141,7 @@ export class Engine {
       case 'auth':
         this.reconnectMs = 1000
         this.setConnection('online')
+        void this.replenishKeyPackages(frame.keyPackages)
         // Queued before any delivery handler, so it settles first.
         void this.exclusive(() => this.resolvePendingCommit()).then(() => {
           this.commitDepartures()
@@ -1196,9 +1246,8 @@ export class Engine {
       await this.observeKeysIn(conversationId)
       this.scheduleSync()
       this.queueProfile(conversationId)
-      // Joining consumed one of our key packages; publish a replacement.
-      const [replacement] = this.core!.keyPackages(1) as Uint8Array[]
-      api.uploadKeyPackages(this.account!.token, [toBase64(replacement)]).catch((e) => console.warn(e))
+      // Joining consumed one of our key packages.
+      void this.replenishKeyPackages()
       this.emitView()
       const early = this.state.early.filter((e) => e.conversationId === conversationId)
       this.state.early = this.state.early.filter((e) => e.conversationId !== conversationId)
