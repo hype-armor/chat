@@ -45,7 +45,7 @@ surviving reloads; three-engine browser CI against a real server.
 
 1. [x] Group re-sync on reconnect: a client that lost the server's answer to
    its commit asks the server whether it was accepted (docs/03 §5.3 gap).
-2. [ ] Group roles (owner/admin/member, FR-MSG-4); remove people, leave,
+2. [x] Group roles (owner/admin/member, FR-MSG-4); remove people, leave,
    rename.
 3. [ ] Web Push notifications without content (FR-NOT-1/2).
 4. [ ] Send authorisation: devices may only send to members of

@@ -45,6 +45,8 @@ deliveries have `request_id = 0`.
      commit was built on. The server accepts exactly one commit per epoch
      per conversation; a loser gets `epoch_conflict = true`, processes the
      winning commit, and retries.
+   - `PROPOSAL` envelopes (e.g. a member leaving, ADR-0016) are delivered
+     without epoch ordering; another member later commits them.
    - Limits: ciphertext ≤ 128 KiB, ids ≤ 64 bytes, ≤ 500 recipients, frame
      ≤ 256 KiB. Attachments go to blob storage (Phase 2), not the socket.
 5. **Ping** → **Pong** at the application level. The server also sends

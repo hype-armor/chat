@@ -27,6 +27,9 @@ enum ContentType {
   CONTENT_TYPE_HANDSHAKE = 2;
   // MLS welcome for a newly added member.
   CONTENT_TYPE_WELCOME = 3;
+  // MLS proposal (e.g. a member leaving); delivered without epoch ordering
+  // and committed later by another member (ADR-0016).
+  CONTENT_TYPE_PROPOSAL = 4;
 }
 
 // Frames exchanged over the client <-> server WebSocket. The first client

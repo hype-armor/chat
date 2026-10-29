@@ -7,6 +7,9 @@ export type ConversationSummary = {
   id: string
   title: string
   isGroup: boolean
+  amAdmin: boolean
+  /** 'left' / 'removed': read-only history. */
+  status: 'active' | 'left' | 'removed'
   /** Including this user. */
   memberCount: number
   lastText?: string
@@ -22,6 +25,8 @@ export type AppView =
       connection: ConnectionState
       conversations: ConversationSummary[]
     }
+
+export type MemberInfo = { account: string; name: string; isAdmin: boolean; isMe: boolean }
 
 export type ChatMessage = {
   id: string
@@ -44,6 +49,11 @@ export type CoreRequest =
   | { type: 'startChat'; phone: string }
   | { type: 'createGroup'; name: string; phones: string[] }
   | { type: 'addMembers'; conversationId: string; phones: string[] }
+  | { type: 'members'; conversationId: string }
+  | { type: 'renameGroup'; conversationId: string; name: string }
+  | { type: 'makeAdmin'; conversationId: string; account: string }
+  | { type: 'removeMember'; conversationId: string; account: string }
+  | { type: 'leaveGroup'; conversationId: string }
   | { type: 'messages'; conversationId: string }
   | { type: 'sendText'; conversationId: string; text: string }
   | { type: 'status' }
@@ -54,6 +64,7 @@ export type CoreResponseBody =
   | { type: 'ok' }
   | { type: 'conversation'; conversationId: string }
   | { type: 'messages'; messages: ChatMessage[] }
+  | { type: 'members'; members: MemberInfo[] }
   | { type: 'status'; status: CoreStatus }
   | { type: 'bench'; result: BenchResult }
   | { type: 'error'; message: string }

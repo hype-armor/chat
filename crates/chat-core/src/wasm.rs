@@ -143,6 +143,24 @@ pub struct StartedView {
     pub welcome: Vec<u8>,
 }
 
+/// A staged commit without new members.
+#[wasm_bindgen(getter_with_clone)]
+pub struct StagedView {
+    /// Encoded handshake `Envelope` for every current member.
+    pub commit: Vec<u8>,
+    #[wasm_bindgen(js_name = commitHash)]
+    pub commit_hash: Vec<u8>,
+}
+
+impl From<crate::client::Staged> for StagedView {
+    fn from(staged: crate::client::Staged) -> Self {
+        Self {
+            commit: staged.commit.encode_to_vec(),
+            commit_hash: staged.commit_hash,
+        }
+    }
+}
+
 #[wasm_bindgen(getter_with_clone)]
 pub struct AddedView {
     /// Encoded handshake `Envelope` for the existing members.
@@ -155,7 +173,7 @@ pub struct AddedView {
 }
 
 /// A received envelope, flattened for JavaScript. `kind` is one of
-/// `message`, `joined`, `epoch`, `ignored`.
+/// `message`, `joined`, `epoch`, `proposal`, `ignored`.
 #[wasm_bindgen]
 pub struct EventView {
     #[wasm_bindgen(getter_with_clone)]
@@ -172,6 +190,9 @@ pub struct EventView {
     pub display_name: Option<String>,
     #[wasm_bindgen(getter_with_clone, js_name = groupName)]
     pub group_name: Option<String>,
+    /// Admin account ids from a `GroupInfo`, 16 bytes each, concatenated.
+    #[wasm_bindgen(getter_with_clone, js_name = groupAdmins)]
+    pub group_admins: Vec<u8>,
 }
 
 impl EventView {
@@ -184,6 +205,7 @@ impl EventView {
             text: None,
             display_name: None,
             group_name: None,
+            group_admins: Vec::new(),
         }
     }
 }
@@ -262,19 +284,78 @@ impl CoreClient {
     }
 
     #[wasm_bindgen(js_name = sendGroupInfo)]
+    /// `admins`: account ids (16 bytes each) in priority order.
     pub fn send_group_info(
         &mut self,
         conversation_id: &[u8],
         name: String,
+        admins: &Array,
         sent_at_ms: f64,
         message_id: Vec<u8>,
     ) -> Result<Vec<u8>, JsError> {
+        let admins = array_bytes(admins);
         self.send(
             conversation_id,
             sent_at_ms,
-            content::Body::GroupInfo(GroupInfo { name }),
+            content::Body::GroupInfo(GroupInfo { name, admins }),
             message_id,
         )
+    }
+
+    /// Stages removing all devices of the given account ids.
+    #[wasm_bindgen(js_name = removeMembers)]
+    pub fn remove_members(
+        &mut self,
+        conversation_id: &[u8],
+        accounts: &Array,
+        commit_id: Vec<u8>,
+    ) -> Result<StagedView, JsError> {
+        let accounts = array_bytes(accounts);
+        let refs: Vec<&[u8]> = accounts.iter().map(Vec::as_slice).collect();
+        let staged = self
+            .inner
+            .remove_members(conversation_id, &refs, commit_id)
+            .map_err(js_err)?;
+        Ok(StagedView::from(staged))
+    }
+
+    /// Stages a commit of received proposals (members leaving).
+    #[wasm_bindgen(js_name = commitProposals)]
+    pub fn commit_proposals(
+        &mut self,
+        conversation_id: &[u8],
+        commit_id: Vec<u8>,
+    ) -> Result<StagedView, JsError> {
+        let staged = self
+            .inner
+            .commit_proposals(conversation_id, commit_id)
+            .map_err(js_err)?;
+        Ok(StagedView::from(staged))
+    }
+
+    /// Returns the encoded `Envelope` of a proposal removing this device.
+    pub fn leave(
+        &mut self,
+        conversation_id: &[u8],
+        message_id: Vec<u8>,
+    ) -> Result<Vec<u8>, JsError> {
+        Ok(self
+            .inner
+            .leave(conversation_id, message_id)
+            .map_err(js_err)?
+            .encode_to_vec())
+    }
+
+    #[wasm_bindgen(js_name = isActive)]
+    pub fn is_active(&self, conversation_id: &[u8]) -> Result<bool, JsError> {
+        self.inner.is_active(conversation_id).map_err(js_err)
+    }
+
+    #[wasm_bindgen(js_name = hasPendingProposals)]
+    pub fn has_pending_proposals(&self, conversation_id: &[u8]) -> Result<bool, JsError> {
+        self.inner
+            .has_pending_proposals(conversation_id)
+            .map_err(js_err)
     }
 
     #[wasm_bindgen(js_name = startConversation)]
@@ -343,7 +424,10 @@ impl CoreClient {
                 match content.body {
                     Some(content::Body::Text(t)) => view.text = Some(t.body),
                     Some(content::Body::Profile(p)) => view.display_name = Some(p.display_name),
-                    Some(content::Body::GroupInfo(g)) => view.group_name = Some(g.name),
+                    Some(content::Body::GroupInfo(g)) => {
+                        view.group_name = Some(g.name);
+                        view.group_admins = g.admins.concat();
+                    }
                     None => view.kind = "ignored".to_owned(),
                 }
                 view
@@ -352,6 +436,14 @@ impl CoreClient {
             Event::EpochChanged {
                 conversation_id, ..
             } => EventView::new("epoch", conversation_id),
+            Event::Proposal {
+                conversation_id,
+                sender,
+            } => {
+                let mut view = EventView::new("proposal", conversation_id);
+                view.sender = sender;
+                view
+            }
             Event::Ignored => EventView::new("ignored", env.conversation_id),
         })
     }

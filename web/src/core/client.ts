@@ -4,6 +4,7 @@ import type {
   BenchResult,
   ChatMessage,
   CoreEvent,
+  MemberInfo,
   CoreRequest,
   CoreResponseBody,
   CoreStatus,
@@ -69,6 +70,26 @@ export class CoreClient {
 
   async addMembers(conversationId: string, phones: string[]) {
     expect(await this.call({ type: 'addMembers', conversationId, phones }), 'ok')
+  }
+
+  async members(conversationId: string): Promise<MemberInfo[]> {
+    return expect(await this.call({ type: 'members', conversationId }), 'members').members
+  }
+
+  async renameGroup(conversationId: string, name: string) {
+    expect(await this.call({ type: 'renameGroup', conversationId, name }), 'ok')
+  }
+
+  async makeAdmin(conversationId: string, account: string) {
+    expect(await this.call({ type: 'makeAdmin', conversationId, account }), 'ok')
+  }
+
+  async removeMember(conversationId: string, account: string) {
+    expect(await this.call({ type: 'removeMember', conversationId, account }), 'ok')
+  }
+
+  async leaveGroup(conversationId: string) {
+    expect(await this.call({ type: 'leaveGroup', conversationId }), 'ok')
   }
 
   async messages(conversationId: string): Promise<ChatMessage[]> {

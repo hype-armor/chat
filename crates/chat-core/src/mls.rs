@@ -186,8 +186,10 @@ pub enum Received {
     },
     /// A commit from another member was applied; the epoch advanced.
     EpochChanged(u64),
-    /// A proposal was stored for a later commit.
-    Proposal,
+    /// A proposal was stored for a later commit (e.g. `sender` is leaving).
+    Proposal {
+        sender: Vec<u8>,
+    },
 }
 
 pub struct Conversation {
@@ -307,6 +309,55 @@ impl Conversation {
             .map_err(mls_err)
     }
 
+    /// Stages a commit removing every member whose identity starts with
+    /// one of `prefixes` (an account id covers all of its devices).
+    pub fn stage_remove_members(&mut self, device: &Device, prefixes: &[&[u8]]) -> Result<Vec<u8>> {
+        let leaves: Vec<LeafNodeIndex> = self
+            .group
+            .members()
+            .filter(|m| {
+                let id = credential_identity(&m.credential);
+                prefixes.iter().any(|p| !p.is_empty() && id.starts_with(p))
+            })
+            .map(|m| m.index)
+            .collect();
+        if leaves.is_empty() {
+            return Err(Error::Malformed("no matching members to remove"));
+        }
+        let (commit, _welcome, _group_info) = self
+            .group
+            .remove_members(&device.provider, &device.signer, &leaves)
+            .map_err(mls_err)?;
+        commit.tls_serialize_detached().map_err(mls_err)
+    }
+
+    /// A proposal to remove this device; another member commits it.
+    pub fn leave(&mut self, device: &Device) -> Result<Vec<u8>> {
+        self.group
+            .leave_group(&device.provider, &device.signer)
+            .map_err(mls_err)?
+            .tls_serialize_detached()
+            .map_err(mls_err)
+    }
+
+    pub fn has_pending_proposals(&self) -> bool {
+        self.group.has_pending_proposals()
+    }
+
+    /// Stages a commit of all received proposals.
+    pub fn stage_commit_proposals(&mut self, device: &Device) -> Result<Vec<u8>> {
+        let (commit, _welcome, _group_info) = self
+            .group
+            .commit_to_pending_proposals(&device.provider, &device.signer)
+            .map_err(mls_err)?;
+        commit.tls_serialize_detached().map_err(mls_err)
+    }
+
+    /// False once this device has been removed from the group.
+    pub fn is_active(&self) -> bool {
+        self.group.is_active()
+    }
+
     /// Rotates this device's leaf key (post-compromise security).
     pub fn self_update(&mut self, device: &Device) -> Result<Vec<u8>> {
         let bundle = self
@@ -352,8 +403,17 @@ impl Conversation {
                     .map_err(mls_err)?;
                 Ok(Received::EpochChanged(self.epoch()))
             }
-            ProcessedMessageContent::ProposalMessage(_)
-            | ProcessedMessageContent::ExternalJoinProposalMessage(_) => Ok(Received::Proposal),
+            ProcessedMessageContent::ProposalMessage(proposal) => {
+                // OpenMLS only queues proposals the caller stores.
+                self.group
+                    .store_pending_proposal(device.provider.storage(), *proposal)
+                    .map_err(mls_err)?;
+                Ok(Received::Proposal { sender })
+            }
+            // Only members propose in this app; ignore external joins.
+            ProcessedMessageContent::ExternalJoinProposalMessage(_) => {
+                Ok(Received::Proposal { sender })
+            }
         }
     }
 
@@ -503,6 +563,50 @@ mod tests {
             a.receive(&alice, &in_flight).unwrap(),
             app(b"bob", b"sent before the commit")
         );
+    }
+
+    #[test]
+    fn remove_and_leave() {
+        let alice = Device::new(b"alice-1").unwrap();
+        let bob = Device::new(b"bob-1").unwrap();
+        let bob2 = Device::new(b"bob-2").unwrap();
+        let carol = Device::new(b"carol-1").unwrap();
+        let mut a = Conversation::create(&alice).unwrap();
+        let kps: Vec<Vec<u8>> = [&bob, &bob2, &carol]
+            .iter()
+            .map(|d| d.key_package().unwrap())
+            .collect();
+        let refs: Vec<&[u8]> = kps.iter().map(Vec::as_slice).collect();
+        let change = a.add_members(&alice, &refs).unwrap();
+        let mut b = Conversation::join(&bob, &change.welcome).unwrap();
+        let mut c = Conversation::join(&carol, &change.welcome).unwrap();
+
+        // Removing "bob" removes both of his devices.
+        let commit = a.stage_remove_members(&alice, &[b"bob"]).unwrap();
+        a.merge_pending_commit(&alice).unwrap();
+        assert_eq!(a.member_count(), 2);
+        assert!(matches!(
+            b.receive(&bob, &commit).unwrap(),
+            Received::EpochChanged(_)
+        ));
+        assert!(!b.is_active(), "bob was removed");
+        c.receive(&carol, &commit).unwrap();
+        assert!(a.stage_remove_members(&alice, &[b"nobody"]).is_err());
+
+        // Carol leaves: her proposal is committed by Alice.
+        let proposal = c.leave(&carol).unwrap();
+        assert_eq!(
+            a.receive(&alice, &proposal).unwrap(),
+            Received::Proposal {
+                sender: b"carol-1".to_vec()
+            }
+        );
+        assert!(a.has_pending_proposals());
+        let commit = a.stage_commit_proposals(&alice).unwrap();
+        a.merge_pending_commit(&alice).unwrap();
+        assert_eq!(a.member_count(), 1);
+        c.receive(&carol, &commit).unwrap();
+        assert!(!c.is_active(), "carol has left");
     }
 
     #[test]

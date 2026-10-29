@@ -25,6 +25,20 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
     case 'addMembers':
       await engine.addMembers(request.conversationId, request.phones)
       return { type: 'ok' }
+    case 'members':
+      return { type: 'members', members: engine.members(request.conversationId) }
+    case 'renameGroup':
+      await engine.renameGroup(request.conversationId, request.name)
+      return { type: 'ok' }
+    case 'makeAdmin':
+      await engine.makeAdmin(request.conversationId, request.account)
+      return { type: 'ok' }
+    case 'removeMember':
+      await engine.removeMember(request.conversationId, request.account)
+      return { type: 'ok' }
+    case 'leaveGroup':
+      await engine.leaveGroup(request.conversationId)
+      return { type: 'ok' }
     case 'messages':
       return { type: 'messages', messages: await engine.messages(request.conversationId) }
     case 'sendText':
