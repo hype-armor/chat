@@ -2,7 +2,7 @@ import { type FormEvent, useEffect, useRef, useState } from 'react'
 import type { CoreClient } from '../core/client'
 import type { AppView, ChatMessage, ConversationSummary, MemberInfo } from '../core/protocol'
 import { Devices } from './Devices'
-import { BlockedList, ReportForm } from './Safety'
+import { BlockedList, DeleteAccount, ReportForm } from './Safety'
 import { VerificationBadge, Verify } from './Verify'
 import { type NotificationState, enableNotifications, notificationState, refreshSubscription } from '../notifications'
 
@@ -44,6 +44,7 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
         <NotificationToggle core={core} />
         <Devices core={core} />
         <BlockedList core={core} />
+        <DeleteAccount core={core} />
         <NewChat core={core} onStarted={setSelected} />
         <NewGroup core={core} onCreated={setSelected} />
         {requests.length > 0 && (

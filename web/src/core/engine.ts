@@ -190,8 +190,7 @@ export class Engine {
         peer: c.name === undefined && c.peers.length === 1 ? c.peers[0] : undefined,
         blocked: c.name === undefined && c.peers.length === 1 && this.state.blocked.includes(c.peers[0]),
         request: c.request ?? false,
-        verification:
-          c.name === undefined && c.peers.length === 1 ? this.verificationOf(c.peers[0]) : undefined,
+        verification: c.name === undefined && c.peers.length === 1 ? this.verificationOf(c.peers[0]) : undefined,
         lastText: c.lastText,
         lastAt: c.lastAt,
       }))
@@ -319,6 +318,35 @@ export class Engine {
   async removeDevice(id: string) {
     await api.removeDevice(this.ready().account.token, id)
     await this.syncOwnDevices()
+  }
+
+  /**
+   * Deletes the account and everything the server holds for it (FR-ID-9),
+   * after leaving every group so other members' groups don't keep it.
+   */
+  async deleteAccount(phone: string) {
+    const { account, core } = this.ready()
+    if (phone.trim() !== account.phone) throw new Error("That isn't this account's phone number")
+    if (this.connection !== 'online') throw new Error('You need to be online to delete your account')
+    await this.exclusive(async () => {
+      for (const conv of Object.values(this.state.conversations)) {
+        const recipients = conv.status ? [] : this.recipients(conv.id)
+        if (conv.self || recipients.length === 0) continue
+        const messageId = randomId()
+        const proposal = core.leave(fromHex(conv.id), messageId)
+        this.state.outbox.push({
+          messageId: toHex(messageId),
+          conversationId: conv.id,
+          envelope: toBase64(proposal),
+          recipients,
+        })
+        conv.status = 'left'
+      }
+      await this.persist()
+      await this.flushOutbox(true)
+    })
+    await api.deleteAccount(account.token, account.phone)
+    await this.signOut('Your account was deleted.')
   }
 
   /** Called when the server no longer knows this device (it was removed). */
@@ -675,7 +703,14 @@ export class Engine {
       const text = `${this.nameOf(account)}'s safety number changed: a device was added.`
       for (const c of Object.values(this.state.conversations)) {
         if (!c.self && c.peers.includes(account)) {
-          await this.appendMessage(c.id, { id: toHex(randomId()), from: '', kind: 'notice', text, sentAt: Date.now(), status: 'received' })
+          await this.appendMessage(c.id, {
+            id: toHex(randomId()),
+            from: '',
+            kind: 'notice',
+            text,
+            sentAt: Date.now(),
+            status: 'received',
+          })
         }
       }
     }
@@ -733,7 +768,10 @@ export class Engine {
     const everyone = own ? [...invitees, own] : invitees
 
     const id = await this.exclusive(async () => {
-      const started = core.startConversation(everyone.flatMap((i) => i.keyPackages), randomId())
+      const started = core.startConversation(
+        everyone.flatMap((i) => i.keyPackages),
+        randomId(),
+      )
       const id = toHex(started.conversationId)
       for (const i of invitees) this.state.phones[i.account] = i.phone
       const admins = [this.myAccount()]
@@ -960,8 +998,8 @@ export class Engine {
           this.waiters.delete(frame.requestId)
           waiter(frame)
         } else if (frame.kind === 'error' && frame.errorCode === 401 && this.connection !== 'online') {
-          // Our token was refused: another device removed this one.
-          void this.signOut('This device was removed from your account.')
+          // Our token was refused: removed by another device, or the account was deleted.
+          void this.signOut('This device is no longer signed in: it was removed, or the account was deleted.')
         } else if (frame.kind === 'error') {
           console.warn(`server error ${frame.errorCode}: ${frame.errorMessage}`)
         }
@@ -1267,7 +1305,10 @@ export class Engine {
         }
       }),
     )
-    const claimed = await api.claim(account.token, found.flatMap((f) => f.device_ids))
+    const claimed = await api.claim(
+      account.token,
+      found.flatMap((f) => f.device_ids),
+    )
     return found.map((f) => {
       const devices = f.device_ids.filter((d) => claimed.key_packages[d])
       if (devices.length === 0) throw new Error(`${f.phone} has no keys available right now; try again later`)
@@ -1282,13 +1323,7 @@ export class Engine {
 
   private queueGroupInfo(conversationId: string, name: string, admins: string[]) {
     const messageId = randomId()
-    const envelope = this.core!.sendGroupInfo(
-      fromHex(conversationId),
-      name,
-      admins.map(fromHex),
-      Date.now(),
-      messageId,
-    )
+    const envelope = this.core!.sendGroupInfo(fromHex(conversationId), name, admins.map(fromHex), Date.now(), messageId)
     this.state.outbox.push({
       messageId: toHex(messageId),
       conversationId,

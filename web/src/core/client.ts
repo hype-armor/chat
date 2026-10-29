@@ -153,6 +153,11 @@ export class CoreClient {
     expect(await this.call({ type: 'verifyScanned', conversationId, account, text }), 'ok')
   }
 
+  /** Deletes the account and all its server data; `phone` confirms it. */
+  async deleteAccount(phone: string) {
+    expect(await this.call({ type: 'deleteAccount', phone }), 'ok')
+  }
+
   async acceptRequest(conversationId: string) {
     expect(await this.call({ type: 'acceptRequest', conversationId }), 'ok')
   }

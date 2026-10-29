@@ -16,6 +16,28 @@ Authenticated endpoints need `Authorization: Bearer <device token>`.
 The token is 32 random bytes; the server stores only its SHA-256 hash.
 Each device's coarse last-seen *day* is recorded on authentication.
 
+### Deleting an account (FR-ID-9)
+
+| Method & path | Auth | Body → Response |
+|---------------|------|-----------------|
+| `POST /v1/account/delete` | ✓ | `{phone}` (the account's number, typed again) → `204`; `400` if it doesn't match |
+
+Deletes the account and, by cascade:
+- its devices and tokens;
+- queued envelopes, key packages and claims;
+- conversation memberships and link codes;
+- reports *about* it.
+
+It also deletes the number's verification codes and request log, and closes
+its devices' WebSockets. Rate-limit windows naming its devices expire
+within two days. The number can sign up again as a new account. The web
+client first sends a leave proposal in every group, so other members'
+groups drop it, then erases local storage.
+
+Deleting the reports about an account favours the deleted user's privacy
+over moderation history. Revisit if abusers start deleting accounts to
+escape reports.
+
 ### Linked devices (ADR-0019)
 
 | Method & path | Auth | Body → Response |
@@ -144,5 +166,5 @@ windows older than two days, and reports older than 90 days.
 
 - Sealed sender: the server stores which devices belong to which
   conversation (ADR-0017).
-- Account deletion, a real SMS provider.
+- A real SMS provider.
 - Multi-replica fan-out (PostgreSQL LISTEN/NOTIFY or Valkey pub/sub).

@@ -8,14 +8,20 @@ export function randomPhone(): string {
   return `+1555${String(Math.floor(Math.random() * 1e7)).padStart(7, '0')}`
 }
 
-/** Reads the code the development log sender wrote for `phone`. */
-export async function verificationCode(phone: string): Promise<string> {
+/**
+ * Reads the code the development log sender wrote for `phone`; pass the
+ * previous code when requesting another, to wait for the new log line.
+ */
+export async function verificationCode(phone: string, previous?: string): Promise<string> {
   for (let attempt = 0; attempt < 50; attempt++) {
     const lines = (await readFile(SERVER_LOG, 'utf8').catch(() => '')).split('\n')
     for (const line of lines.reverse()) {
       if (!line.includes(phone)) continue
       const fields = JSON.parse(line).fields
-      if (fields?.phone === phone && fields.code) return fields.code
+      if (fields?.phone === phone && fields.code) {
+        if (fields.code !== previous) return fields.code
+        break
+      }
     }
     await new Promise((r) => setTimeout(r, 200))
   }

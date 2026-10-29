@@ -1,6 +1,7 @@
 //! Chat server: a modular monolith (ADR-0005). Modules for blobs, push and
 //! call signalling are added here as they land.
 
+mod account;
 mod auth;
 pub mod config;
 mod delivery;
@@ -86,6 +87,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/devices", get(devices::list))
         .route("/v1/devices/remove", post(devices::remove))
         .route("/v1/reports", post(reports::create))
+        .route("/v1/account/delete", post(account::delete))
         .route("/v1/push/key", get(push::public_key))
         .route("/v1/push/subscription", post(push::subscribe))
         .route("/v1/push/unsubscribe", post(push::unsubscribe))
