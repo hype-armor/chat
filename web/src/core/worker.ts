@@ -25,6 +25,11 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
     case 'addMembers':
       await engine.addMembers(request.conversationId, request.phones)
       return { type: 'ok' }
+    case 'pushKey':
+      return { type: 'pushKey', key: await engine.pushKey() }
+    case 'enablePush':
+      await engine.enablePush(request.subscription)
+      return { type: 'ok' }
     case 'members':
       return { type: 'members', members: engine.members(request.conversationId) }
     case 'renameGroup':

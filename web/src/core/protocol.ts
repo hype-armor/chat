@@ -50,6 +50,8 @@ export type CoreRequest =
   | { type: 'createGroup'; name: string; phones: string[] }
   | { type: 'addMembers'; conversationId: string; phones: string[] }
   | { type: 'members'; conversationId: string }
+  | { type: 'pushKey' }
+  | { type: 'enablePush'; subscription: PushSubscriptionJSON }
   | { type: 'renameGroup'; conversationId: string; name: string }
   | { type: 'makeAdmin'; conversationId: string; account: string }
   | { type: 'removeMember'; conversationId: string; account: string }
@@ -65,6 +67,7 @@ export type CoreResponseBody =
   | { type: 'conversation'; conversationId: string }
   | { type: 'messages'; messages: ChatMessage[] }
   | { type: 'members'; members: MemberInfo[] }
+  | { type: 'pushKey'; key: string }
   | { type: 'status'; status: CoreStatus }
   | { type: 'bench'; result: BenchResult }
   | { type: 'error'; message: string }

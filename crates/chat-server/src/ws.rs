@@ -214,7 +214,13 @@ async fn send_envelope(
     let outcome = delivery::send(db, &envelope, &recipients).await?;
     if outcome == SendOutcome::Accepted {
         for device in &recipients {
-            state.hub.wake(device);
+            if !state.hub.wake(device)
+                && let Some(push) = state.push.clone()
+            {
+                // Offline: a content-free Web Push makes it reconnect.
+                let (db, device) = (db.clone(), *device);
+                tokio::spawn(async move { push.notify(&db, device).await });
+            }
         }
     }
     Ok(Some(server_frame::Body::SendResult(SendResult {

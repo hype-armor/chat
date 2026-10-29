@@ -375,3 +375,8 @@ button.danger {
   color: var(--muted);
   text-align: center;
 }
+
+.notifications {
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border);
+}

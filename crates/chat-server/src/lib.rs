@@ -8,6 +8,7 @@ mod error;
 mod groups;
 mod hub;
 mod keys;
+pub mod push;
 pub mod sms;
 mod ws;
 
@@ -28,6 +29,7 @@ pub struct AppState {
     pub db: Option<PgPool>,
     pub sms: Arc<dyn sms::CodeSender>,
     pub hub: hub::Hub,
+    pub push: Option<Arc<push::PushSender>>,
 }
 
 impl AppState {
@@ -36,7 +38,13 @@ impl AppState {
             db,
             sms,
             hub: hub::Hub::default(),
+            push: None,
         }
+    }
+
+    pub fn with_push(mut self, push: push::PushSender) -> Self {
+        self.push = Some(Arc::new(push));
+        self
     }
 }
 
@@ -56,6 +64,9 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/keys/claim", post(keys::claim))
         .route("/v1/lookup", post(keys::lookup))
         .route("/v1/groups/epoch", post(groups::epoch))
+        .route("/v1/push/key", get(push::public_key))
+        .route("/v1/push/subscription", post(push::subscribe))
+        .route("/v1/push/unsubscribe", post(push::unsubscribe))
         .route("/v1/ws", get(ws::upgrade))
         .with_state(state)
 }

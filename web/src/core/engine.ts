@@ -345,6 +345,16 @@ export class Engine {
     void this.flushOutbox()
   }
 
+  /** The server's VAPID public key (base64url) for `pushManager.subscribe`. */
+  async pushKey(): Promise<string> {
+    return (await api.pushKey()).public_key
+  }
+
+  /** Registers this device's push subscription with the server. */
+  async enablePush(subscription: PushSubscriptionJSON) {
+    await api.subscribePush(this.ready().account.token, subscription)
+  }
+
   async messages(conversationId: string): Promise<ChatMessage[]> {
     const list = (await this.store.getJson<ChatMessage[]>(`messages:${conversationId}`)) ?? []
     return list.map((m) => (m.from === 'me' ? m : { ...m, fromName: this.nameOf(m.from) }))

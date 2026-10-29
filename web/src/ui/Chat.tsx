@@ -1,6 +1,7 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react'
 import type { CoreClient } from '../core/client'
 import type { AppView, ChatMessage, ConversationSummary, MemberInfo } from '../core/protocol'
+import { type NotificationState, enableNotifications, notificationState, refreshSubscription } from '../notifications'
 
 type Ready = Extract<AppView, { phase: 'ready' }>
 
@@ -27,6 +28,7 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
             {view.connection}
           </span>
         </header>
+        <NotificationToggle core={core} />
         <NewChat core={core} onStarted={setSelected} />
         <NewGroup core={core} onCreated={setSelected} />
         <nav aria-label="Conversations">
@@ -60,6 +62,33 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
         />
       ) : (
         <section className="placeholder muted">Select a conversation or start a new one.</section>
+      )}
+    </div>
+  )
+}
+
+function NotificationToggle({ core }: { core: CoreClient }) {
+  const [state, setState] = useState<NotificationState>(notificationState)
+  const { busy, error, run } = useAction()
+
+  useEffect(() => {
+    void refreshSubscription(core)
+  }, [core])
+
+  if (state === 'unsupported' || state === 'granted') return null
+  return (
+    <div className="notifications">
+      {state === 'denied' ? (
+        <p className="muted small">Notifications are blocked in your browser settings.</p>
+      ) : (
+        <button type="button" className="link" disabled={busy} onClick={() => run(async () => setState(await enableNotifications(core)))}>
+          Enable notifications
+        </button>
+      )}
+      {error && (
+        <p role="alert" className="error">
+          {error}
+        </p>
       )}
     </div>
   )

@@ -47,8 +47,18 @@ pub struct TestServer {
 
 impl TestServer {
     pub async fn start(pool: PgPool) -> Self {
+        Self::start_with_push(pool, None).await
+    }
+
+    pub async fn start_with_push(
+        pool: PgPool,
+        push: Option<chat_server::push::PushSender>,
+    ) -> Self {
         let codes = Arc::new(CapturedCodes::default());
-        let state = AppState::new(Some(pool), codes.clone());
+        let mut state = AppState::new(Some(pool), codes.clone());
+        if let Some(push) = push {
+            state = state.with_push(push);
+        }
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let ws_url = format!("ws://{}/v1/ws", listener.local_addr().unwrap());
         let app = router(state.clone());

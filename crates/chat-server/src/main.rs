@@ -1,11 +1,20 @@
 use std::sync::Arc;
 
-use chat_server::{AppState, Config, connect_db, router, run_maintenance, sms::LogSender};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use chat_server::{
+    AppState, Config, connect_db, push::PushSender, router, run_maintenance, sms::LogSender,
+};
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("generate-vapid-key") {
+        // Prints a new Web Push key pair for CHAT_VAPID_PRIVATE_KEY.
+        let (private, public) = PushSender::generate_key_pair()?;
+        println!("CHAT_VAPID_PRIVATE_KEY={private}\n# public key: {public}");
+        return Ok(());
+    }
     let config = Config::from_env()?;
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     if config.json_logs {
@@ -32,7 +41,20 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(config.bind).await?;
     tracing::info!(addr = %config.bind, "listening");
     // Only the log sender exists so far; real SMS providers plug in here.
-    let state = AppState::new(db, Arc::new(LogSender));
+    let push = match &config.vapid_private_key {
+        Some(key) => PushSender::new(
+            &URL_SAFE_NO_PAD.decode(key)?,
+            config.vapid_subject.clone(),
+            false,
+        )?,
+        None => {
+            tracing::warn!(
+                "CHAT_VAPID_PRIVATE_KEY not set; using a random key (push subscriptions break on restart)"
+            );
+            PushSender::generate(config.vapid_subject.clone(), false)?
+        }
+    };
+    let state = AppState::new(db, Arc::new(LogSender)).with_push(push);
     axum::serve(listener, router(state))
         .with_graceful_shutdown(shutdown_signal())
         .await?;

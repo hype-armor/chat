@@ -55,6 +55,22 @@ deliveries have `request_id = 0`.
 Errors arrive as `Error{code, message}` with HTTP-style codes (400, 401,
 429, 500, 503).
 
+## Web Push (FR-NOT-1/2)
+
+| Method & path | Auth | Body → Response |
+|---------------|------|-----------------|
+| `GET /v1/push/key` | — | → `{public_key}`: VAPID public key (base64url) for `pushManager.subscribe` |
+| `POST /v1/push/subscription` | ✓ | `PushSubscription.toJSON()` (`{endpoint, keys: {p256dh, auth}}`, HTTPS endpoint) → `204` |
+| `POST /v1/push/unsubscribe` | ✓ | → `204` |
+
+When an envelope is queued for a device with no open WebSocket, the server
+sends that device's push service an **empty** push (no payload, VAPID-signed,
+TTL 1 day, urgency high), at most once per 30 s per device. The service
+worker shows a generic "New message" notification; opening the app connects
+and fetches the queue. A `404`/`410` from the push service deletes the
+subscription. Configure `CHAT_VAPID_PRIVATE_KEY` (from
+`chat-server generate-vapid-key`) and `CHAT_VAPID_SUBJECT`.
+
 ## Retention
 
 An hourly job deletes queue entries older than 30 days (FR-MSG-9), expired
@@ -62,7 +78,6 @@ key packages and codes, and code-request logs older than a day.
 
 ## Not yet implemented
 
-- Web Push wake-ups for offline devices (FR-NOT-*).
 - Sealed sender and send authorisation: any authenticated device can
   currently send to any device id.
 - Per-device rate limits on lookup/claim (Valkey), device removal, account

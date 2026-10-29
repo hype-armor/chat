@@ -77,9 +77,13 @@ helm upgrade --install cnpg cnpg/cloudnative-pg -n cnpg-system --create-namespac
 
 ```sh
 kubectl create namespace chat
+# Web Push key (keep it stable: changing it invalidates subscriptions)
+kubectl -n chat create secret generic chat-vapid \
+  --from-literal=private-key="$(docker run --rm ghcr.io/hype-armor/chat-server:dev generate-vapid-key | sed -n 's/^CHAT_VAPID_PRIVATE_KEY=//p')"
 kubectl apply -n chat -f deploy/k8s/postgres-cluster.yaml
 helm upgrade --install chat deploy/helm/chat -n chat \
-  -f deploy/helm/chat/values-k3s.yaml --set host=chat.example.com --atomic
+  -f deploy/helm/chat/values-k3s.yaml --set host=chat.example.com \
+  --set server.vapid.existingSecret=chat-vapid --atomic
 ```
 
 ## 4. Calls (Phase 3)
