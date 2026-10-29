@@ -95,7 +95,9 @@ export class SecureStore {
       await request(store().put(sealed, id))
     } catch {
       // WebKit can't store Blobs in private (ephemeral) sessions: keep bytes.
-      await request(store().put(await sealed.arrayBuffer(), id))
+      // Read them first: a transaction closes while it waits on other work.
+      const bytes = await sealed.arrayBuffer()
+      await request(store().put(bytes, id))
     }
   }
 
