@@ -57,6 +57,12 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState::new(db, Arc::new(LogSender))
         .with_push(push)
         .with_limits(config.limits.clone());
+    if let Some(addr) = config.metrics_bind {
+        let metrics = TcpListener::bind(addr).await?;
+        tracing::info!(%addr, "metrics listening");
+        let app = chat_server::metrics::router(state.clone());
+        tokio::spawn(async move { axum::serve(metrics, app).await });
+    }
     // Peer addresses feed per-IP limits when no trusted proxy header is set.
     let app = router(state).into_make_service_with_connect_info::<std::net::SocketAddr>();
     axum::serve(listener, app)
