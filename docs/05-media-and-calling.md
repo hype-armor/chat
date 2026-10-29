@@ -11,14 +11,14 @@
    (e.g., AES-256-GCM or ChaCha20-Poly1305 per chunk with chunk index in
    nonce/AD) so large files can be streamed, resumed, and seeked.
 3. Pad ciphertext to a size bucket to hide exact length.
-4. Upload to blob storage via a pre-signed URL (resumable protocol,
-   e.g., tus or S3 multipart). Encryption runs in the core worker using
-   streams, so large files never sit fully in memory.
+4. Upload the ciphertext to the server, which streams it into object
+   storage (ADR-0023; not pre-signed URLs). Encryption runs in the core
+   worker using streams, so large files never sit fully in memory.
 5. Send a regular E2EE message carrying `{blob_id, key, ciphertext_hash,
    mime, size, dimensions/duration, encrypted thumbnail}`.
 
 ### Receiver
-Download (from CDN), verify hash, decrypt chunk-wise, cache locally
+Download (through the server, ADR-0023), verify hash, decrypt chunk-wise, cache locally
 encrypted.
 
 ### Group fan-out

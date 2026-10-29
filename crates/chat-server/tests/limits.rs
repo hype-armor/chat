@@ -26,6 +26,7 @@ fn tight() -> Limits {
         device_lists_per_hour: 2,
         restores_per_ip_per_hour: 2,
         restores_per_account_per_day: 2,
+        blob_mb_per_day: 2,
         trust_proxy_headers: true,
     }
 }

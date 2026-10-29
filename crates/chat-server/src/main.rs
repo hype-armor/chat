@@ -71,7 +71,26 @@ async fn main() -> anyhow::Result<()> {
     if config.open_registration {
         tracing::warn!("CHAT_REGISTRATION=open: anyone can sign up without an invite");
     }
+    if config.blob_store == "memory" {
+        tracing::warn!(
+            "CHAT_BLOB_STORE not set: attachments are kept in memory and lost on restart"
+        );
+    }
+    let blobs = chat_server::blobs::open_store(&config.blob_store)?;
+    if let Some(db) = db.clone() {
+        let store = blobs.clone();
+        tokio::spawn(async move {
+            let mut hourly = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                hourly.tick().await;
+                if let Err(e) = chat_server::blobs::expire(&db, &store).await {
+                    tracing::error!(error = %e, "expiring attachments failed");
+                }
+            }
+        });
+    }
     let state = AppState::new(db)
+        .with_blobs(blobs)
         .with_open_registration(config.open_registration)
         .with_push(push)
         .with_limits(config.limits.clone());

@@ -4,6 +4,7 @@
 mod account;
 mod auth;
 mod backup;
+pub mod blobs;
 pub mod config;
 mod delivery;
 mod devices;
@@ -40,6 +41,8 @@ pub struct AppState {
     pub metrics: Arc<metrics::Metrics>,
     /// Sign-up without an invite (ADR-0021); off in production.
     pub open_registration: bool,
+    /// Encrypted attachments (ADR-0023); `None` turns them off.
+    pub blobs: Option<Arc<dyn object_store::ObjectStore>>,
 }
 
 impl AppState {
@@ -47,12 +50,18 @@ impl AppState {
         Self {
             db,
             open_registration: false,
+            blobs: None,
             hub: hub::Hub::default(),
             push: None,
             limits: limits::Limits::default(),
             send_buckets: Arc::default(),
             metrics: Arc::default(),
         }
+    }
+
+    pub fn with_blobs(mut self, store: Arc<dyn object_store::ObjectStore>) -> Self {
+        self.blobs = Some(store);
+        self
     }
 
     pub fn with_open_registration(mut self, open: bool) -> Self {
@@ -103,6 +112,13 @@ pub fn router(state: AppState) -> Router {
                     backup::MAX_BACKUP_BYTES,
                 )),
         )
+        .route(
+            "/v1/blobs",
+            put(blobs::upload).layer(axum::extract::DefaultBodyLimit::max(
+                blobs::MAX_BLOB_BYTES as usize,
+            )),
+        )
+        .route("/v1/blobs/{id}", get(blobs::download))
         .route("/v1/backup/key", put(backup::set_key))
         .route("/v1/backup/delete", post(backup::delete))
         .route("/v1/backup/restore", post(backup::restore))

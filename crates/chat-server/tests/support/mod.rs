@@ -47,6 +47,7 @@ impl TestServer {
     ) -> Self {
         // Open sign-up unless a test turns invites on (tests/invites.rs).
         let mut state = AppState::new(Some(pool))
+            .with_blobs(std::sync::Arc::new(object_store::memory::InMemory::new()))
             .with_open_registration(true)
             .with_limits(limits);
         if let Some(push) = push {
@@ -84,7 +85,8 @@ impl TestServer {
             .method(method)
             .uri(path)
             .header("authorization", format!("Bearer {token}"))
-            .header("content-type", "application/octet-stream");
+            .header("content-type", "application/octet-stream")
+            .header("content-length", body.len());
         let res = router(self.state.clone())
             .oneshot(req.body(Body::from(body)).unwrap())
             .await

@@ -114,6 +114,26 @@ helm upgrade --install chat deploy/helm/chat -n chat \
 kubectl -n chat exec deploy/chat-server -- chat-server create-invite https://chat.example.com
 ```
 
+### Attachments: MinIO (ADR-0023)
+
+```sh
+helm repo add minio https://charts.min.io/
+helm upgrade --install minio minio/minio -n minio --create-namespace \
+  --set mode=standalone,replicas=1,persistence.size=50Gi \
+  --set rootUser=chat,rootPassword="$(openssl rand -hex 24)" \
+  --set buckets[0].name=chat-blobs,buckets[0].policy=none
+kubectl -n chat create secret generic chat-blobs \
+  --from-literal=AWS_ACCESS_KEY_ID=chat \
+  --from-literal=AWS_SECRET_ACCESS_KEY="$(kubectl -n minio get secret minio -o jsonpath='{.data.rootPassword}' | base64 -d)"
+helm upgrade chat deploy/helm/chat -n chat --reuse-values \
+  --set server.blobs.bucket=chat-blobs \
+  --set server.blobs.endpoint=http://minio.minio.svc:9000 \
+  --set server.blobs.existingSecret=chat-blobs
+```
+
+MinIO stays inside the cluster: the chat server streams attachments to it.
+Include the `chat-blobs` bucket in the off-site backups (§5).
+
 ## 4. Calls (Phase 3)
 
 ```sh

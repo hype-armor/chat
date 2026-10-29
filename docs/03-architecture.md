@@ -100,7 +100,7 @@ flowchart LR
 | Key directory | Publishes per-device public identity keys and one-time key packages/prekeys; optional key-transparency log | Key DB, append-only log |
 | Delivery service | Accepts encrypted envelopes, fans out per recipient device, stores until acked, **orders group handshake messages** (required by MLS) | Message queue store |
 | Group state service | Stores the *encrypted* group state / ordering epoch counter; never sees membership in plaintext if we adopt encrypted group metadata | Small KV |
-| Blob service | Pre-signed upload/download URLs for encrypted attachments; TTL-based deletion | Object storage + CDN |
+| Blob service | Streams encrypted attachments to and from object storage (ADR-0023); TTL-based deletion | Object storage (S3-compatible) |
 | Push dispatcher | Sends content-free or E2EE wake-ups via Web Push (VAPID, RFC 8291); APNs/FCM for native wrappers later | Push subscriptions |
 | Call signalling | Relays encrypted SDP/ICE between peers; allocates SFU rooms | Ephemeral |
 | SFU cluster | Forwards (does not decrypt) group-call media; simulcast layer selection | Ephemeral |
