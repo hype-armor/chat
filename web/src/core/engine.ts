@@ -31,13 +31,17 @@ import { type DeviceSync, deviceHex, linkText, memberDevicePlan, parseDeviceSync
 import { applyReceipt, splitIds } from './receipts'
 import {
   MAX_ATTACHMENT_BYTES,
+  MAX_RECEIVED_THUMB_BYTES,
+  MAX_THUMB_BYTES,
   attachmentLabel,
   hexToUuid,
   openFile,
   prepareImage,
   renamed,
+  safeDuration,
   safeMime,
   safeName,
+  safeSize,
   sealFile,
   uuidToHex,
 } from './attachments'
@@ -71,7 +75,8 @@ import type {
   MemberInfo,
   SafetyNumber,
 } from './protocol'
-import { isPhoto } from './protocol'
+import { type MediaInfo, isPhoto, isPlayable } from './protocol'
+import { isMp4, scrubMp4 } from './mp4'
 import { acceptsGroupInfo, designatedCommitter, parseAdmins } from './roles'
 import { SecureStore } from './storage'
 
@@ -1304,6 +1309,8 @@ export class Engine {
         width: file.width,
         height: file.height,
         thumbnail: file.thumbnail ? plain(fromBase64(file.thumbnail)) : undefined,
+        durationMs: file.durationMs,
+        voiceNote: file.voiceNote,
       },
     }))
   }
@@ -1391,6 +1398,8 @@ export class Engine {
       f.height ?? 0,
       f.thumbnail ? fromBase64(f.thumbnail) : new Uint8Array(),
       m.text,
+      f.durationMs ?? 0,
+      !!f.voiceNote,
     )
     try {
       return core.sendAttachment(fromHex(conversationId), view, m.sentAt, id)
@@ -1406,17 +1415,21 @@ export class Engine {
    * file is sealed under a new key and kept here sealed, then uploaded; the
    * key goes to the group in an MLS message.
    */
-  async sendFile(conversationId: string, file: File, caption: string) {
+  async sendFile(conversationId: string, file: File, caption: string, media?: MediaInfo) {
     this.ready()
     this.checkCanSend(conversationId)
     if (file.size === 0) throw new Error('That file is empty')
     if (file.size > MAX_ATTACHMENT_BYTES) throw new Error('Files can be up to 100 MB')
     const image = await prepareImage(file)
-    const data = image?.data ?? file
+    // Clips: where they were filmed is blanked (ADR-0024).
+    const data = image?.data ?? (isMp4(file.type) ? await scrubMp4(file) : file)
     if (data.size > MAX_ATTACHMENT_BYTES) throw new Error('Files can be up to 100 MB')
     const key = crypto.getRandomValues(new Uint8Array(32))
     const sealed = await sealFile(data, key)
     const mime = image?.mime ?? safeMime(file.type)
+    const clip = !image && isPlayable(mime) ? media : undefined
+    const thumbnail = image?.thumbnail ?? (clip?.thumbnail && clip.thumbnail.length <= MAX_THUMB_BYTES ? clip.thumbnail : undefined)
+    const size = image ? { width: image.width, height: image.height } : safeSize(clip?.width, clip?.height)
     const name = safeName(image && image.data !== file ? renamed(file.name, mime) : file.name)
     const messageId = toHex(randomId())
     await this.store.putFile(messageId, sealed.body)
@@ -1431,9 +1444,10 @@ export class Engine {
           name,
           mime,
           size: sealed.size,
-          width: image?.width,
-          height: image?.height,
-          thumbnail: image?.thumbnail.length ? toBase64(image.thumbnail) : undefined,
+          ...size,
+          thumbnail: thumbnail?.length ? toBase64(thumbnail) : undefined,
+          durationMs: safeDuration(clip?.durationMs),
+          voiceNote: clip?.voiceNote && mime.startsWith('audio/') ? true : undefined,
           key: toBase64(key),
           digest: toBase64(sealed.digest),
         },
@@ -1494,7 +1508,7 @@ export class Engine {
     }
     try {
       // Other types (SVG, HTML…) are never handed out as something a browser renders.
-      const type = isPhoto(f.mime) ? f.mime : 'application/octet-stream'
+      const type = isPhoto(f.mime) || isPlayable(f.mime) ? f.mime : 'application/octet-stream'
       return await openFile(body, fromBase64(f.key), f.size, fromBase64(f.digest), type)
     } catch (e) {
       await this.store.putFile(messageId, undefined)
@@ -2013,18 +2027,19 @@ export class Engine {
   private receivedFile(a: AttachmentView): StoredFile | undefined {
     if (a.blobId.length !== 16 || a.key.length !== 32 || a.digest.length !== 32) return undefined
     if (!(a.size > 0 && a.size <= MAX_ATTACHMENT_BYTES)) return undefined
-    const dims = a.width > 0 && a.height > 0 && a.width <= 20_000 && a.height <= 20_000
     const thumbnail = a.thumbnail
+    const mime = safeMime(a.mime)
     return {
       blobId: toHex(a.blobId),
       key: toBase64(a.key),
       digest: toBase64(a.digest),
       size: a.size,
-      mime: safeMime(a.mime),
+      mime,
       name: safeName(a.name),
-      width: dims ? a.width : undefined,
-      height: dims ? a.height : undefined,
-      thumbnail: thumbnail.length > 0 && thumbnail.length <= 64 * 1024 ? toBase64(thumbnail) : undefined,
+      ...safeSize(a.width, a.height),
+      thumbnail: thumbnail.length > 0 && thumbnail.length <= MAX_RECEIVED_THUMB_BYTES ? toBase64(thumbnail) : undefined,
+      durationMs: safeDuration(a.durationMs),
+      voiceNote: a.voiceNote && mime.startsWith('audio/') ? true : undefined,
     }
   }
 
@@ -2035,7 +2050,7 @@ export class Engine {
     const conv = this.state.conversations[conversationId]
     if (conv && message.kind !== 'notice') {
       conv.lastText = message.file
-        ? [attachmentLabel(message.file.mime, message.file.name), message.text].filter(Boolean).join(': ')
+        ? [attachmentLabel(message.file.mime, message.file.name, message.file.voiceNote), message.text].filter(Boolean).join(': ')
         : message.text
       conv.lastAt = Math.max(conv.lastAt, message.sentAt)
     }

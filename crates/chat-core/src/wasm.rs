@@ -248,6 +248,10 @@ pub struct AttachmentView {
     pub thumbnail: Vec<u8>,
     #[wasm_bindgen(getter_with_clone)]
     pub caption: String,
+    #[wasm_bindgen(js_name = durationMs)]
+    pub duration_ms: u32,
+    #[wasm_bindgen(js_name = voiceNote)]
+    pub voice_note: bool,
 }
 
 #[wasm_bindgen]
@@ -265,6 +269,8 @@ impl AttachmentView {
         height: u32,
         thumbnail: Vec<u8>,
         caption: String,
+        duration_ms: u32,
+        voice_note: bool,
     ) -> AttachmentView {
         AttachmentView {
             blob_id,
@@ -277,6 +283,8 @@ impl AttachmentView {
             height,
             thumbnail,
             caption,
+            duration_ms,
+            voice_note,
         }
     }
 }
@@ -294,6 +302,8 @@ impl From<Attachment> for AttachmentView {
             height: a.height,
             thumbnail: a.thumbnail,
             caption: a.caption,
+            duration_ms: a.duration_ms,
+            voice_note: a.voice_note,
         }
     }
 }
@@ -311,6 +321,8 @@ impl From<AttachmentView> for Attachment {
             height: a.height,
             thumbnail: a.thumbnail,
             caption: a.caption,
+            duration_ms: a.duration_ms,
+            voice_note: a.voice_note,
         }
     }
 }

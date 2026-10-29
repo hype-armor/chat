@@ -71,6 +71,22 @@ Option 2, plus re-drawing photos.
   as a download, so a received file never renders in the app's origin.
   Received names and types are cleaned (no paths or control characters).
 
+### Addendum (2026-10-29): voice notes and clips (Phase 2 item 5)
+- **Voice notes** are recorded with `MediaRecorder`: Opus in WebM or Ogg,
+  or AAC in MP4 on Safari. Up to 5 minutes. They are sent as attachments
+  marked `voice_note`, with `duration_ms`. The microphone is on only while
+  recording.
+- **Clips** (audio and video files) are probed on the UI thread, since the
+  worker can't decode media. That gives their duration, and for videos
+  their size and a poster frame, which is sent as the thumbnail.
+- **Location in clips:** phones store where a video was filmed in the
+  MP4/QuickTime `moov` box. The worker blanks `©xyz` and `loci` boxes and
+  ISO 6709 coordinates (Apple's `mdta` location key) in place, so every
+  offset in the file stays valid. Media data is never touched. Other
+  formats are sent unchanged.
+- **Playback:** audio and video of common types play inline (media
+  elements run no script). Other types stay downloads only.
+
 ## Consequences
 - The sender re-encodes photos: some quality loss, and large originals
   shrink. A "send original" choice can come with the quality settings
@@ -93,6 +109,10 @@ Option 2, plus re-drawing photos.
   - wrong key, flipped bits, a dropped last chunk and a wrong size are all
     rejected;
   - Padmé overhead stays bounded.
+- **Unit tests:** location blanking in crafted MP4 boxes; clips without a
+  location are left unchanged.
+- **Browser test (Chromium, fake microphone):** a recorded voice note and a
+  WebM clip play on the other side.
 - **Browser test:**
   - a JPEG carrying a GPS EXIF block arrives as a valid JPEG without it;
   - a text file arrives byte for byte;

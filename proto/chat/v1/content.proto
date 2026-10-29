@@ -70,4 +70,8 @@ message Attachment {
   uint32 height = 8;
   bytes thumbnail = 9;
   string caption = 10;
+  // Audio and video: length in milliseconds.
+  uint32 duration_ms = 11;
+  // Recorded in the app as a voice note (shown as one, not as a file).
+  bool voice_note = 12;
 }

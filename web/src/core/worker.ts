@@ -49,7 +49,7 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
       await engine.sendText(request.conversationId, request.text)
       return { type: 'ok' }
     case 'sendFile':
-      await engine.sendFile(request.conversationId, request.file, request.caption)
+      await engine.sendFile(request.conversationId, request.file, request.caption, request.media)
       return { type: 'ok' }
     case 'openAttachment':
       return { type: 'file', blob: await engine.openAttachment(request.conversationId, request.messageId) }

@@ -625,3 +625,19 @@ button.danger {
 .attachment img[data-full='true'] {
   width: min(28rem, 70vw);
 }
+
+.attachment video,
+.attachment audio {
+  display: block;
+  max-width: min(28rem, 70vw);
+}
+
+.attachment .play {
+  padding: 0.25rem 0.5rem;
+}
+
+.recording {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}

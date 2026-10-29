@@ -1,0 +1,64 @@
+import { expect, test } from '@playwright/test'
+import { messages, openChat, randomUsername, signUp } from './support'
+
+test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
+// Chromium's fake microphone and camera; other engines have no equivalent flags.
+test.skip(({ browserName }) => browserName !== 'chromium', 'needs a fake microphone')
+test.use({ launchOptions: { args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] } })
+
+/** Whether the media element in `scope` has loaded and decoded its data. */
+const decoded = (selector: string) =>
+  `(() => { const el = document.querySelector('${selector}'); return !!el && el.readyState >= 2 && el.duration > 0 })()`
+
+test('voice notes and video clips play on the other side (FR-MED-1)', async ({ browser }) => {
+  const bobUsername = randomUsername()
+  const alice = await signUp(browser, 'Alice', randomUsername())
+  const bob = await signUp(browser, 'Bob', bobUsername)
+  await alice.getByLabel("Contact's username").fill(bobUsername)
+  await alice.getByRole('button', { name: 'Start chat' }).click()
+
+  await alice.getByRole('button', { name: 'Record a voice note' }).click()
+  await expect(alice.getByRole('status', { name: 'Recording a voice note' })).toContainText('0:01')
+  await alice.getByRole('button', { name: 'Send voice note' }).click()
+  const note = messages(alice).filter({ hasText: 'Voice note' })
+  await expect(note).toContainText('Sent')
+
+  // A two-second clip made in the page (this file is type-checked without DOM types).
+  const clip = Buffer.from(
+    await alice.evaluate<number[]>(`(async () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 320
+      canvas.height = 240
+      const ctx = canvas.getContext('2d')
+      const stream = canvas.captureStream(15)
+      const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' })
+      const chunks = []
+      recorder.ondataavailable = (e) => chunks.push(e.data)
+      const stopped = new Promise((r) => (recorder.onstop = r))
+      recorder.start()
+      const started = performance.now()
+      while (performance.now() - started < 2000) {
+        ctx.fillStyle = 'hsl(' + ((performance.now() / 10) % 360) + ', 70%, 50%)'
+        ctx.fillRect(0, 0, 320, 240)
+        await new Promise((r) => setTimeout(r, 50))
+      }
+      recorder.stop()
+      await stopped
+      return [...new Uint8Array(await new Blob(chunks).arrayBuffer())]
+    })()`),
+  )
+  await alice.getByTestId('attach-input').setInputFiles({ name: 'clip.webm', mimeType: 'video/webm', buffer: clip })
+  await expect(messages(alice).filter({ has: alice.getByRole('button', { name: 'Play clip.webm' }) })).toContainText(
+    'Sent',
+  )
+
+  await expect(bob.getByRole('button', { name: /Alice/ })).toContainText('Video')
+  await openChat(bob, /Alice/)
+  await bob.getByRole('button', { name: 'Play Voice note' }).click()
+  await expect(bob.getByLabel('Voice note', { exact: true })).toBeVisible()
+  await expect.poll(() => bob.evaluate<boolean>(decoded('audio'))).toBe(true)
+
+  await bob.getByRole('button', { name: 'Play clip.webm' }).click()
+  await expect(bob.getByLabel('clip.webm', { exact: true })).toBeVisible()
+  await expect.poll(() => bob.evaluate<boolean>(decoded('video'))).toBe(true)
+})

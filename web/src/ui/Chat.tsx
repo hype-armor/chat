@@ -6,6 +6,9 @@ import { Devices } from './Devices'
 import { Invite } from './Invite'
 import { Backup } from './Backup'
 import { Attachment } from './Attachment'
+import { Recorder } from './Recorder'
+import { probeClip } from './media'
+import type { MediaInfo } from '../core/protocol'
 import { BlockedList, DeleteAccount, ReportForm } from './Safety'
 import { VerificationBadge, Verify } from './Verify'
 import { type NotificationState, enableNotifications, notificationState, refreshSubscription } from '../notifications'
@@ -511,13 +514,14 @@ function Conversation({
   }
 
   // The draft, if any, goes with the file as its caption.
-  const attach = async (file: File | undefined) => {
+  const attach = async (file: File | undefined, recorded?: MediaInfo) => {
     if (picker.current) picker.current.value = ''
     if (!file) return
     setAttaching(true)
     setAttachError(undefined)
     try {
-      await core.sendFile(id, file, draft.trim())
+      const media = recorded ?? (await probeClip(file).catch(() => undefined))
+      await core.sendFile(id, file, draft.trim(), media)
       setDraft('')
     } catch (e) {
       setAttachError(e instanceof Error ? e.message : String(e))
@@ -684,6 +688,11 @@ function Conversation({
         >
           {attaching ? '…' : '+'}
         </button>
+        <Recorder
+          disabled={attaching}
+          onRecorded={(file, media) => void attach(file, media)}
+          onError={setAttachError}
+        />
         <label className="visually-hidden" htmlFor="composer">
           Message
         </label>

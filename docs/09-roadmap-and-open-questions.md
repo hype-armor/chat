@@ -91,7 +91,7 @@ order; tick items as their PRs merge.
    limit, 30-day expiry (FR-MED-2/3, S3-compatible; MinIO on k3s).
 4. [x] Images and files: encrypted on the device, EXIF stripped,
    thumbnails sent encrypted (FR-MED-1/2/4/8, ADR-0024).
-5. [ ] Voice notes and audio/video clips (FR-MED-1).
+5. [x] Voice notes and audio/video clips (FR-MED-1, ADR-0024).
 6. [ ] Resumable transfers and an auto-download policy (FR-MED-5/6, should).
 7. [ ] Share location once, with self-hosted map tiles (FR-LOC-1/4/5,
    ADR-0008).
