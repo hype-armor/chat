@@ -42,7 +42,7 @@ test('linking a second device by code, then removing it (ADR-0019)', async ({ br
 
   // Removing the laptop signs it out; Alice and Bob carry on.
   await alice.getByRole('button', { name: 'Remove device 2' }).click()
-  await expect(laptop.getByText('This device was removed from your account.')).toBeVisible({ timeout: 15_000 })
+  await expect(laptop.getByText(/This device is no longer signed in/)).toBeVisible({ timeout: 15_000 })
   await expect(alice.getByRole('list', { name: 'Devices' }).getByRole('listitem')).toHaveCount(1)
   await bob.getByLabel('Message').fill('Just you now')
   await bob.getByRole('button', { name: 'Send' }).click()

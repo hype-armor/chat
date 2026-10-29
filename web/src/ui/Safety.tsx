@@ -110,3 +110,46 @@ export function BlockedList({ core }: { core: CoreClient }) {
     </details>
   )
 }
+
+/** Deleting the account and all its server data (FR-ID-9). */
+export function DeleteAccount({ core }: { core: CoreClient }) {
+  const [phone, setPhone] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setError(undefined)
+    try {
+      await core.deleteAccount(phone)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+      setBusy(false)
+    }
+  }
+
+  return (
+    <details className="devices">
+      <summary>Delete account</summary>
+      <form className="report" onSubmit={submit}>
+        <p className="small">
+          This leaves all your chats and groups and deletes your account, devices and undelivered messages from our
+          server. Messages on this device are erased. This can't be undone.
+        </p>
+        <label>
+          Type your phone number to confirm
+          <input value={phone} onChange={(e) => setPhone(e.target.value)} type="tel" required autoComplete="off" />
+        </label>
+        <button type="submit" className="danger" disabled={busy}>
+          {busy ? 'Deleting…' : 'Delete my account'}
+        </button>
+        {error && (
+          <p role="alert" className="error">
+            {error}
+          </p>
+        )}
+      </form>
+    </details>
+  )
+}

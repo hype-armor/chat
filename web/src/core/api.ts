@@ -59,6 +59,7 @@ export const api = {
   linkStatus: (token: string, code: string) => post<{ device_id: string | null }>('/v1/link/status', { code }, token),
   linkComplete: (code: string, identityKey: string) =>
     post<Registered>('/v1/link/complete', { code, identity_key: identityKey }),
+  deleteAccount: (token: string, phone: string) => post<void>('/v1/account/delete', { phone }, token),
   report: (token: string, report: ReportBody) => post<void>('/v1/reports', report, token),
   claim: (token: string, deviceIds: string[]) =>
     post<{ key_packages: Record<string, string> }>('/v1/keys/claim', { device_ids: deviceIds }, token),

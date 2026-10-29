@@ -107,6 +107,7 @@ export type CoreRequest =
   | { type: 'verifyScanned'; conversationId: string; account: string; text: string }
   | { type: 'dismissAlert'; id: string }
   | { type: 'acceptRequest'; conversationId: string }
+  | { type: 'deleteAccount'; phone: string }
   | { type: 'block'; account: string }
   | { type: 'unblock'; account: string }
   | { type: 'blocked' }

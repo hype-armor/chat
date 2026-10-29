@@ -10,7 +10,7 @@ use chat_proto::{
 };
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use support::{Client, TestServer};
+use support::TestServer;
 use uuid::Uuid;
 
 fn key() -> String {
@@ -152,10 +152,7 @@ async fn listing_and_removing_devices(pool: PgPool) {
         .post("/v1/devices/remove", Some(&token), remove(second))
         .await;
     assert_eq!(status, 204);
-    assert!(
-        closed(&mut ws).await,
-        "socket of the removed device stays open"
-    );
+    assert!(ws.closed().await, "socket of the removed device stays open");
     let (status, _) = server.get("/v1/devices", Some(&second_token)).await;
     assert_eq!(status, 401);
     let (_, body) = server.get("/v1/devices", Some(&token)).await;
@@ -209,18 +206,5 @@ async fn sends_skip_removed_devices(pool: PgPool) {
     match a.request(send(ContentType::Welcome)).await.body {
         Some(server_frame::Body::Error(e)) => assert_eq!(e.code, 400),
         other => panic!("{other:?}"),
-    }
-}
-
-async fn closed(ws: &mut Client) -> bool {
-    use futures_util::StreamExt;
-    use tokio_tungstenite::tungstenite::Message;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        match tokio::time::timeout_at(deadline, ws.ws.next()).await {
-            Err(_) => return false,
-            Ok(None | Some(Err(_)) | Some(Ok(Message::Close(_)))) => return true,
-            Ok(Some(Ok(_))) => {}
-        }
     }
 }

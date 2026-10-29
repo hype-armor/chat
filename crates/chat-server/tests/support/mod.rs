@@ -195,6 +195,19 @@ pub struct Client {
 }
 
 impl Client {
+    /// Whether the server closes this connection within 5 seconds.
+    #[allow(dead_code)]
+    pub async fn closed(&mut self) -> bool {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            match tokio::time::timeout_at(deadline, self.ws.next()).await {
+                Err(_) => return false,
+                Ok(None | Some(Err(_)) | Some(Ok(Message::Close(_)))) => return true,
+                Ok(Some(Ok(_))) => {}
+            }
+        }
+    }
+
     /// Wraps a connection without authenticating.
     pub fn new(ws: WebSocketStream<MaybeTlsStream<TcpStream>>) -> Self {
         Self { ws, next_id: 1 }
