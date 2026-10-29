@@ -14,6 +14,10 @@ export type ConversationSummary = {
   memberCount: number
   /** 1:1 chats: the other person's account id. */
   peer?: string
+  /** From someone with no connection to this user, until accepted (FR-SAF-3). */
+  request: boolean
+  /** 1:1 chats: this user blocked the other person (FR-ID-8). */
+  blocked?: boolean
   /** 1:1 chats: safety number status of the other person (ADR-0020). */
   verification?: Verification
   lastText?: string
@@ -53,7 +57,12 @@ export type MemberInfo = {
   isAdmin: boolean
   isMe: boolean
   verification?: Verification
+  blocked?: boolean
 }
+
+export type ReportReason = 'spam' | 'harassment' | 'other'
+
+export type BlockedContact = { account: string; name: string }
 
 export type ChatMessage = {
   id: string
@@ -97,6 +106,17 @@ export type CoreRequest =
   | { type: 'markVerified'; conversationId: string; account: string }
   | { type: 'verifyScanned'; conversationId: string; account: string; text: string }
   | { type: 'dismissAlert'; id: string }
+  | { type: 'acceptRequest'; conversationId: string }
+  | { type: 'block'; account: string }
+  | { type: 'unblock'; account: string }
+  | { type: 'blocked' }
+  | {
+      type: 'report'
+      conversationId: string
+      account: string
+      reason: ReportReason
+      includeMessages: boolean
+    }
   | { type: 'status' }
   | { type: 'bench'; members: number }
 
@@ -111,6 +131,7 @@ export type CoreResponseBody =
   | { type: 'devices'; devices: DeviceInfo[] }
   | { type: 'qr'; text?: string }
   | { type: 'safety'; safety: SafetyNumber }
+  | { type: 'blocked'; contacts: BlockedContact[] }
   | { type: 'status'; status: CoreStatus }
   | { type: 'bench'; result: BenchResult }
   | { type: 'error'; message: string }

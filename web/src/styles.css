@@ -242,6 +242,11 @@ form {
   opacity: 0.75;
 }
 
+/* Elements with their own display rule must still honour `hidden`. */
+[hidden] {
+  display: none !important;
+}
+
 .composer {
   display: flex;
   gap: 0.5rem;
@@ -488,4 +493,52 @@ button.danger {
   color: var(--muted);
   text-align: center;
   background: none;
+}
+
+/* Blocking and reporting (FR-ID-8) */
+.report {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  gap: 0.75rem;
+}
+
+.report fieldset {
+  border: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.report .choice {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  font-weight: normal;
+}
+
+.report .actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+/* Message requests (FR-SAF-3) */
+.list-heading {
+  margin: 0.75rem 1rem 0.25rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.notice.request p {
+  margin: 0 0 0.5rem;
+}
+
+.notice.request .actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+  align-items: center;
 }

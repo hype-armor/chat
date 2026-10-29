@@ -2,6 +2,7 @@ import { type FormEvent, useEffect, useRef, useState } from 'react'
 import type { CoreClient } from '../core/client'
 import type { AppView, ChatMessage, ConversationSummary, MemberInfo } from '../core/protocol'
 import { Devices } from './Devices'
+import { BlockedList, ReportForm } from './Safety'
 import { VerificationBadge, Verify } from './Verify'
 import { type NotificationState, enableNotifications, notificationState, refreshSubscription } from '../notifications'
 
@@ -17,6 +18,8 @@ const STATUS_LABEL: Record<ChatMessage['status'], string> = {
 export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
   const [selected, setSelected] = useState<string>()
   const conversation = view.conversations.find((c) => c.id === selected)
+  const requests = view.conversations.filter((c) => c.request)
+  const accepted = view.conversations.filter((c) => !c.request)
 
   return (
     <div className={`chat-layout ${conversation ? 'has-selection' : ''}`}>
@@ -40,20 +43,18 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
         ))}
         <NotificationToggle core={core} />
         <Devices core={core} />
+        <BlockedList core={core} />
         <NewChat core={core} onStarted={setSelected} />
         <NewGroup core={core} onCreated={setSelected} />
+        {requests.length > 0 && (
+          <nav aria-label="Requests">
+            <h3 className="list-heading small">Message requests</h3>
+            <ConversationList conversations={requests} selected={selected} onSelect={setSelected} />
+          </nav>
+        )}
         <nav aria-label="Conversations">
-          <ul className="conversations">
-            {view.conversations.map((c) => (
-              <li key={c.id}>
-                <button type="button" className={c.id === selected ? 'active' : ''} onClick={() => setSelected(c.id)}>
-                  <span className="title">{c.title}</span>
-                  <span className="muted small preview">{c.lastText ?? 'No messages yet'}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-          {view.conversations.length === 0 && <p className="muted empty">No conversations yet.</p>}
+          <ConversationList conversations={accepted} selected={selected} onSelect={setSelected} />
+          {accepted.length === 0 && <p className="muted empty">No conversations yet.</p>}
         </nav>
       </aside>
       {conversation ? (
@@ -67,12 +68,37 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
           status={conversation.status}
           peer={conversation.peer}
           verification={conversation.verification}
+          blocked={conversation.blocked ?? false}
+          request={conversation.request}
           onBack={() => setSelected(undefined)}
         />
       ) : (
         <section className="placeholder muted">Select a conversation or start a new one.</section>
       )}
     </div>
+  )
+}
+
+function ConversationList({
+  conversations,
+  selected,
+  onSelect,
+}: {
+  conversations: ConversationSummary[]
+  selected?: string
+  onSelect: (id: string) => void
+}) {
+  return (
+    <ul className="conversations">
+      {conversations.map((c) => (
+        <li key={c.id}>
+          <button type="button" className={c.id === selected ? 'active' : ''} onClick={() => onSelect(c.id)}>
+            <span className="title">{c.title}</span>
+            <span className="muted small preview">{c.lastText ?? 'No messages yet'}</span>
+          </button>
+        </li>
+      ))}
+    </ul>
   )
 }
 
@@ -370,6 +396,8 @@ function Conversation({
   status,
   peer,
   verification,
+  blocked,
+  request,
   onBack,
 }: {
   core: CoreClient
@@ -381,11 +409,14 @@ function Conversation({
   status: ConversationSummary['status']
   peer?: string
   verification?: ConversationSummary['verification']
+  blocked: boolean
+  request: boolean
   onBack: () => void
 }) {
-  const [panel, setPanel] = useState<'add' | 'info' | 'verify'>()
+  const [panel, setPanel] = useState<'add' | 'info' | 'verify' | 'report'>()
+  const [reported, setReported] = useState(false)
   const active = status === 'active'
-  const toggle = (p: 'add' | 'info' | 'verify') => setPanel((current) => (current === p ? undefined : p))
+  const toggle = (p: 'add' | 'info' | 'verify' | 'report') => setPanel((current) => (current === p ? undefined : p))
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [draft, setDraft] = useState('')
   const end = useRef<HTMLDivElement>(null)
@@ -431,6 +462,16 @@ function Conversation({
             {panel === 'verify' ? 'Close' : 'Verify'}
           </button>
         )}
+        {peer && (
+          <button type="button" className="link" onClick={() => toggle('report')}>
+            {panel === 'report' ? 'Cancel' : 'Report'}
+          </button>
+        )}
+        {peer && !blocked && (
+          <button type="button" className="link danger" onClick={() => void core.block(peer)}>
+            Block
+          </button>
+        )}
         {active && (
           <button type="button" className="link" onClick={() => toggle('add')}>
             {panel === 'add' ? 'Cancel' : 'Add people'}
@@ -446,6 +487,52 @@ function Conversation({
       {verification === 'changed' && panel !== 'verify' && (
         <p className="notice warning" role="note">
           {title}'s safety number changed since you verified it. Verify it again before sharing anything sensitive.
+        </p>
+      )}
+      {panel === 'report' && peer && (
+        <ReportForm
+          core={core}
+          conversationId={id}
+          account={peer}
+          name={title}
+          blocked={blocked}
+          onDone={(sent) => {
+            setReported(sent)
+            setPanel(undefined)
+          }}
+        />
+      )}
+      {reported && (
+        <p className="notice" role="status">
+          Report sent. Thank you.
+        </p>
+      )}
+      {request && !blocked && (
+        <div className="notice request" role="note">
+          <p>
+            {isGroup
+              ? `You were added to ${title} by someone you haven't talked to.`
+              : `${title} wants to chat with you.`}{' '}
+            You can read their messages; reply only if you accept.
+          </p>
+          <span className="actions">
+            <button type="button" onClick={() => void core.acceptRequest(id)}>
+              Accept
+            </button>
+            {peer && (
+              <button type="button" className="link danger" onClick={() => void core.block(peer)}>
+                Block
+              </button>
+            )}
+          </span>
+        </div>
+      )}
+      {blocked && (
+        <p className="notice warning" role="note">
+          You blocked {title}. You won't get their messages.{' '}
+          <button type="button" className="link" onClick={() => peer && void core.unblock(peer)}>
+            Unblock
+          </button>
         </p>
       )}
       {panel === 'verify' && peer && (
@@ -486,7 +573,7 @@ function Conversation({
           {status === 'left' ? 'You left this group.' : 'You were removed from this group.'}
         </p>
       )}
-      <form className="composer" onSubmit={send} hidden={!active}>
+      <form className="composer" onSubmit={send} hidden={!active || blocked || request}>
         <label className="visually-hidden" htmlFor="composer">
           Message
         </label>

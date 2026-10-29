@@ -51,7 +51,12 @@ describe('parseDeviceSync', () => {
       names: { cafe: 'Bob' },
       phones: { cafe: '+15551234567' },
       conversations: { '01': { name: 'Team', admins: [admin] } },
+      blocked: undefined,
     })
+  })
+  it('carries the block list', () => {
+    const a = 'cd'.repeat(16)
+    expect(parseDeviceSync(encode({ blocked: [a, 'x'] }))?.blocked).toEqual([a])
   })
   it('rejects non-JSON', () => {
     expect(parseDeviceSync(new Uint8Array([0xff]))).toBeUndefined()

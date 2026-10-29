@@ -55,6 +55,8 @@ type Conversation = {
   status?: 'left' | 'removed'
   /** The account's private conversation of its own devices (ADR-0019); hidden. */
   self?: boolean
+  /** Started by someone this user has no connection to, until accepted (FR-SAF-3). */
+  request?: boolean
   lastText?: string
   lastAt: number
 }
@@ -108,6 +110,8 @@ type State = {
   expectedOwn: string[]
   /** New devices on this account that nobody here approved. */
   alerts: { id: string; text: string }[]
+  /** Blocked account ids (FR-ID-8); their messages are dropped. */
+  blocked: string[]
 }
 
 const emptyState = (): State => ({
@@ -124,6 +128,7 @@ const emptyState = (): State => ({
   verified: {},
   expectedOwn: [],
   alerts: [],
+  blocked: [],
 })
 
 export class Engine {
@@ -173,7 +178,7 @@ export class Engine {
     if (!this.store) return { phase: 'loading' }
     if (!this.account) return { phase: 'signed-out', notice: this.notice }
     const conversations = Object.values(this.state.conversations)
-      .filter((c) => !c.self)
+      .filter((c) => !c.self && !this.isBlockedChat(c))
       .sort((a, b) => b.lastAt - a.lastAt)
       .map((c) => ({
         id: c.id,
@@ -183,6 +188,8 @@ export class Engine {
         status: c.status ?? ('active' as const),
         memberCount: c.peers.length + 1,
         peer: c.name === undefined && c.peers.length === 1 ? c.peers[0] : undefined,
+        blocked: c.name === undefined && c.peers.length === 1 && this.state.blocked.includes(c.peers[0]),
+        request: c.request ?? false,
         verification:
           c.name === undefined && c.peers.length === 1 ? this.verificationOf(c.peers[0]) : undefined,
         lastText: c.lastText,
@@ -459,9 +466,10 @@ export class Engine {
       displayName: this.account!.displayName,
       names: this.state.names,
       phones: this.state.phones,
+      blocked: this.state.blocked,
       conversations: Object.fromEntries(
         Object.values(this.state.conversations)
-          .filter((c) => !c.self && !c.status)
+          .filter((c) => !c.self && !c.status && !c.request)
           .map((c) => [c.id, { name: c.name, admins: c.admins }]),
       ),
     }
@@ -491,12 +499,15 @@ export class Engine {
       this.account.displayName = sync.displayName
       await this.store.putJson('account', this.account)
     }
+    if (sync.blocked) this.state.blocked = sync.blocked
     this.state.names = { ...sync.names, ...this.state.names }
     this.state.phones = { ...sync.phones, ...this.state.phones }
     for (const [id, meta] of Object.entries(sync.conversations)) {
       const target = this.state.conversations[id]
-      if (target) this.applyMeta(target, meta)
-      else this.state.syncedMeta[id] = meta
+      if (target) {
+        this.applyMeta(target, meta)
+        target.request = undefined
+      } else this.state.syncedMeta[id] = meta
     }
     for (const c of Object.values(this.state.conversations)) this.emit({ type: 'messages', conversationId: c.id })
     this.emitView()
@@ -505,6 +516,77 @@ export class Engine {
   private applyMeta(conv: Conversation, meta: { name?: string; admins?: string[] }) {
     if (conv.name === undefined && meta.name) conv.name = meta.name
     if ((conv.admins ?? []).length === 0 && meta.admins?.length) conv.admins = meta.admins
+  }
+
+  // ---- blocking and reporting (FR-ID-8) --------------------------------------
+
+  async block(account: string) {
+    await this.setBlocked([...new Set([...this.state.blocked, account])])
+  }
+
+  async unblock(account: string) {
+    await this.setBlocked(this.state.blocked.filter((a) => a !== account))
+  }
+
+  blockedContacts() {
+    return this.state.blocked.map((account) => ({ account, name: this.nameOf(account) }))
+  }
+
+  /** Sends a report; the server sees only the messages included here. */
+  async report(
+    conversationId: string,
+    account: string,
+    reason: 'spam' | 'harassment' | 'other',
+    includeMessages: boolean,
+  ) {
+    const recent = includeMessages
+      ? (await this.messages(conversationId))
+          .filter((m) => m.from === account && m.kind !== 'notice')
+          .slice(-10)
+          .map((m) => ({ text: m.text, sent_at_ms: m.sentAt }))
+      : []
+    await api.report(this.ready().account.token, { account_id: account, reason, messages: recent })
+  }
+
+  private async setBlocked(blocked: string[]) {
+    await this.exclusive(async () => {
+      this.state.blocked = blocked
+      const self = Object.values(this.state.conversations).find((c) => c.self && !c.status)
+      if (self) this.queueDeviceSync(self.id)
+      await this.persist()
+    })
+    this.emitView()
+    void this.flushOutbox()
+  }
+
+  /**
+   * A 1:1 chat with someone blocked that never had a message: typically
+   * one they started after being blocked, so it stays out of the list.
+   */
+  private isBlockedChat(c: Conversation): boolean {
+    if (c.request && c.peers.some((p) => this.state.blocked.includes(p))) return true
+    return c.name === undefined && c.peers.length === 1 && this.state.blocked.includes(c.peers[0]) && !c.lastText
+  }
+
+  /** Moves a message request into the conversation list (FR-SAF-3). */
+  async acceptRequest(conversationId: string) {
+    const conv = this.group(conversationId)
+    await this.exclusive(async () => {
+      conv.request = undefined
+      await this.persist()
+    })
+    this.emitView()
+  }
+
+  /**
+   * Whether this user has a connection to `account`: looked them up, or
+   * shares an accepted conversation with them.
+   */
+  private isKnown(account: string, except: string): boolean {
+    if (account === this.myAccount() || this.state.phones[account]) return true
+    return Object.values(this.state.conversations).some(
+      (c) => c.id !== except && !c.request && !c.self && c.peers.includes(account),
+    )
   }
 
   // ---- safety numbers (ADR-0020) ---------------------------------------------
@@ -727,6 +809,7 @@ export class Engine {
       isAdmin: (conv.admins ?? []).includes(account),
       isMe: account === me,
       verification: account === me ? undefined : this.verificationOf(account),
+      blocked: this.state.blocked.includes(account),
     }))
   }
 
@@ -955,8 +1038,11 @@ export class Engine {
       const conv: Conversation = { id: conversationId, peers: this.peersOf(conversationId), lastAt: Date.now() }
       const meta = this.state.syncedMeta[conversationId]
       if (meta) {
+        // Known to another of our devices, so not a request.
         this.applyMeta(conv, meta)
         delete this.state.syncedMeta[conversationId]
+      } else if (conv.peers.length > 0 && !conv.peers.some((p) => this.isKnown(p, conversationId))) {
+        conv.request = true
       }
       this.state.conversations[conversationId] = conv
       await this.observeKeysIn(conversationId)
@@ -1019,6 +1105,7 @@ export class Engine {
         this.emitView()
       }
       if (conv?.status && event.text !== undefined) return // no longer in the group
+      if (this.state.blocked.includes(from)) return // blocked (FR-ID-8)
       if (event.displayName !== undefined && !mine) {
         this.state.names[from] = event.displayName.slice(0, 64)
         this.emitView()

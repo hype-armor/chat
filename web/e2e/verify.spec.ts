@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { linkDevice, messages, randomPhone, signUp } from './support'
+import { linkDevice, messages, openChat, randomPhone, signUp } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -12,7 +12,7 @@ test('safety numbers match, and a new device of a verified contact is flagged (A
   await alice.getByLabel('Message').fill('Hi Bob')
   await alice.getByRole('button', { name: 'Send' }).click()
   await expect(alice.getByRole('heading', { name: 'Bob' })).toBeVisible()
-  await bob.getByRole('button', { name: /Alice/ }).click()
+  await openChat(bob, /Alice/)
   await expect(messages(bob)).toHaveText([/Hi Bob/])
 
   // Both see the same 60 digits.

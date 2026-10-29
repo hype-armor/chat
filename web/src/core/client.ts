@@ -12,6 +12,8 @@ import type {
   LinkOffer,
   ResponseEnvelope,
   SafetyNumber,
+  BlockedContact,
+  ReportReason,
 } from './protocol'
 import workerUrl from './worker.ts?worker&url'
 
@@ -149,6 +151,27 @@ export class CoreClient {
   /** Throws if the scanned code doesn't match. */
   async verifyScanned(conversationId: string, account: string, text: string) {
     expect(await this.call({ type: 'verifyScanned', conversationId, account, text }), 'ok')
+  }
+
+  async acceptRequest(conversationId: string) {
+    expect(await this.call({ type: 'acceptRequest', conversationId }), 'ok')
+  }
+
+  async block(account: string) {
+    expect(await this.call({ type: 'block', account }), 'ok')
+  }
+
+  async unblock(account: string) {
+    expect(await this.call({ type: 'unblock', account }), 'ok')
+  }
+
+  async blocked(): Promise<BlockedContact[]> {
+    return expect(await this.call({ type: 'blocked' }), 'blocked').contacts
+  }
+
+  /** Reports `account`, optionally with their recent messages in this chat. */
+  async report(conversationId: string, account: string, reason: ReportReason, includeMessages: boolean) {
+    expect(await this.call({ type: 'report', conversationId, account, reason, includeMessages }), 'ok')
   }
 
   async dismissAlert(id: string) {

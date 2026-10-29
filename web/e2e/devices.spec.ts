@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { linkDevice, messages, randomPhone, signUp } from './support'
+import { linkDevice, messages, openChat, randomPhone, signUp } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -25,7 +25,7 @@ test('linking a second device by code, then removing it (ADR-0019)', async ({ br
   await expect(laptop.locator('header strong')).toHaveText('Alice')
 
   // No history moves, but new messages reach both of Alice's devices.
-  await bob.getByRole('button', { name: /Alice/ }).click()
+  await openChat(bob, /Alice/)
   await bob.getByLabel('Message').fill('Hello both')
   await bob.getByRole('button', { name: 'Send' }).click()
   await laptop.getByRole('button', { name: /Bob/ }).click()
