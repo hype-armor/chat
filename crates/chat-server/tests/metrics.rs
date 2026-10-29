@@ -50,10 +50,12 @@ async fn sends_deliveries_and_connections_are_measured(pool: PgPool) {
     // Not a member of that conversation: refused.
     a.request(send(b"elsewhere", bob)).await;
 
+    // A delivery is recorded after the socket write returns, which can be
+    // just after the client has the frame.
+    assert!(settles(&server, "chat_delivery_seconds_count", 1.0).await);
     let text = server.state.metrics.render();
     assert_eq!(sample(&text, "chat_websocket_connections"), 2.0);
     assert_eq!(sample(&text, "chat_send_seconds_count"), 2.0);
-    assert_eq!(sample(&text, "chat_delivery_seconds_count"), 1.0);
     assert!(sample(&text, "chat_delivery_seconds_sum") < 5.0);
     assert!(
         text.contains(r#"chat_send_errors_total{code="403"} 1"#),
@@ -62,11 +64,19 @@ async fn sends_deliveries_and_connections_are_measured(pool: PgPool) {
 
     drop(b);
     // The server notices the closed socket asynchronously.
+    assert!(
+        settles(&server, "chat_websocket_connections", 1.0).await,
+        "connection gauge did not drop"
+    );
+}
+
+/// Whether a sample reaches `value` within a second.
+async fn settles(server: &TestServer, name: &str, value: f64) -> bool {
     for _ in 0..50 {
-        if sample(&server.state.metrics.render(), "chat_websocket_connections") == 1.0 {
-            return;
+        if sample(&server.state.metrics.render(), name) == value {
+            return true;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    panic!("connection gauge did not drop");
+    false
 }
