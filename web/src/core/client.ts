@@ -153,6 +153,11 @@ export class CoreClient {
     expect(await this.call({ type: 'verifyScanned', conversationId, account, text }), 'ok')
   }
 
+  /** Re-sends a message that failed. */
+  async retryMessage(conversationId: string, messageId: string) {
+    expect(await this.call({ type: 'retryMessage', conversationId, messageId }), 'ok')
+  }
+
   /** The user has seen this conversation's messages. */
   async markRead(conversationId: string) {
     expect(await this.call({ type: 'markRead', conversationId }), 'ok')

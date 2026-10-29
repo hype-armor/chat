@@ -107,6 +107,13 @@ deliveries have `request_id = 0`.
 Errors arrive as `Error{code, message}` with HTTP-style codes (400, 401,
 429, 500, 503).
 
+The web client re-sends after 429, 500 and 503, backing off from 5 s up to
+2 minutes, 8 times. After that the message shows "Not sent: Couldn't reach
+the server" with a Retry button. A 400 or 403 fails at once, with the
+reason shown under the message. Retry re-encrypts the text for the group as
+it is now, under the same message id. A request that gets no answer within
+20 s is treated as lost: the client reconnects and re-sends.
+
 ## Web Push (FR-NOT-1/2)
 
 | Method & path | Auth | Body → Response |

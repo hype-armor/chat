@@ -26,3 +26,31 @@ export function throwUnlessAccepted(outcome: CommitOutcome, action: string) {
   if (outcome === 'limited') throw new Error('You have added a lot of new people recently; try again later')
   throw new Error(`Could not finish ${action} right now; try again`)
 }
+
+/** Automatic re-sends of a transient failure before giving up (~10 minutes). */
+export const MAX_SEND_RETRIES = 8
+
+/** What the server's answer to a send means for the queued envelope. */
+export type SendOutcome = { kind: 'sent' } | { kind: 'retry' } | { kind: 'failed'; reason: string }
+
+/**
+ * Accepted, worth trying again (rate limit, server trouble) or refused for
+ * good, with a reason a person can act on (FR-MSG-9).
+ */
+export function sendOutcome(result: { kind: string; accepted?: boolean; errorCode?: number }): SendOutcome {
+  if (result.kind === 'send_result') {
+    return result.accepted ? { kind: 'sent' } : { kind: 'failed', reason: 'The group changed; try again' }
+  }
+  switch (result.errorCode) {
+    case RATE_LIMITED:
+    case 500:
+    case 503:
+      return { kind: 'retry' }
+    case 403:
+      return { kind: 'failed', reason: "You're no longer in this conversation" }
+    case 400:
+      return { kind: 'failed', reason: "The server couldn't accept this message" }
+    default:
+      return { kind: 'failed', reason: 'The server refused this message' }
+  }
+}
