@@ -83,6 +83,22 @@ impl TestServer {
         }
     }
 
+    #[allow(dead_code)]
+    pub async fn get(&self, path: &str, token: Option<&str>) -> (u16, Value) {
+        let mut req = Request::get(path);
+        if let Some(token) = token {
+            req = req.header("authorization", format!("Bearer {token}"));
+        }
+        let res = router(self.state.clone())
+            .oneshot(req.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = res.status().as_u16();
+        let bytes = res.into_body().collect().await.unwrap().to_bytes();
+        let json = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        (status, json)
+    }
+
     pub async fn post(&self, path: &str, token: Option<&str>, body: Value) -> (u16, Value) {
         self.post_with_headers(path, token, body, &[]).await
     }

@@ -65,6 +65,7 @@ fn limits_from_env() -> anyhow::Result<Limits> {
             d.codes_per_prefix_per_hour,
         )?,
         codes_per_day: limit_var("CODES_PER_DAY", d.codes_per_day)?,
+        links_per_ip_per_hour: limit_var("LINKS_PER_IP_PER_HOUR", d.links_per_ip_per_hour)?,
         trust_proxy_headers: std::env::var("CHAT_TRUST_PROXY_HEADERS").is_ok_and(|v| v == "true"),
     })
 }

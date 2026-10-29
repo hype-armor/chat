@@ -132,9 +132,62 @@ pub struct Verify {
 #[derive(Serialize)]
 pub struct Registered {
     account_id: Uuid,
-    device_id: Uuid,
+    pub device_id: Uuid,
     /// Bearer token for REST calls and the WebSocket `Authenticate` frame.
     token: String,
+    phone: String,
+}
+
+pub fn parse_identity_key(raw: &str) -> Result<Vec<u8>, ApiError> {
+    STANDARD
+        .decode(raw)
+        .ok()
+        .filter(|k| (1..=256).contains(&k.len()))
+        .ok_or(ApiError::BadRequest(
+            "identity_key must be base64, at most 256 bytes",
+        ))
+}
+
+/// Registers a new device for an account (phone verification or a device
+/// link, ADR-0019); returns its id and bearer token.
+pub async fn create_device(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    account_id: Uuid,
+    phone: String,
+    identity_key: Vec<u8>,
+) -> Result<Registered, ApiError> {
+    // Serialise registrations per account so the limit holds.
+    sqlx::query("SELECT 1 FROM accounts WHERE account_id = $1 FOR UPDATE")
+        .bind(account_id)
+        .execute(&mut **tx)
+        .await?;
+    let (devices,): (i64,) = sqlx::query_as("SELECT count(*) FROM devices WHERE account_id = $1")
+        .bind(account_id)
+        .fetch_one(&mut **tx)
+        .await?;
+    if devices >= MAX_DEVICES_PER_ACCOUNT {
+        return Err(ApiError::BadRequest(
+            "device limit reached; remove a device first",
+        ));
+    }
+    let token = URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>());
+    let device_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO devices (device_id, account_id, identity_key, auth_token_hash, last_seen_day)
+         VALUES ($1, $2, $3, $4, current_date)",
+    )
+    .bind(device_id)
+    .bind(account_id)
+    .bind(identity_key)
+    .bind(token_hash(&token))
+    .execute(&mut **tx)
+    .await?;
+    Ok(Registered {
+        account_id,
+        device_id,
+        token,
+        phone,
+    })
 }
 
 pub async fn verify(
@@ -142,13 +195,7 @@ pub async fn verify(
     Json(req): Json<Verify>,
 ) -> Result<Json<Registered>, ApiError> {
     let db = db(&state)?;
-    let identity_key = STANDARD
-        .decode(&req.identity_key)
-        .ok()
-        .filter(|k| (1..=256).contains(&k.len()))
-        .ok_or(ApiError::BadRequest(
-            "identity_key must be base64, at most 256 bytes",
-        ))?;
+    let identity_key = parse_identity_key(&req.identity_key)?;
 
     let mut tx = db.begin().await?;
     let row: Option<(Vec<u8>, i32)> = sqlx::query_as(
@@ -190,35 +237,9 @@ pub async fn verify(
     .bind(&req.phone)
     .fetch_one(&mut *tx)
     .await?;
-    let (devices,): (i64,) = sqlx::query_as("SELECT count(*) FROM devices WHERE account_id = $1")
-        .bind(account_id)
-        .fetch_one(&mut *tx)
-        .await?;
-    if devices >= MAX_DEVICES_PER_ACCOUNT {
-        return Err(ApiError::BadRequest(
-            "device limit reached; remove a device first",
-        ));
-    }
-
-    let token = URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>());
-    let device_id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO devices (device_id, account_id, identity_key, auth_token_hash, last_seen_day)
-         VALUES ($1, $2, $3, $4, current_date)",
-    )
-    .bind(device_id)
-    .bind(account_id)
-    .bind(identity_key)
-    .bind(token_hash(&token))
-    .execute(&mut *tx)
-    .await?;
+    let registered = create_device(&mut tx, account_id, req.phone, identity_key).await?;
     tx.commit().await?;
-
-    Ok(Json(Registered {
-        account_id,
-        device_id,
-        token,
-    }))
+    Ok(Json(registered))
 }
 
 /// Resolves a bearer token to its device, recording a coarse last-seen day.

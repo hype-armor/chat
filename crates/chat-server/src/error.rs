@@ -11,6 +11,7 @@ pub enum ApiError {
     Unauthorized(&'static str),
     Forbidden(&'static str),
     NotFound(&'static str),
+    Conflict(&'static str),
     TooManyRequests(&'static str),
     /// No database configured or reachable.
     Unavailable,
@@ -24,6 +25,7 @@ impl ApiError {
             Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
             Self::Forbidden(_) => StatusCode::FORBIDDEN,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
+            Self::Conflict(_) => StatusCode::CONFLICT,
             Self::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
             Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -36,6 +38,7 @@ impl ApiError {
             | Self::Forbidden(m)
             | Self::Unauthorized(m)
             | Self::NotFound(m)
+            | Self::Conflict(m)
             | Self::TooManyRequests(m) => m,
             Self::Unavailable => "service unavailable",
             Self::Internal(_) => "internal error",

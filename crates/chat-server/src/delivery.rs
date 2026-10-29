@@ -120,9 +120,22 @@ pub async fn send(db: &PgPool, req: Send<'_>) -> Result<SendOutcome, ApiError> {
     .bind(&unique)
     .fetch_all(&mut *tx)
     .await?;
-    if locked.len() != unique.len() {
+    // Devices removed since the sender last updated its groups are dropped
+    // (ADR-0019); a welcome must still reach real devices.
+    let existing: std::collections::HashSet<Uuid> = locked.into_iter().map(|(d,)| d).collect();
+    if welcome_recipients.iter().any(|d| !existing.contains(d))
+        || (content_type == ContentType::Welcome
+            && req.recipients.iter().any(|d| !existing.contains(d)))
+    {
         return Err(ApiError::BadRequest("unknown recipient device"));
     }
+    let recipients: Vec<Uuid> = req
+        .recipients
+        .iter()
+        .filter(|d| existing.contains(d))
+        .copied()
+        .collect();
+    let recipients = recipients.as_slice();
 
     let conversation = &env.conversation_id;
     let (sender_is_member, conversation_exists): (bool, bool) = sqlx::query_as(
@@ -138,9 +151,9 @@ pub async fn send(db: &PgPool, req: Send<'_>) -> Result<SendOutcome, ApiError> {
         if conversation_exists && !sender_is_member {
             return Err(ApiError::Forbidden("not a member of this conversation"));
         }
-        require_claims(&mut tx, req.sender, req.recipients).await?;
+        require_claims(&mut tx, req.sender, recipients).await?;
         add_members(&mut tx, conversation, &[req.sender]).await?;
-        add_members(&mut tx, conversation, req.recipients).await?;
+        add_members(&mut tx, conversation, recipients).await?;
     } else {
         if !sender_is_member {
             return Err(ApiError::Forbidden("not a member of this conversation"));
@@ -149,10 +162,10 @@ pub async fn send(db: &PgPool, req: Send<'_>) -> Result<SendOutcome, ApiError> {
             "SELECT count(*) FROM conversation_members WHERE conversation_id = $1 AND device_id = ANY($2)",
         )
         .bind(conversation)
-        .bind(req.recipients)
+        .bind(recipients)
         .fetch_one(&mut *tx)
         .await?;
-        if members != req.recipients.len() as i64 {
+        if members != recipients.len() as i64 {
             return Err(ApiError::Forbidden("recipient is not in this conversation"));
         }
     }
@@ -182,7 +195,7 @@ pub async fn send(db: &PgPool, req: Send<'_>) -> Result<SendOutcome, ApiError> {
         add_members(&mut tx, conversation, recipients).await?;
         enqueue(&mut tx, welcome, recipients).await?;
     }
-    enqueue(&mut tx, env, req.recipients).await?;
+    enqueue(&mut tx, env, recipients).await?;
     tx.commit().await?;
     Ok(SendOutcome::Accepted)
 }
@@ -288,6 +301,7 @@ pub async fn expire(db: &PgPool) -> Result<(), sqlx::Error> {
         "DELETE FROM verification_codes WHERE expires_at < now()",
         "DELETE FROM code_requests WHERE requested_at < now() - interval '1 day'",
         "DELETE FROM rate_limits WHERE window_start < now() - interval '2 days'",
+        "DELETE FROM link_requests WHERE expires_at < now()",
     ] {
         sqlx::query(stmt).execute(db).await?;
     }

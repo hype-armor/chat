@@ -27,11 +27,11 @@ async fn sends_deliveries_and_connections_are_measured(pool: PgPool) {
     let mut a = server.connect(&alice_token).await;
     let mut b = server.connect(&bob_token).await;
 
-    let send = |to: Uuid| {
+    let send = |conversation: &[u8], to: Uuid| {
         client_frame::Body::Send(SendEnvelope {
             envelope: Some(Envelope {
                 version: PROTOCOL_VERSION,
-                conversation_id: b"m".to_vec(),
+                conversation_id: conversation.to_vec(),
                 epoch: 0,
                 content_type: ContentType::Application.into(),
                 ciphertext: b"x".to_vec(),
@@ -41,14 +41,14 @@ async fn sends_deliveries_and_connections_are_measured(pool: PgPool) {
             ..Default::default()
         })
     };
-    a.request(send(bob)).await;
+    a.request(send(b"m", bob)).await;
     let frame = b
         .next_frame(Duration::from_secs(5))
         .await
         .expect("delivery");
     assert!(matches!(frame.body, Some(server_frame::Body::Deliver(_))));
-    // An unknown recipient device is refused.
-    a.request(send(Uuid::new_v4())).await;
+    // Not a member of that conversation: refused.
+    a.request(send(b"elsewhere", bob)).await;
 
     let text = server.state.metrics.render();
     assert_eq!(sample(&text, "chat_websocket_connections"), 2.0);
@@ -56,7 +56,7 @@ async fn sends_deliveries_and_connections_are_measured(pool: PgPool) {
     assert_eq!(sample(&text, "chat_delivery_seconds_count"), 1.0);
     assert!(sample(&text, "chat_delivery_seconds_sum") < 5.0);
     assert!(
-        text.contains(r#"chat_send_errors_total{code="400"} 1"#),
+        text.contains(r#"chat_send_errors_total{code="403"} 1"#),
         "{text}"
     );
 

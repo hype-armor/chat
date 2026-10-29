@@ -11,10 +11,25 @@ Authenticated endpoints need `Authorization: Bearer <device token>`.
 | Method & path | Auth | Body → Response |
 |---------------|------|-----------------|
 | `POST /v1/auth/request-code` | — | `{phone}` (E.164) → `204`. Sends a 6-digit code (10-minute expiry). Limits: 3 per 15 min and 10 per day per number → `429` |
-| `POST /v1/auth/verify` | — | `{phone, code, identity_key}` → `{account_id, device_id, token}`. Creates the account on first use; each call registers a **new device** (max 10). 5 wrong attempts invalidate the code |
+| `POST /v1/auth/verify` | — | `{phone, code, identity_key}` → `{account_id, device_id, token, phone}`. Creates the account on first use; each call registers a **new device** (max 10). 5 wrong attempts invalidate the code |
 
 The token is 32 random bytes; the server stores only its SHA-256 hash.
 Each device's coarse last-seen *day* is recorded on authentication.
+
+### Linked devices (ADR-0019)
+
+| Method & path | Auth | Body → Response |
+|---------------|------|-----------------|
+| `POST /v1/link/start` | — | → `{code}`: 16 random bytes, base64url, valid 10 minutes. The new device shows it as a QR code |
+| `POST /v1/link/approve` | ✓ | `{code}` → `204`; the new device will join this account. `404` unknown or expired, `409` already used |
+| `POST /v1/link/status` | ✓ | `{code}` → `{device_id}`, `null` until the new device has completed the link. Only the approving account sees it |
+| `POST /v1/link/complete` | — | `{code, identity_key}` → `{account_id, device_id, token, phone}`, like `verify`. `409` until approved; `404` unknown, expired or used. The new device polls this |
+| `GET /v1/devices` | ✓ | → `{devices: [{device_id, added_on, last_seen_on, current}]}`: this account's devices (days only), oldest first |
+| `POST /v1/devices/remove` | ✓ | `{device_id}` → `204`. Another device of this account: deletes it with its token, queue, key packages and memberships, and closes its WebSocket. `400` for the calling device itself |
+
+Sends to a removed device are not refused: the server drops it from the
+recipients until the account's remaining devices commit its removal from
+each group. Welcomes must still go to existing devices.
 
 ## Key directory
 
@@ -93,6 +108,7 @@ across restarts and replicas. Exceeding one gives `429` (HTTP) or
 | `POST /v1/auth/request-code` | 10 per hour | client IP |
 | `POST /v1/auth/request-code` | 50 per hour | first 5 characters of the number (country and area code) |
 | `POST /v1/auth/request-code` | 1000 per day | whole server |
+| `POST /v1/link/start` | 20 per hour | client IP |
 
 The client IP is the socket peer, or the last `X-Forwarded-For` entry when
 `CHAT_TRUST_PROXY_HEADERS=true` (Helm `server.trustProxyHeaders`, on by
@@ -111,5 +127,5 @@ windows older than two days.
 
 - Sealed sender: the server stores which devices belong to which
   conversation (ADR-0017).
-- Device removal, account deletion, a real SMS provider.
+- Account deletion, a real SMS provider.
 - Multi-replica fan-out (PostgreSQL LISTEN/NOTIFY or Valkey pub/sub).

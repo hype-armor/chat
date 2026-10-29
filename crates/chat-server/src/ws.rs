@@ -98,7 +98,14 @@ impl Session {
                     Some(Ok(_)) => {}
                     Some(Err(e)) => return Err(e),
                 },
-                Some(()) = recv_wake(&mut self.authed) => self.flush(true).await?,
+                wake = recv_wake(&mut self.authed) => match wake {
+                    Some(()) => self.flush(true).await?,
+                    // The device was removed (ADR-0019).
+                    None => {
+                        let _ = self.socket.send(Message::Close(None)).await;
+                        return Ok(());
+                    }
+                },
                 () = &mut auth_deadline, if self.authed.is_none() => {
                     self.send(error(0, 401, "authentication timeout")).await?;
                     return Ok(());

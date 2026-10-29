@@ -21,6 +21,7 @@ fn tight() -> Limits {
         codes_per_ip_per_hour: 2,
         codes_per_prefix_per_hour: 2,
         codes_per_day: 100,
+        links_per_ip_per_hour: 2,
         trust_proxy_headers: true,
     }
 }
