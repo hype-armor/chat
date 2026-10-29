@@ -1,19 +1,21 @@
 # 10 — Deployment: Kubernetes, US-hosted
 
-**Status:** Draft. Decision: ADR-0014.
+**Status:** Draft. Decisions: ADR-0014 (Kubernetes, USA), ADR-0015 (self-hosted k3s).
 
 ## 1. Decisions
 
 | Topic | Decision |
 |-------|----------|
-| Platform | Kubernetes for production; Docker Compose for local development only |
+| Platform | Kubernetes for production — **self-hosted single-node k3s** (ADR-0015); Docker Compose for local development only |
 | Region | United States (single region at launch) |
 | Packaging | Helm chart `deploy/helm/chat` for our components; operators/charts for datastores |
 | Images | `ghcr.io/hype-armor/chat-server`, `ghcr.io/hype-armor/chat-web`, built by `.github/workflows/images.yml` |
 
 ## 2. Cluster choice
 
-Any conformant cluster works. For a 100-user launch:
+**Decided: self-hosted k3s** — setup guide in
+[`deploy/k3s/README.md`](../deploy/k3s/README.md). The chart still runs on
+any conformant cluster; the options considered were:
 
 | Option | Fit |
 |--------|-----|
@@ -26,6 +28,16 @@ persistent volumes for PostgreSQL.
 
 Starting size: **1 node, 4 vCPU / 8 GB**, matching doc 09 §5. A second node
 later lets LiveKit run on its own host-networked node.
+
+### 2.0 Self-hosting considerations
+
+| Where the k3s host runs | Watch out for |
+|-------------------------|---------------|
+| Rented VM / dedicated server in a US data centre | Included traffic and overage price; UDP allowed; static IPv4 |
+| Own hardware (home or office) | ISP terms often forbid servers on residential plans; need a static IP or dynamic DNS; router port-forwarding for TCP 80/443/7881/5349 and UDP 3478 + 50000–60000; **upload bandwidth** (group calls send each participant's streams out: ~1.5 Mbps per receiving participant, so a 10-person call needs ~15 Mbps up); UPS for power cuts |
+
+Either way: off-site backups (deploy/k3s/README.md §5) and a host
+firewall are mandatory.
 
 ### 2.1 Cost estimate for the 100-user launch (list prices, Oct 2026)
 
@@ -65,6 +77,10 @@ they only make sense with startup credits. Prices moved sharply in 2026
 (memory costs), so re-check before signing up.
 
 ## 3. Layout
+
+On k3s, the ingress controller is the bundled Traefik (in `kube-system`),
+ServiceLB exposes it on host ports 80/443, and PVCs use the local-path
+provisioner.
 
 ```
 namespace: chat

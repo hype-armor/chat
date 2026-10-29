@@ -1,0 +1,25 @@
+# Copy to /var/lib/rancher/k3s/server/manifests/traefik-config.yaml on the
+# k3s server; k3s applies it to its bundled Traefik automatically.
+#
+# Traefik v3 closes requests after 60 s by default, which would cut slow
+# 100 MB attachment uploads. Long-lived WebSockets are kept alive by
+# client/server pings (every 30 s).
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    ports:
+      web:
+        # Redirect plain HTTP to HTTPS (ACME HTTP-01 challenges still work).
+        redirections:
+          entryPoint:
+            to: websecure
+            scheme: https
+            permanent: true
+    additionalArguments:
+      - "--entryPoints.websecure.transport.respondingTimeouts.readTimeout=15m"
+      - "--entryPoints.websecure.transport.respondingTimeouts.writeTimeout=15m"
+      - "--entryPoints.websecure.transport.respondingTimeouts.idleTimeout=10m"

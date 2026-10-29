@@ -55,9 +55,9 @@ docker compose -f deploy/compose/docker-compose.yml up --build
 
 ## Deployment
 
-Production runs on Kubernetes in the US — see
-[docs/10-deployment-kubernetes.md](docs/10-deployment-kubernetes.md) and
-[`deploy/k8s`](deploy/k8s/README.md).
+Production runs on self-hosted, single-node **k3s** in the US — follow
+[`deploy/k3s/README.md`](deploy/k3s/README.md). Background and other
+clusters: [docs/10-deployment-kubernetes.md](docs/10-deployment-kubernetes.md).
 
 ## Licence
 

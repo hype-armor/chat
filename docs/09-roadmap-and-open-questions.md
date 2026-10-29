@@ -18,6 +18,7 @@
 | Launch scale (2026-10-29) | 100 users | 02 NFR-SCALE-1, §5 below |
 | Runtime (2026-10-29) | Kubernetes | ADR-0014, doc 10 |
 | Hosting (2026-10-29) | United States | ADR-0014, doc 10 §6 |
+| Cluster (2026-10-29) | Self-hosted single-node k3s | ADR-0015, deploy/k3s |
 | Remaining placeholders (2026-10-29) | Confirmed: no content scanning, 16 video tiles, mesh limits (7 hops, 24 h, 50 MB, 8 peers) | 04, 05, 07 |
 
 ## 2. Phased roadmap
@@ -48,9 +49,11 @@
 
 ## 4. Remaining open questions
 
-1. **Kubernetes provider** within the US (managed service vs. k3s on VMs);
-   see doc 10 §2. Needed by the first deployment in Phase 1.
-2. **Funding**: covers SMS costs, hosting, and the external security audit
+1. **Where the k3s host runs**: own hardware vs. a rented US server
+   (doc 10 §2.0). Needed by the first deployment in Phase 1.
+2. **Off-site backup target** (an S3-compatible bucket in another
+   location).
+3. **Funding**: covers SMS costs, hosting, and the external security audit
    (the audit is the largest single cost).
 
 ## 5. Launch deployment (100 users)
@@ -60,15 +63,15 @@ stay undecided until Phase 1 without blocking work:
 
 | Item | Launch sizing |
 |------|---------------|
-| Cluster | One Kubernetes node, ~4 vCPU / 8 GB RAM, in a US region, running everything (doc 10) |
+| Cluster | One k3s node, ~4 vCPU / 8 GB RAM / 100 GB+ SSD, in the US, running everything (doc 10, deploy/k3s) |
 | Storage | ~100 GB disk is ample: 100 users × 30-day attachment retention, plus a regional map extract (a full planet tile file is ~100 GB, so start with the regions we need) |
 | Bandwidth | Dominated by group calls and TURN relays; a provider with generous included egress matters more than CPU |
 | Network | Public IPv4, UDP ports open for WebRTC/TURN, a domain with HTTPS |
 | Backups | CloudNativePG base backups + WAL archiving to object storage (holds only ciphertext + account data) |
 | SMS | Any provider behind the pluggable interface; at 100 users cost is negligible |
 
-Choosing a provider: UDP support, egress pricing, and managed vs.
-self-run control plane matter most (doc 10 §2).
+Choosing where the k3s host runs: UDP reachability, upload bandwidth and
+a static IP matter most (doc 10 §2.0).
 
 ## 6. Assumptions register
 

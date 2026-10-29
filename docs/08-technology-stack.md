@@ -28,7 +28,7 @@ cost to operate**.
 | Backup | Encrypted backup with user-held recovery key | 0010 |
 | Identity | Phone number + SMS/voice one-time code via pluggable provider | 0011 |
 | Licence | AGPL-3.0-or-later for code; CC BY 4.0 for the protocol spec | 0012 |
-| Runtime / hosting | **Kubernetes** in a **US** region; CloudNativePG, cert-manager, LiveKit chart | 0014 |
+| Runtime / hosting | Self-hosted **k3s** (Kubernetes) in the **US**; CloudNativePG, cert-manager, LiveKit chart | 0014, 0015 |
 | Native wrappers (later) | **Capacitor** (Android/iOS), **Tauri** (desktop), reusing the web UI and core | 0013 |
 
 ## Why these fit

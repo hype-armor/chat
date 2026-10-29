@@ -11,4 +11,5 @@ spec:
       name: letsencrypt-account-key
     solvers:
       - http01:
-          ingress: {}
+          ingress:
+            ingressClassName: traefik   # k3s; change for other controllers
