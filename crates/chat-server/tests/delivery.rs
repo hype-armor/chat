@@ -26,6 +26,7 @@ async fn send(client: &mut Client, env: Envelope, to: &[Uuid]) -> SendResult {
         .request(client_frame::Body::Send(SendEnvelope {
             envelope: Some(env),
             recipient_devices: to.iter().map(|d| d.as_bytes().to_vec()).collect(),
+            ..Default::default()
         }))
         .await;
     match reply.body {
@@ -260,6 +261,7 @@ async fn two_users_exchange_an_encrypted_message(pool: PgPool) {
 async fn one_commit_per_epoch(pool: PgPool) {
     let server = TestServer::start(pool).await;
     let (dev, token) = server.register("+15550004444").await;
+    server.admit(b"group-1", &[dev]).await;
     let mut ws = server.connect(&token).await;
     let commit = |epoch: u64| Envelope {
         version: PROTOCOL_VERSION,
@@ -321,6 +323,7 @@ async fn websocket_requires_authentication(pool: PgPool) {
         .request(client_frame::Body::Send(SendEnvelope {
             envelope: None,
             recipient_devices: vec![],
+            ..Default::default()
         }))
         .await;
     assert!(matches!(reply.body, Some(server_frame::Body::Error(e)) if e.code == 401));
@@ -338,6 +341,7 @@ async fn websocket_requires_authentication(pool: PgPool) {
 async fn commit_survives_a_lost_reply(pool: PgPool) {
     let server = TestServer::start(pool).await;
     let (dev, token) = server.register("+15550005555").await;
+    server.admit(b"group-2", &[dev]).await;
     let mut ws = server.connect(&token).await;
     let commit = Envelope {
         version: PROTOCOL_VERSION,
@@ -351,6 +355,7 @@ async fn commit_survives_a_lost_reply(pool: PgPool) {
     ws.send_frame(client_frame::Body::Send(SendEnvelope {
         envelope: Some(commit.clone()),
         recipient_devices: vec![dev.as_bytes().to_vec()],
+        ..Default::default()
     }))
     .await;
     drop(ws);

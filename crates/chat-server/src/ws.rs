@@ -128,8 +128,8 @@ impl Session {
                 Err(ApiError::BadRequest("already authenticated"))
             }
             (_, None) => Err(ApiError::Unauthorized("authenticate first")),
-            (client_frame::Body::Send(send), Some(_)) => {
-                send_envelope(&self.state, &db, send).await
+            (client_frame::Body::Send(send), Some(a)) => {
+                send_envelope(&self.state, &db, a.device, send).await
             }
             (client_frame::Body::Ack(ack), Some(a)) => {
                 delivery::ack(&db, a.device, &ack.message_id)
@@ -205,15 +205,34 @@ impl Session {
 async fn send_envelope(
     state: &AppState,
     db: &PgPool,
+    sender: Uuid,
     send: SendEnvelope,
 ) -> Result<Option<server_frame::Body>, ApiError> {
     let envelope = send
         .envelope
         .ok_or(ApiError::BadRequest("missing envelope"))?;
-    let recipients = delivery::parse_recipients(&send.recipient_devices)?;
-    let outcome = delivery::send(db, &envelope, &recipients).await?;
+    // A commit that only adds members to an otherwise empty group has no
+    // other recipients, just the welcome's.
+    let recipients = delivery::parse_recipients(&send.recipient_devices, send.welcome.is_some())?;
+    let welcome_recipients = match &send.welcome {
+        Some(_) => delivery::parse_recipients(&send.welcome_recipients, false)?,
+        None => Vec::new(),
+    };
+    let outcome = delivery::send(
+        db,
+        delivery::Send {
+            sender,
+            envelope: &envelope,
+            recipients: &recipients,
+            welcome: send
+                .welcome
+                .as_ref()
+                .map(|w| (w, welcome_recipients.as_slice())),
+        },
+    )
+    .await?;
     if outcome == SendOutcome::Accepted {
-        for device in &recipients {
+        for device in recipients.iter().chain(&welcome_recipients) {
             if !state.hub.wake(device)
                 && let Some(push) = state.push.clone()
             {

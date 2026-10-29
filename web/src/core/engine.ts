@@ -10,6 +10,7 @@ import init, {
   encodeAck,
   encodeAuthenticate,
   encodeSend,
+  encodeSendWithWelcome,
 } from './pkg/chat_core.js'
 import { ApiError, api, fromBase64, toBase64 } from './api'
 import { type CommitOutcome, commitWasAccepted, throwUnlessAccepted } from './commits'
@@ -53,8 +54,10 @@ type PendingCommit = {
   conversationId: string
   /** Base64 SHA-256 of the commit ciphertext. */
   commitHash: string
-  /** For commits that add people: the welcome and who it is for. */
-  welcome?: string
+  /**
+   * For commits that add people. Their welcome travels with the commit (the
+   * server accepts both together, ADR-0017); this records who was invited.
+   */
   invitees?: { account: string; phone: string; devices: string[] }[]
 }
 
@@ -260,10 +263,10 @@ export class Engine {
       const pending: PendingCommit = {
         conversationId,
         commitHash: toBase64(added.commitHash),
-        welcome: toBase64(added.welcome),
         invitees: invitees.map(({ account, phone, devices }) => ({ account, phone, devices })),
       }
-      throwUnlessAccepted(await this.sendCommit(pending, added.commit, existing), 'adding people')
+      const welcome = { envelope: added.welcome, recipients: invitees.flatMap((i) => i.devices) }
+      throwUnlessAccepted(await this.sendCommit(pending, added.commit, existing, welcome), 'adding people')
     })
     this.emitView()
     void this.flushOutbox()
@@ -611,14 +614,25 @@ export class Engine {
     pending: PendingCommit,
     commit: Uint8Array,
     recipients: string[],
+    welcome?: { envelope: Uint8Array; recipients: string[] },
   ): Promise<CommitOutcome> {
     const id = fromHex(pending.conversationId)
-    if (recipients.length === 0) {
+    if (recipients.length === 0 && !welcome) {
       // Nobody else to tell (e.g. the last other member left).
       await this.finishCommit(pending)
       return 'accepted'
     }
-    const result = await this.request((requestId) => encodeSend(requestId, commit, recipients.map(fromHex)))
+    const result = await this.request((requestId) =>
+      welcome
+        ? encodeSendWithWelcome(
+            requestId,
+            commit,
+            recipients.map(fromHex),
+            welcome.envelope,
+            welcome.recipients.map(fromHex),
+          )
+        : encodeSend(requestId, commit, recipients.map(fromHex)),
+    )
     if (!result) {
       // The server may or may not have accepted it; ask once reconnected.
       this.state.pendingCommit = pending
@@ -633,20 +647,14 @@ export class Engine {
     return result.epochConflict ? 'conflict' : 'rejected'
   }
 
-  /** Applies an accepted commit; for additions, welcomes the new devices. */
+  /** Applies an accepted commit; for additions, introduces us to newcomers. */
   private async finishCommit(p: PendingCommit) {
     const conv = this.state.conversations[p.conversationId]
     this.core!.confirmCommit(fromHex(p.conversationId))
     if (conv) conv.peers = this.peersOf(p.conversationId)
     if (!this.core!.hasPendingProposals(fromHex(p.conversationId))) delete this.state.leaving[p.conversationId]
-    if (p.welcome && p.invitees) {
+    if (p.invitees) {
       for (const i of p.invitees) this.state.phones[i.account] = i.phone
-      this.state.outbox.push({
-        messageId: toHex(randomId()),
-        conversationId: p.conversationId,
-        envelope: p.welcome,
-        recipients: p.invitees.flatMap((i) => i.devices),
-      })
       if (conv?.name) this.queueGroupInfo(p.conversationId, conv.name, conv.admins ?? [])
       this.queueProfile(p.conversationId)
     }

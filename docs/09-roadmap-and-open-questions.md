@@ -48,7 +48,7 @@ surviving reloads; three-engine browser CI against a real server.
 2. [x] Group roles (owner/admin/member, FR-MSG-4); remove people, leave,
    rename.
 3. [x] Web Push notifications without content (FR-NOT-1/2).
-4. [ ] Send authorisation: devices may only send to members of
+4. [x] Send authorisation: devices may only send to members of
    conversations they share; basic anti-spam.
 5. [ ] Server rate limits per device on lookup, claim and send; SMS-pumping
    protection beyond per-number limits (FR-SAF-2, NFR-LEG-5).

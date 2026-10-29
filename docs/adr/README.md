@@ -23,3 +23,4 @@ revisited; do it with a new ADR that supersedes the old one.
 | [0014](0014-kubernetes-us-hosting.md) | Run on Kubernetes, hosted in the United States | Accepted |
 | [0015](0015-self-hosted-k3s.md) | Self-host on single-node k3s | Accepted |
 | [0016](0016-group-roles-and-leaving.md) | Group roles, removal and leaving (v1) | Accepted |
+| [0017](0017-send-authorisation.md) | Send authorisation by conversation membership | Accepted |

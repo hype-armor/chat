@@ -73,6 +73,11 @@ message SendEnvelope {
   // state. For handshake messages, `envelope.epoch` is the epoch the commit
   // was created in (before it is applied).
   repeated bytes recipient_devices = 2;
+  // A commit that adds members carries their welcome: the server accepts
+  // both in one transaction, so new members are reachable before anyone
+  // sees the commit (ADR-0017).
+  Envelope welcome = 3;
+  repeated bytes welcome_recipients = 4;
 }
 
 message SendResult {

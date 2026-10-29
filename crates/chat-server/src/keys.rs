@@ -84,7 +84,7 @@ pub struct Claimed {
 
 pub async fn claim(
     State(state): State<AppState>,
-    AuthDevice(_): AuthDevice,
+    AuthDevice(claimer): AuthDevice,
     Json(req): Json<Claim>,
 ) -> Result<Json<Claimed>, ApiError> {
     let db = db(&state)?;
@@ -104,6 +104,18 @@ pub async fn claim(
     )
     .bind(&req.device_ids)
     .fetch_all(db)
+    .await?;
+    // Remember who claimed whose keys: welcomes may only go to these devices
+    // (ADR-0017).
+    let claimed: Vec<Uuid> = rows.iter().map(|(d, _)| *d).collect();
+    sqlx::query(
+        "INSERT INTO key_package_claims (claimer_device_id, claimed_device_id)
+         SELECT $1, d FROM UNNEST($2::uuid[]) AS d
+         ON CONFLICT (claimer_device_id, claimed_device_id) DO UPDATE SET claimed_at = now()",
+    )
+    .bind(claimer)
+    .bind(&claimed)
+    .execute(db)
     .await?;
     let key_packages = rows
         .into_iter()
