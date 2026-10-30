@@ -85,7 +85,8 @@ button.link {
   padding: 0.25rem 0.5rem;
 }
 
-input {
+input,
+.composer textarea {
   font: inherit;
   width: 100%;
   padding: 0.5rem 0.75rem;
@@ -683,14 +684,12 @@ button.danger {
 }
 
 .share-location {
-  position: absolute;
-  bottom: 100%;
-  left: 1rem;
-  right: 1rem;
+  width: min(28rem, calc(100vw - 2rem));
   display: grid;
   gap: 0.5rem;
   padding: 0.75rem;
   background: var(--bg, #fff);
+  color: var(--fg);
   border: 1px solid var(--border);
   border-radius: 0.75rem;
   box-shadow: 0 4px 16px rgb(0 0 0 / 0.15);
@@ -936,11 +935,38 @@ button.conversation-title {
   align-items: center;
 }
 
-.composer input {
+.composer textarea {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.5;
+  max-height: calc(8.5rem + 2px);
+  resize: none;
+  overflow-y: auto;
   border-radius: 1.25rem;
 }
 
+.composer .menu-items {
+  top: auto;
+  bottom: calc(100% + 0.5rem);
+  left: 0;
+  right: auto;
+}
+
+.composer .recording {
+  flex: 1;
+  justify-content: space-between;
+}
+
+.location-progress {
+  position: absolute;
+  bottom: 100%;
+  left: 1rem;
+  padding: 0.5rem;
+  background: var(--surface);
+}
+
 .composer button[type='submit'] {
+  flex: none;
   border-radius: 1.25rem;
 }
 

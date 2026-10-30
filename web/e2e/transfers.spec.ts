@@ -34,6 +34,8 @@ test('interrupted uploads and downloads resume where they stopped (ADR-0025)', a
   await alice.getByTestId('attach-input').setInputFiles({ name: 'big.bin', mimeType: 'application/octet-stream', buffer: data })
   const sent = messages(alice).filter({ hasText: 'big.bin' })
   await expect(sent).toContainText('Failed')
+  await expect(alice.getByRole('button', { name: 'Add attachment' })).toBeVisible()
+  await expect(alice.getByRole('button', { name: 'Record a voice note' })).toBeEnabled()
   await sent.getByRole('button', { name: 'Retry' }).click()
   await expect(sent).toContainText(/Sent|Delivered|Read/, { timeout: 30_000 })
   // Part 0 went once: the retry asked the server what it had.

@@ -576,6 +576,9 @@ function Conversation({
   const previousMessages = useRef<ChatMessage[]>([])
   const [newMessages, setNewMessages] = useState(false)
   const picker = useRef<HTMLInputElement>(null)
+  const composer = useRef<HTMLTextAreaElement>(null)
+  const [recording, setRecording] = useState(false)
+  const wasRecording = useRef(false)
   const menuItems: MenuItem[] = [
     ...(isGroup ? [{ label: 'Group info', onSelect: () => toggle('info') }] : []),
     ...(peer ? [{ label: 'Verify safety number', onSelect: () => toggle('verify') }] : []),
@@ -648,12 +651,39 @@ function Conversation({
     return () => observer.disconnect()
   }, [onScroll, scrollToBottom])
 
-  const send = async (e: FormEvent) => {
-    e.preventDefault()
+  useLayoutEffect(() => {
+    const input = composer.current
+    if (!input || recording) return
+    const resize = () => {
+      input.style.height = 'auto'
+      input.style.height = `${input.scrollHeight + input.offsetHeight - input.clientHeight}px`
+    }
+    resize()
+    let width = input.clientWidth
+    const observer = new ResizeObserver(() => {
+      if (width === input.clientWidth) return
+      width = input.clientWidth
+      resize()
+    })
+    observer.observe(input)
+    return () => observer.disconnect()
+  }, [draft, recording])
+
+  useLayoutEffect(() => {
+    if (wasRecording.current && !recording) composer.current?.focus({ preventScroll: true })
+    wasRecording.current = recording
+  }, [recording])
+
+  const send = async () => {
     const text = draft.trim()
     if (!text) return
     setDraft('')
-    await core.sendText(id, text)
+    composer.current?.focus({ preventScroll: true })
+    try {
+      await core.sendText(id, text)
+    } catch (e) {
+      setAttachError(e instanceof Error ? e.message : String(e))
+    }
   }
 
   // The draft, if any, goes with the file as its caption.
@@ -670,6 +700,7 @@ function Conversation({
       setAttachError(e instanceof Error ? e.message : String(e))
     } finally {
       setAttaching(false)
+      composer.current?.focus({ preventScroll: true })
     }
   }
 
@@ -845,7 +876,14 @@ function Conversation({
           </button>
         )}
       </div>
-      <form className="composer" onSubmit={send} hidden={!active || blocked || request}>
+      <form
+        className="composer"
+        onSubmit={(e) => {
+          e.preventDefault()
+          void send()
+        }}
+        hidden={!active || blocked || request}
+      >
         <input
           ref={picker}
           type="file"
@@ -853,35 +891,61 @@ function Conversation({
           data-testid="attach-input"
           onChange={(e) => void attach(e.target.files?.[0])}
         />
-        <button
-          type="button"
-          className="icon"
-          onClick={() => picker.current?.click()}
-          disabled={attaching}
-          aria-label="Attach a photo or file"
-        >
-          {attaching ? '…' : '+'}
-        </button>
-        <ShareLocation core={core} conversationId={id} disabled={attaching} onError={setAttachError} />
-        <Recorder
-          disabled={attaching}
-          onRecorded={(file, media) => void attach(file, media)}
+        <ShareLocation
+          core={core}
+          conversationId={id}
           onError={setAttachError}
+          trigger={(locate) =>
+            recording ? null : attaching ? (
+              <span className="small" role="status">Attaching…</span>
+            ) : (
+              <Menu
+                triggerLabel="Add attachment"
+                triggerContent="+"
+                items={[
+                  { label: 'Photo or file', onSelect: () => picker.current?.click() },
+                  { label: 'Location', onSelect: locate },
+                ]}
+              />
+            )
+          }
         />
         <label className="visually-hidden" htmlFor="composer">
           Message
         </label>
-        <input
+        <textarea
+          ref={composer}
           id="composer"
+          rows={1}
+          hidden={recording}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (
+              e.key === 'Enter' && !e.shiftKey &&
+              !e.nativeEvent.isComposing && e.nativeEvent.keyCode !== 229 &&
+              !matchMedia('(pointer: coarse)').matches
+            ) {
+              e.preventDefault()
+              void send()
+            }
+          }}
           placeholder="Message"
           autoComplete="off"
           maxLength={4000}
         />
-        <button type="submit" disabled={!draft.trim()}>
-          Send
-        </button>
+        {draft.length > 0 && !recording && (
+          <button type="submit" disabled={!draft.trim()}>
+            Send
+          </button>
+        )}
+        <Recorder
+          hidden={draft.length > 0}
+          disabled={attaching}
+          onRecordingChange={setRecording}
+          onRecorded={(file, media) => void attach(file, media)}
+          onError={setAttachError}
+        />
       </form>
     </section>
   )
