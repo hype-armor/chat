@@ -68,8 +68,15 @@ function Running() {
             </button>
           </p>
         )}
-        {view.phase === 'ready' && <Chat core={core} view={view} onDiagnostics={() => setShowDiagnostics(true)} />}
       </div>
+      {view.phase === 'ready' && (
+        <Chat
+          core={core}
+          view={view}
+          showDiagnostics={showDiagnostics}
+          onDiagnostics={() => setShowDiagnostics(true)}
+        />
+      )}
       {showDiagnostics && (
         <main>
           <button

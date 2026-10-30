@@ -30,7 +30,17 @@ const STATUS_LABEL: Record<ChatMessage['status'], string> = {
   received: '',
 }
 
-export function Chat({ core, view, onDiagnostics }: { core: CoreClient; view: Ready; onDiagnostics: () => void }) {
+export function Chat({
+  core,
+  view,
+  showDiagnostics,
+  onDiagnostics,
+}: {
+  core: CoreClient
+  view: Ready
+  showDiagnostics: boolean
+  onDiagnostics: () => void
+}) {
   const [selected, setSelected] = useState<string>()
   const [settings, setSettings] = useState(false)
   const setup = useSetup()
@@ -50,6 +60,7 @@ export function Chat({ core, view, onDiagnostics }: { core: CoreClient; view: Re
       <LiveBanner core={core} sharing={view.liveSharing} />
       <CallScreen calls={calls} />
       <div
+        hidden={showDiagnostics}
         className={`chat-layout ${conversation ? 'has-selection' : ''} ${view.liveSharing.length > 0 ? 'with-banner' : ''}`}
       >
         <aside className="sidebar">
