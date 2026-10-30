@@ -13,7 +13,7 @@ test('the echo bot sends back text and photos, end to end encrypted', async ({ b
   await alice.getByLabel('Message', { exact: true }).fill('ping 123')
   await alice.getByRole('button', { name: 'Send', exact: true }).click()
   await expect(messages(alice).filter({ hasText: 'ping 123' })).toHaveCount(2)
-  await expect(messages(alice).filter({ hasText: 'ping 123' }).first()).toContainText('Read')
+  await expect(messages(alice).filter({ hasText: 'ping 123' }).first().getByRole('img', { name: 'Read', exact: true })).toBeVisible()
   await expect(messages(alice).filter({ hasText: 'ping 123' }).last()).toHaveClass(/theirs/)
 
   // A photo comes back as the same encrypted attachment, and opens.

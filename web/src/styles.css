@@ -263,6 +263,36 @@ form {
 
 .messages .meta {
   opacity: 0.75;
+  display: flex;
+  align-items: baseline;
+  gap: 0.375rem;
+  flex-wrap: wrap;
+}
+
+.messages [data-testid='message']:not(.run-first) {
+  margin-top: -0.375rem;
+}
+
+.messages .mine:not(.run-first) {
+  border-top-right-radius: 0.25rem;
+}
+
+.messages .theirs:not(.run-first) {
+  border-top-left-radius: 0.25rem;
+}
+
+.messages .message-status.read {
+  font-weight: 800;
+}
+
+.messages .day-separator {
+  align-self: center;
+  max-width: 100%;
+  margin-block: 0.5rem;
+  color: var(--muted);
+  text-align: center;
+  background: none;
+  box-shadow: none;
 }
 
 /* Elements with their own display rule must still honour `hidden`. */
@@ -509,6 +539,7 @@ button.danger {
   color: var(--muted);
   text-align: center;
   background: none;
+  box-shadow: none;
 }
 
 /* Blocking and reporting (FR-ID-8) */
