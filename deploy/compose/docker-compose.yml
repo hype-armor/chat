@@ -121,8 +121,13 @@ services:
     image: chrislusf/seaweedfs:4.50
     entrypoint: ["sh", "-c"]
     command:
-      - until echo "s3.bucket.list" | weed shell -master=seaweedfs:9333 >/dev/null 2>&1; do sleep 1; done;
-        echo "s3.bucket.create -name chat-blobs" | weed shell -master=seaweedfs:9333
+      - |
+        until buckets=$$(echo "s3.bucket.list" | weed shell -master=seaweedfs:9333 2>/dev/null); do
+          sleep 1
+        done
+        if ! printf '%s\n' "$$buckets" | grep -q '^[[:space:]]*chat-blobs[[:space:]]'; then
+          echo "s3.bucket.create -name chat-blobs" | weed shell -master=seaweedfs:9333
+        fi
     depends_on: [seaweedfs]
 
   # SFU for group calls; --dev uses the well-known devkey/secret pair.
