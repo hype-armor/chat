@@ -1,4 +1,4 @@
-import { type FormEvent, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { Fragment, type FormEvent, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { CoreClient } from '../core/client'
 import type { AppView, ChatMessage, ConversationSummary, MemberInfo } from '../core/protocol'
 import { SetupActions, SetupBanner, useSetup } from './Banners'
@@ -28,7 +28,45 @@ const STATUS_LABEL: Record<ChatMessage['status'], string> = {
   delivered: 'Delivered',
   read: 'Read',
   failed: 'Not sent',
+  received: 'Received',
+}
+
+const STATUS_ICON: Record<ChatMessage['status'], string> = {
+  sending: '…',
+  sent: '✓',
+  delivered: '✓✓',
+  read: '✓✓',
+  failed: '!',
   received: '',
+}
+
+export function dayLabel(at: number, now: number): string {
+  const date = new Date(at)
+  const today = new Date(now)
+  if (date.toDateString() === today.toDateString()) return 'Today'
+  const yesterday = new Date(now)
+  yesterday.setDate(yesterday.getDate() - 1)
+  if (date.toDateString() === yesterday.toDateString()) return 'Yesterday'
+  return date.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' })
+}
+
+export function messageDateTime(at: number): string | undefined {
+  const date = new Date(at)
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString()
+}
+
+export function messageLayout(messages: readonly ChatMessage[], now: number) {
+  const sameDay = (a: ChatMessage, b: ChatMessage) =>
+    new Date(a.sentAt).toDateString() === new Date(b.sentAt).toDateString()
+  const joined = (a: ChatMessage | undefined, b: ChatMessage | undefined) =>
+    !!a && !!b && a.kind !== 'notice' && b.kind !== 'notice' &&
+    a.from === b.from && sameDay(a, b) && b.sentAt >= a.sentAt && b.sentAt - a.sentAt <= 3 * 60_000
+  return messages.map((message, index) => ({
+    message,
+    day: index === 0 || !sameDay(messages[index - 1], message) ? dayLabel(message.sentAt, now) : undefined,
+    first: !joined(messages[index - 1], message),
+    last: !joined(message, messages[index + 1]),
+  }))
 }
 
 export function Chat({
@@ -817,42 +855,66 @@ function Conversation({
       {panel === 'info' && <GroupInfo core={core} id={id} title={title} amAdmin={amAdmin && active} active={active} />}
       <div className="messages-viewport" ref={viewport} onScroll={onScroll}>
         <ol className="messages" ref={content}>
-          {messages.map((m) =>
-            m.kind === 'notice' ? (
-              <li key={m.id} className="notice-msg small" data-testid="notice">
-                {m.text}
-              </li>
-            ) : (
-              <li key={m.id} className={m.from === 'me' ? 'mine' : 'theirs'} data-testid="message">
-                {isGroup && m.from !== 'me' && <span className="sender small">{m.fromName}</span>}
-                {m.file && (
-                  <Attachment
-                    core={core}
-                    conversationId={id}
-                    messageId={m.id}
-                    file={m.file}
-                    sending={m.status === 'sending'}
-                  />
-                )}
-                {m.location && <LocationCard core={core} location={m.location} />}
-                {m.live && <LiveCard core={core} conversationId={id} message={m} live={m.live} />}
-                {m.text && <span className="text">{m.text}</span>}
-                <span className="meta small">
-                  {new Date(m.sentAt).toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}
-                  {STATUS_LABEL[m.status] && ` · ${STATUS_LABEL[m.status]}`}
-                  {m.status === 'failed' && m.error && `: ${m.error}`}
-                </span>
-                {m.status === 'failed' && active && (
-                  <button type="button" className="link small" onClick={() => void core.retryMessage(id, m.id)}>
-                    Retry
-                  </button>
-                )}
-              </li>
-            ),
-          )}
+          {messageLayout(messages, Date.now()).map(({ message: m, day, first, last }) => (
+            <Fragment key={m.id}>
+              {day && <li role="separator" aria-label={day} className="day-separator small">{day}</li>}
+              {m.kind === 'notice' ? (
+                <li className="notice-msg small" data-testid="notice">
+                  {m.text}
+                </li>
+              ) : (
+                <li
+                  className={`${m.from === 'me' ? 'mine' : 'theirs'}${first ? ' run-first' : ''}${last ? ' run-last' : ''}`}
+                  data-testid="message"
+                  title={new Date(m.sentAt).toLocaleString()}
+                >
+                  <span className={isGroup && m.from !== 'me' && first ? 'sender small' : 'visually-hidden'}>
+                    {m.from === 'me' ? 'You' : m.fromName ?? (isGroup ? m.from : title)}
+                  </span>
+                  {m.file && (
+                    <Attachment
+                      core={core}
+                      conversationId={id}
+                      messageId={m.id}
+                      file={m.file}
+                      sending={m.status === 'sending'}
+                    />
+                  )}
+                  {m.location && <LocationCard core={core} location={m.location} />}
+                  {m.live && <LiveCard core={core} conversationId={id} message={m} live={m.live} />}
+                  {m.text && <span className="text">{m.text}</span>}
+                  <span className={last || m.status === 'failed' ? 'meta small' : 'visually-hidden'}>
+                    <time
+                      className={last ? undefined : 'visually-hidden'}
+                      dateTime={messageDateTime(m.sentAt)}
+                      title={new Date(m.sentAt).toLocaleString()}
+                      aria-label={new Date(m.sentAt).toLocaleString()}
+                    >
+                      {new Date(m.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </time>
+                    {m.status === 'failed' ? (
+                      <span className="message-failure">
+                        {STATUS_LABEL[m.status]}{m.error && `: ${m.error}`}
+                      </span>
+                    ) : (
+                      <span
+                        className={m.from === 'me' && last ? `message-status ${m.status}` : 'visually-hidden'}
+                        role="img"
+                        aria-label={STATUS_LABEL[m.status]}
+                      >
+                        {STATUS_ICON[m.status]}
+                      </span>
+                    )}
+                  </span>
+                  {m.status === 'failed' && active && (
+                    <button type="button" className="link small" onClick={() => void core.retryMessage(id, m.id)}>
+                      Retry
+                    </button>
+                  )}
+                </li>
+              )}
+            </Fragment>
+          ))}
         </ol>
       </div>
       {!active && (

@@ -7,7 +7,7 @@ test('sent, delivered and read, with read receipts that can be turned off (FR-MS
   const bobUsername = randomUsername()
   const alice = await signUp(browser, 'Alice', randomUsername())
   const bob = await signUp(browser, 'Bob', bobUsername)
-  const status = (text: string) => messages(alice).filter({ hasText: text }).locator('.meta')
+  const status = (text: string) => messages(alice).filter({ hasText: text }).getByRole('img')
   const send = async (text: string) => {
     await alice.getByLabel('Message', { exact: true }).fill(text)
     await alice.getByRole('button', { name: 'Send' }).click()
@@ -18,21 +18,23 @@ test('sent, delivered and read, with read receipts that can be turned off (FR-MS
   await send('First')
   // A message request sends no receipts: Alice can't tell Bob has it.
   await expect(bob.getByRole('button', { name: /Alice.*1 unread/ })).toBeVisible()
-  await expect(status('First')).toContainText('Sent')
+  await expect(status('First')).toHaveAccessibleName('Sent')
 
   // Accepting with the chat open: delivered and read.
   await bob.getByRole('button', { name: /Alice/ }).click()
   await bob.getByRole('button', { name: 'Accept' }).click()
-  await expect(status('First')).toContainText('Read')
+  await expect(status('First')).toHaveAccessibleName('Read')
 
   // Bob closes the chat (a reload opens none): delivered only, unread for him.
   await bob.reload()
   await expect(bob.getByRole('status')).toHaveText('online')
   await send('Second')
-  await expect(status('Second')).toContainText('Delivered')
+  await expect(status('Second')).toHaveAccessibleName('Delivered')
+  await expect(status('First')).toHaveAccessibleName('Read')
+  await expect(messages(alice).filter({ hasText: 'First' }).locator('.message-status')).toHaveCount(0)
   await expect(bob.getByRole('button', { name: /Alice.*1 unread/ })).toBeVisible()
   await bob.getByRole('button', { name: /Alice/ }).click()
-  await expect(status('Second')).toContainText('Read')
+  await expect(status('Second')).toHaveAccessibleName('Read')
 
   // With read receipts off, Alice only sees delivery.
   await bob.reload()
@@ -41,10 +43,10 @@ test('sent, delivered and read, with read receipts that can be turned off (FR-MS
   await bob.getByText('Privacy').click()
   await bob.getByLabel('Send read receipts').uncheck()
   await send('Third')
-  await expect(status('Third')).toContainText('Delivered')
+  await expect(status('Third')).toHaveAccessibleName('Delivered')
   await closeSettings(bob)
   await bob.getByRole('button', { name: /Alice/ }).click()
   await expect(messages(bob)).toHaveText([/First/, /Second/, /Third/])
   await bob.waitForTimeout(1000)
-  await expect(status('Third')).toContainText('Delivered')
+  await expect(status('Third')).toHaveAccessibleName('Delivered')
 })

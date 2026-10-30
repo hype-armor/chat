@@ -41,7 +41,7 @@ test('voice notes and video clips play on the other side (FR-MED-1)', async ({ b
   await expect(alice.getByRole('status', { name: 'Recording a voice note' })).toContainText('0:01')
   await alice.getByRole('button', { name: 'Send voice note' }).click()
   const note = messages(alice).filter({ hasText: 'Voice note' })
-  await expect(note).toContainText('Sent')
+  await expect(note.getByRole('img', { name: 'Sent', exact: true })).toBeVisible()
   await expect(alice.getByLabel('Message', { exact: true })).toBeFocused()
   await expect(alice.getByRole('button', { name: 'Record a voice note' })).toBeVisible()
 
@@ -70,9 +70,8 @@ test('voice notes and video clips play on the other side (FR-MED-1)', async ({ b
     })()`),
   )
   await alice.getByTestId('attach-input').setInputFiles({ name: 'clip.webm', mimeType: 'video/webm', buffer: clip })
-  await expect(messages(alice).filter({ has: alice.getByRole('button', { name: 'Play clip.webm' }) })).toContainText(
-    'Sent',
-  )
+  await expect(messages(alice).filter({ has: alice.getByRole('button', { name: 'Play clip.webm' }) })
+    .getByRole('img', { name: 'Sent', exact: true })).toBeVisible()
 
   await expect(bob.getByRole('button', { name: /Alice/ })).toContainText('Video')
   await openChat(bob, /Alice/)

@@ -48,7 +48,7 @@ test('a location shared once arrives encrypted and maps without third parties (F
   await alice.getByRole('menuitem', { name: 'Location', exact: true }).click()
   await preview.getByRole('button', { name: 'Send location' }).click()
   await expect(add).toBeFocused()
-  await expect(messages(alice).filter({ hasText: 'Location' })).toContainText(/Sent|Delivered|Read/)
+  await expect(messages(alice).filter({ hasText: 'Location' }).getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
 
   await expect(bob.getByRole('button', { name: /Alice/ })).toContainText('Location')
   await openChat(bob, /Alice/)

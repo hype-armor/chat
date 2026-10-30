@@ -27,7 +27,7 @@ test('reporting and blocking someone, then unblocking them (FR-ID-8)', async ({ 
   // Her messages no longer show up.
   await alice.getByLabel('Message').fill('Last chance!')
   await alice.getByRole('button', { name: 'Send' }).click()
-  await expect(messages(alice).filter({ hasText: 'Last chance!' })).toContainText('Sent')
+  await expect(messages(alice).filter({ hasText: 'Last chance!' }).getByRole('img', { name: 'Sent', exact: true })).toBeVisible()
   await openSettings(bob)
   await bob.getByText('Blocked people').click()
   await expect(bob.getByRole('list', { name: 'Blocked people' })).toContainText('Alice')
@@ -76,6 +76,6 @@ test('chats from strangers wait in message requests (FR-SAF-3)', async ({ browse
   await expect(requests).toHaveCount(0)
   await mallory.getByLabel('Message', { exact: true }).fill('Are you there?')
   await mallory.getByRole('button', { name: 'Send' }).click()
-  await expect(messages(mallory).filter({ hasText: 'Are you there?' })).toContainText('Sent')
+  await expect(messages(mallory).filter({ hasText: 'Are you there?' }).getByRole('img', { name: 'Sent', exact: true })).toBeVisible()
   await expect(bob.getByText('Are you there?')).toHaveCount(0)
 })
