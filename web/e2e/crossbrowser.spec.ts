@@ -2,7 +2,7 @@
 // encoded-transform APIs differ (Chromium's encoded streams, Firefox's
 // RTCRtpScriptTransform). WebKit joins once it has fake media on Linux.
 import { type Browser, type Page, expect, firefox, test } from '@playwright/test'
-import { openChat, randomUsername } from './support'
+import { createGroup, openChat, randomUsername, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER || !process.env.PW_ALL_BROWSERS, 'needs chat-server and Firefox (PW_ALL_BROWSERS)')
 test.skip(({ browserName }) => browserName !== 'chromium', 'runs once, from the Chromium project')
@@ -21,7 +21,7 @@ async function signUp(browser: Browser, name: string, username: string, baseURL:
   await page.getByLabel('Username').fill(username)
   await page.getByLabel('Your name').fill(name)
   await page.getByRole('button', { name: 'Sign up' }).click()
-  await expect(page.getByRole('status')).toHaveText('online')
+  await expect(page.getByRole('status')).toHaveText('Connected')
   return page
 }
 
@@ -34,8 +34,7 @@ test('a 1:1 video call between Chromium and Firefox, SFrame both ways', async ({
     const bobName = randomUsername()
     const alice = await signUp(browser, 'Alice', randomUsername(), baseURL!, true)
     const bob = await signUp(fx, 'Bob', bobName, baseURL!, false)
-    await alice.getByLabel("Contact's username").fill(bobName)
-    await alice.getByRole('button', { name: 'Start chat' }).click()
+    await startChat(alice, bobName)
     await alice.getByLabel('Message', { exact: true }).fill('hi')
     await alice.getByRole('button', { name: 'Send', exact: true }).click()
     await openChat(bob, /Alice/)
@@ -59,10 +58,7 @@ test('a three-party group call across Chromium and Firefox through LiveKit', asy
     const ann = await signUp(browser, 'Ann', randomUsername(), baseURL!, true)
     const ben = await signUp(browser, 'Ben', benName, baseURL!, true)
     const cat = await signUp(fx, 'Cat', catName, baseURL!, false)
-    await ann.getByText('New group').click()
-    await ann.getByLabel('Group name').fill('Mixed')
-    await ann.getByLabel("Members' usernames").fill(`${benName}\n${catName}`)
-    await ann.getByRole('button', { name: 'Create group' }).click()
+    await createGroup(ann, 'Mixed', [benName, catName])
     await ann.getByLabel('Message', { exact: true }).fill('call?')
     await ann.getByRole('button', { name: 'Send', exact: true }).click()
     for (const page of [ben, cat]) await openChat(page, /Mixed/)

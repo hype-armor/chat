@@ -1,0 +1,86 @@
+import { expect, test } from '@playwright/test'
+import { closeSettings, compose, createGroup, messages, randomUsername, signUp, startChat } from './support'
+
+test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
+
+for (const width of [1280, 640, 320]) {
+  test(`sidebar prioritizes chats and composes in panels (${width}px)`, async ({ browser, browserName }) => {
+    const username = randomUsername()
+    const bobUsername = randomUsername()
+    const alice = await signUp(browser, 'Alice with a very long display name', username)
+    const bob = await signUp(browser, 'Bob', bobUsername)
+    await alice.setViewportSize({ width, height: 720 })
+    await alice.evaluate(`localStorage.setItem('chat.setup-dismissals', JSON.stringify({
+      'storage-ask': Date.now(), 'storage-warn': Date.now(), install: Date.now()
+    }))`)
+    await alice.reload()
+    const sidebar = alice.locator('.sidebar')
+    const header = sidebar.locator('header')
+    const trigger = header.getByRole('button', { name: 'New chat', exact: true })
+    const status = sidebar.getByRole('status')
+    await expect(status).toHaveText('Connected')
+    await expect(status).toHaveClass('visually-hidden')
+    await expect(header.getByText(username, { exact: true })).toHaveCount(0)
+    await expect(alice.getByLabel("Contact's username")).toHaveCount(0)
+    await expect(alice.getByLabel('Group name', { exact: true })).toHaveCount(0)
+    await expect(alice.getByText('No conversations yet', { exact: true })).toBeVisible()
+    await expect(sidebar.locator('.banner, .alert, .connection')).toHaveCount(0)
+
+    await alice.getByRole('button', { name: 'Invite someone', exact: true }).click()
+    await expect(alice.getByRole('navigation', { name: 'Settings', exact: true })).toBeVisible()
+    await expect(alice.getByText(`Your username: ${username}`, { exact: true })).toBeVisible()
+    await expect(alice.locator('summary').filter({ hasText: /^Invite someone$/ })).toBeVisible()
+    await closeSettings(alice)
+
+    await trigger.focus()
+    await alice.keyboard.press('ArrowDown')
+    const menu = alice.getByRole('menu', { name: 'New chat', exact: true })
+    await expect(menu.getByRole('menuitem')).toHaveText(['New chat', 'New group'])
+    await expect(menu.getByRole('menuitem', { name: 'New chat', exact: true })).toBeFocused()
+    const bounds = await menu.boundingBox()
+    expect(bounds!.x).toBeGreaterThanOrEqual(0)
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width)
+    await alice.keyboard.press('Escape')
+    await expect(menu).toBeHidden()
+    await expect(trigger).toBeFocused()
+
+    await compose(alice, 'New group')
+    await expect(alice.getByLabel('Group name', { exact: true })).toBeFocused()
+    expect(await alice.evaluate('document.documentElement.scrollWidth')).toBe(width)
+    await expect(alice.getByRole('navigation', { name: 'Conversations', exact: true })).toHaveCount(0)
+    await alice.getByRole('button', { name: '← Back', exact: true }).click()
+    await expect(trigger).toBeFocused()
+    await alice.getByRole('button', { name: 'Start a chat', exact: true }).click()
+    await expect(alice.getByLabel("Contact's username")).toBeFocused()
+    await alice.getByRole('button', { name: '← Back', exact: true }).click()
+
+    await startChat(alice, bobUsername)
+    await alice.getByLabel('Message', { exact: true }).fill('Hello from the compose panel')
+    await alice.getByRole('button', { name: 'Send', exact: true }).click()
+    await expect(messages(alice).getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
+    await expect(alice.getByRole('heading', { name: 'Bob', exact: true })).toBeVisible()
+    if (width <= 640) await alice.getByRole('button', { name: 'Back to conversations' }).click()
+    const row = alice.getByRole('navigation', { name: 'Conversations', exact: true }).getByRole('button').first()
+    await expect(row).toBeVisible()
+    const headerBounds = await header.boundingBox()
+    const rowBounds = await row.boundingBox()
+    expect(rowBounds!.y).toBe(headerBounds!.y + headerBounds!.height)
+    expect(await alice.evaluate('document.documentElement.scrollWidth')).toBe(width)
+
+    await createGroup(alice, 'Sidebar group', [bobUsername])
+    await expect(alice.getByLabel('Message', { exact: true })).toBeVisible()
+    if (width <= 640) await alice.getByRole('button', { name: 'Back to conversations' }).click()
+    // WebKit cannot reload offline under Playwright.
+    if (browserName !== 'webkit') {
+      await alice.context().setOffline(true)
+      await alice.reload()
+      await expect(status).toHaveText(/^(Offline|Connecting…)$/)
+      await expect(status).toHaveClass('connection')
+      await alice.context().setOffline(false)
+      await expect(status).toHaveText('Connected', { timeout: 30_000 })
+      await expect(status).toHaveClass('visually-hidden')
+    }
+    await alice.context().close()
+    await bob.context().close()
+  })
+}

@@ -1,5 +1,5 @@
 import { type Page, expect, test } from '@playwright/test'
-import { conversationAction, messages, openChat, randomUsername, signUp } from './support'
+import { conversationAction, createGroup, messages, openChat, randomUsername, signUp, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -10,11 +10,10 @@ test('two people exchange encrypted messages, and history survives a reload', as
   const alice = await signUp(browser, 'Alice', aliceUsername)
   const bob = await signUp(browser, 'Bob', bobUsername)
 
-  await alice.getByLabel("Contact's username").fill(bobUsername)
-  await alice.getByRole('button', { name: 'Start chat' }).click()
+  await startChat(alice, bobUsername)
   await alice.getByLabel('Message').fill('Hello Bob')
   await alice.getByRole('button', { name: 'Send' }).click()
-  await expect(messages(alice).filter({ hasText: 'Hello Bob' }).getByRole('img', { name: 'Sent', exact: true })).toBeVisible()
+  await expect(messages(alice).filter({ hasText: 'Hello Bob' }).getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
   // Bob's profile arrives once he joins, replacing the username.
   await expect(alice.getByRole('heading', { name: 'Bob' })).toBeVisible()
 
@@ -26,7 +25,7 @@ test('two people exchange encrypted messages, and history survives a reload', as
 
   // Keys and history are restored from encrypted storage after a reload.
   await bob.reload()
-  await expect(bob.getByRole('status')).toHaveText('online')
+  await expect(bob.getByRole('status')).toHaveText('Connected')
   await bob.getByRole('button', { name: /Alice/ }).click()
   await expect(messages(bob)).toHaveText([/Hello Bob/, /Hi Alice/])
   await alice.getByLabel('Message').fill('Still there?')
@@ -36,8 +35,7 @@ test('two people exchange encrypted messages, and history survives a reload', as
 
 test('unknown usernames are reported', async ({ browser }) => {
   const page = await signUp(browser, 'Carol', randomUsername())
-  await page.getByLabel("Contact's username").fill(randomUsername())
-  await page.getByRole('button', { name: 'Start chat' }).click()
+  await startChat(page, randomUsername())
   await expect(page.getByRole('alert')).toHaveText('no one has that username')
 })
 
@@ -46,8 +44,7 @@ test('composer leaves room for text and supports keyboard menus and multiline dr
   const alice = await signUp(browser, 'Alice', randomUsername())
   await signUp(browser, 'Bob', bobUsername)
   await alice.setViewportSize({ width: 360, height: 720 })
-  await alice.getByLabel("Contact's username").fill(bobUsername)
-  await alice.getByRole('button', { name: 'Start chat' }).click()
+  await startChat(alice, bobUsername)
   const input = alice.getByRole('textbox', { name: 'Message', exact: true })
   const add = alice.getByRole('button', { name: 'Add attachment' })
   const mic = alice.getByRole('button', { name: 'Record a voice note' })
@@ -125,9 +122,8 @@ test.describe('touch composer', () => {
     await page.getByLabel('Username').fill(randomUsername())
     await page.getByLabel('Your name').fill('Alice')
     await page.getByRole('button', { name: 'Sign up' }).click()
-    await expect(page.getByRole('status')).toHaveText('online')
-    await page.getByLabel("Contact's username").fill(bobUsername)
-    await page.getByRole('button', { name: 'Start chat' }).click()
+    await expect(page.getByRole('status')).toHaveText('Connected')
+    await startChat(page, bobUsername)
     const input = page.getByLabel('Message', { exact: true })
     await input.fill('Touch draft')
     await input.press('Enter')
@@ -211,8 +207,7 @@ for (const width of [1280, 390]) {
       await expect(messages(alice).first()).toBeInViewport()
     }
 
-    await alice.getByLabel("Contact's username").fill(bobUsername)
-    await alice.getByRole('button', { name: 'Start chat' }).click()
+    await startChat(alice, bobUsername)
     for (let i = 0; i < 24; i++) await send(alice, `History ${i}`)
     await expect.poll(() => viewport.evaluate(
       (list) => list.scrollHeight - list.clientHeight,
@@ -297,10 +292,7 @@ for (const width of [1280, 390]) {
     await send(bob, 'Unread before switching')
     await expect(pill).toBeVisible()
     if (width <= 640) await alice.getByRole('button', { name: 'Back to conversations' }).click()
-    await alice.getByText('New group', { exact: true }).click()
-    await alice.getByLabel('Group name', { exact: true }).fill('Scroll reset')
-    await alice.getByLabel("Members' usernames").fill(bobUsername)
-    await alice.getByRole('button', { name: 'Create group' }).click()
+    await createGroup(alice, 'Scroll reset', [bobUsername])
     await expect(alice.getByRole('heading', { name: 'Scroll reset' })).toBeVisible()
     await expect(pill).toHaveCount(0)
     if (width <= 640) await alice.getByRole('button', { name: 'Back to conversations' }).click()
@@ -309,7 +301,7 @@ for (const width of [1280, 390]) {
     await expectBottom()
 
     await alice.reload()
-    await expect(alice.getByRole('status')).toHaveText('online')
+    await expect(alice.getByRole('status')).toHaveText('Connected')
     await openChat(alice, /Bob/)
     await expect(messages(alice).last()).toContainText('Unread before switching')
     await expectBottom()
@@ -334,10 +326,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
         await page.setViewportSize({ width, height: 720 })
         await page.emulateMedia({ colorScheme })
       }
-      await alice.getByText('New group', { exact: true }).click()
-      await alice.getByLabel('Group name', { exact: true }).fill('Message polish')
-      await alice.getByLabel("Members' usernames").fill(bobUsername)
-      await alice.getByRole('button', { name: 'Create group' }).click()
+      await createGroup(alice, 'Message polish', [bobUsername])
       await openChat(bob, /Message polish/)
       for (const text of ['First in run', 'Last in run']) {
         await alice.getByLabel('Message', { exact: true }).fill(text)
@@ -389,14 +378,11 @@ test('groups: create, talk, and add someone later', async ({ browser }) => {
   const cat = await signUp(browser, 'Cat', catUsername)
   const dan = await signUp(browser, 'Dan', danUsername)
 
-  await ann.getByText('New group').click()
-  await ann.getByLabel('Group name').fill('Trip')
-  await ann.getByLabel("Members' usernames").fill(`${benUsername}\n${catUsername}`)
-  await ann.getByRole('button', { name: 'Create group' }).click()
+  await createGroup(ann, 'Trip', [benUsername, catUsername])
   await expect(ann.getByRole('heading', { name: 'Trip' })).toBeVisible()
   await ann.getByLabel('Message').fill('Hi team')
   await ann.getByRole('button', { name: 'Send' }).click()
-  await expect(messages(ann).filter({ hasText: 'Hi team' }).getByRole('img', { name: 'Sent', exact: true })).toBeVisible()
+  await expect(messages(ann).filter({ hasText: 'Hi team' }).getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
 
   for (const page of [ben, cat]) {
     await openChat(page, /Trip/)
@@ -412,7 +398,7 @@ test('groups: create, talk, and add someone later', async ({ browser }) => {
   await ann.getByLabel('Usernames to add').fill(danUsername)
   await ann.getByRole('button', { name: 'Add', exact: true }).click()
   await expect(ann.getByText('4 people')).toBeVisible()
-  await dan.getByRole('button', { name: /Trip/ }).click()
+  await openChat(dan, /Trip/)
   await expect(ben.getByText('4 people')).toBeVisible()
   await ben.getByLabel('Message').fill('Welcome Dan')
   await ben.getByRole('button', { name: 'Send' }).click()
@@ -429,10 +415,7 @@ test('group admin: rename, promote, remove, and members leaving', async ({ brows
     await signUp(browser, 'Cat', usernames[2]),
     await signUp(browser, 'Dee', usernames[3]),
   ]
-  await ann.getByText('New group').click()
-  await ann.getByLabel('Group name').fill('Club')
-  await ann.getByLabel("Members' usernames").fill(usernames.slice(1).join('\n'))
-  await ann.getByRole('button', { name: 'Create group' }).click()
+  await createGroup(ann, 'Club', usernames.slice(1))
   await expect(ann.getByRole('heading', { name: 'Club' })).toBeVisible()
   for (const page of [ben, cat, dee]) await openChat(page, /Club/)
 

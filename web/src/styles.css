@@ -135,6 +135,7 @@ form {
   border-right: 1px solid var(--border);
   background: var(--surface);
   min-height: 0;
+  min-width: 0;
 }
 
 .bar {
@@ -154,14 +155,9 @@ form {
 
 .connection {
   font-size: 0.75rem;
-  padding: 0.125rem 0.5rem;
-  border-radius: 1rem;
-  border: 1px solid currentColor;
+  padding: 0.25rem 1rem;
+  border-bottom: 1px solid var(--border);
   color: var(--muted);
-}
-
-.connection.online {
-  color: var(--ok);
 }
 
 .new-chat {
@@ -374,15 +370,6 @@ textarea {
   border-bottom: 1px solid var(--border);
 }
 
-.new-group summary {
-  cursor: pointer;
-  color: var(--accent);
-}
-
-.new-group form {
-  margin-top: 0.75rem;
-}
-
 .add-people {
   padding: 0.75rem 1rem;
   border-bottom: 1px solid var(--border);
@@ -579,11 +566,12 @@ button.danger {
 }
 
 /* Message requests (FR-SAF-3) */
-.list-heading {
-  margin: 0.75rem 1rem 0.25rem;
+.message-requests > summary {
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border);
   color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-size: 0.85rem;
+  cursor: pointer;
 }
 
 .notice.request p {
@@ -802,6 +790,7 @@ button.icon[aria-pressed='true'] {
 
 /* Settings: their own screen in the sidebar. */
 .settings,
+.compose-panel,
 .conversation-nav {
   flex: 1;
   min-height: 0;
@@ -819,6 +808,11 @@ button.icon[aria-pressed='true'] {
 .settings-head h2 {
   margin: 0;
   font-size: 1.1rem;
+}
+
+.settings-identity {
+  margin: 0;
+  padding: 0.75rem 1rem;
 }
 
 /* Conversation list: avatar, name and time, then the preview. */

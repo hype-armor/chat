@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { conversationAction, linkDevice, messages, openChat, randomUsername, signUp } from './support'
+import { conversationAction, linkDevice, messages, openChat, randomUsername, signUp, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -7,8 +7,7 @@ test('safety numbers match, and a new device of a verified contact is flagged (A
   const bobUsername = randomUsername()
   const alice = await signUp(browser, 'Alice', randomUsername())
   const bob = await signUp(browser, 'Bob', bobUsername)
-  await alice.getByLabel("Contact's username").fill(bobUsername)
-  await alice.getByRole('button', { name: 'Start chat' }).click()
+  await startChat(alice, bobUsername)
   await alice.getByLabel('Message').fill('Hi Bob')
   await alice.getByRole('button', { name: 'Send' }).click()
   await expect(alice.getByRole('heading', { name: 'Bob' })).toBeVisible()

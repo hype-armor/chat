@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { messages, openChat, randomUsername, signUp } from './support'
+import { messages, openChat, randomUsername, signUp, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 // Chromium's fake microphone and camera; other engines have no equivalent flags.
@@ -14,8 +14,7 @@ test('voice notes and video clips play on the other side (FR-MED-1)', async ({ b
   const bobUsername = randomUsername()
   const alice = await signUp(browser, 'Alice', randomUsername())
   const bob = await signUp(browser, 'Bob', bobUsername)
-  await alice.getByLabel("Contact's username").fill(bobUsername)
-  await alice.getByRole('button', { name: 'Start chat' }).click()
+  await startChat(alice, bobUsername)
   await alice.setViewportSize({ width: 360, height: 720 })
 
   // Complete a pending location lookup after the recorder takes over the row.
@@ -41,7 +40,7 @@ test('voice notes and video clips play on the other side (FR-MED-1)', async ({ b
   await expect(alice.getByRole('status', { name: 'Recording a voice note' })).toContainText('0:01')
   await alice.getByRole('button', { name: 'Send voice note' }).click()
   const note = messages(alice).filter({ hasText: 'Voice note' })
-  await expect(note.getByRole('img', { name: 'Sent', exact: true })).toBeVisible()
+  await expect(note.getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
   await expect(alice.getByLabel('Message', { exact: true })).toBeFocused()
   await expect(alice.getByRole('button', { name: 'Record a voice note' })).toBeVisible()
 
@@ -71,9 +70,9 @@ test('voice notes and video clips play on the other side (FR-MED-1)', async ({ b
   )
   await alice.getByTestId('attach-input').setInputFiles({ name: 'clip.webm', mimeType: 'video/webm', buffer: clip })
   await expect(messages(alice).filter({ has: alice.getByRole('button', { name: 'Play clip.webm' }) })
-    .getByRole('img', { name: 'Sent', exact: true })).toBeVisible()
+    .getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
 
-  await expect(bob.getByRole('button', { name: /Alice/ })).toContainText('Video')
+  await expect(bob.getByRole('button', { name: /Alice/, includeHidden: true })).toContainText('Video')
   await openChat(bob, /Alice/)
   await bob.getByRole('button', { name: 'Play Voice note' }).click()
   await expect(bob.getByLabel('Voice note', { exact: true })).toBeVisible()

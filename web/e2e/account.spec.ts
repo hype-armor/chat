@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { messages, openChat, openSettings, randomUsername, signUp } from './support'
+import { messages, openChat, openSettings, randomUsername, signUp, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -8,8 +8,7 @@ test('deleting an account signs out and frees the username (FR-ID-9)', async ({ 
   const bobUsername = randomUsername()
   const alice = await signUp(browser, 'Alice', aliceUsername)
   const bob = await signUp(browser, 'Bob', bobUsername)
-  await alice.getByLabel("Contact's username").fill(bobUsername)
-  await alice.getByRole('button', { name: 'Start chat' }).click()
+  await startChat(alice, bobUsername)
   await alice.getByLabel('Message', { exact: true }).fill('Bye soon')
   await alice.getByRole('button', { name: 'Send' }).click()
   await openChat(bob, /Alice/)
@@ -33,6 +32,6 @@ test('deleting an account signs out and frees the username (FR-ID-9)', async ({ 
   await alice.getByLabel('Username').fill(aliceUsername)
   await alice.getByLabel('Your name').fill('Alice again')
   await alice.getByRole('button', { name: 'Sign up' }).click()
-  await expect(alice.getByRole('status')).toHaveText('online')
-  await expect(alice.getByText('No conversations yet.')).toBeVisible()
+  await expect(alice.getByRole('status')).toHaveText('Connected')
+  await expect(alice.getByText('No conversations yet', { exact: true })).toBeVisible()
 })

@@ -1,5 +1,5 @@
 import { type Browser, type Page, expect, test } from '@playwright/test'
-import { openChat, randomUsername } from './support'
+import { createGroup, openChat, randomUsername } from './support'
 
 test.skip(!process.env.E2E_SERVER || !process.env.E2E_LIVEKIT, 'needs chat-server and LiveKit (E2E_LIVEKIT)')
 test.skip(({ browserName }) => browserName === 'webkit', 'fake camera and microphone not set up for WebKit yet')
@@ -11,7 +11,7 @@ async function signUp(browser: Browser, browserName: string, name: string, usern
   await page.getByLabel('Username').fill(username)
   await page.getByLabel('Your name').fill(name)
   await page.getByRole('button', { name: 'Sign up' }).click()
-  await expect(page.getByRole('status')).toHaveText('online')
+  await expect(page.getByRole('status')).toHaveText('Connected')
   return page
 }
 
@@ -24,10 +24,7 @@ test('a group video call through LiveKit, SFrame-encrypted (FR-CALL-2/3/6)', asy
   const ann = await signUp(browser, browserName, 'Ann', randomUsername())
   const ben = await signUp(browser, browserName, 'Ben', benName)
   const cat = await signUp(browser, browserName, 'Cat', catName)
-  await ann.getByText('New group').click()
-  await ann.getByLabel('Group name').fill('Standup')
-  await ann.getByLabel("Members' usernames").fill(`${benName}\n${catName}`)
-  await ann.getByRole('button', { name: 'Create group' }).click()
+  await createGroup(ann, 'Standup', [benName, catName])
   await ann.getByLabel('Message', { exact: true }).fill('call?')
   await ann.getByRole('button', { name: 'Send', exact: true }).click()
   for (const page of [ben, cat]) await openChat(page, /Standup/)
