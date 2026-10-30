@@ -118,7 +118,7 @@ their PRs merge.
    messages; STUN/TURN credentials from the server (FR-CALL-1/4/5).
 2. [x] coturn in docker compose, k3s and Helm, and an "always relay calls"
    setting to hide IP addresses (FR-CALL-9).
-3. [ ] SFrame on 1:1 calls, keyed from the MLS exporter (FR-CALL-3,
+3. [x] SFrame on 1:1 calls, keyed from the MLS exporter (FR-CALL-3,
    ADR-0006); refuse to call without encoded transforms.
 4. [ ] Echo bot call mode: it answers and sends your audio and video back.
 5. [ ] Group calls through LiveKit with SFrame: server-issued room tokens,

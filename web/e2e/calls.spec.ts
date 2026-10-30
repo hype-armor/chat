@@ -99,4 +99,16 @@ test.describe('calls', () => {
     await alice.getByRole('button', { name: 'Voice call', exact: true }).click()
     await expect(alice.getByRole('dialog', { name: 'Call with Bob' })).toContainText('This server has no call relay')
   })
+
+  test('a browser that cannot encrypt call media refuses to call (ADR-0030)', async ({ browser, browserName }) => {
+    const { alice } = await pair(browser, browserName)
+    // As in a browser without WebRTC encoded transforms.
+    await alice.evaluate(() => {
+      const w = globalThis as unknown as Record<string, unknown> & { RTCRtpSender: { prototype: Record<string, unknown> } }
+      delete w.RTCRtpScriptTransform
+      delete w.RTCRtpSender.prototype.createEncodedStreams
+    })
+    await alice.getByRole('button', { name: 'Video call', exact: true }).click()
+    await expect(alice.getByRole('dialog', { name: 'Call with Bob' })).toContainText("can't encrypt call media")
+  })
 })

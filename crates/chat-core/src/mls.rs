@@ -425,6 +425,18 @@ impl Conversation {
         }
     }
 
+    /// Every member's identity with its leaf index (the SFrame sender index).
+    pub fn member_leaves(&self) -> Vec<(Vec<u8>, u32)> {
+        self.group
+            .members()
+            .map(|m| (credential_identity(&m.credential).to_vec(), m.index.u32()))
+            .collect()
+    }
+
+    pub fn own_leaf(&self) -> u32 {
+        self.group.own_leaf_index().u32()
+    }
+
     /// Per-call SFrame base key, bound to the current epoch.
     pub fn export_call_key(&self, device: &Device, call_id: &[u8]) -> Result<Vec<u8>> {
         self.group
