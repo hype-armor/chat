@@ -9,9 +9,15 @@ const withServer = !!process.env.E2E_SERVER
 
 export default defineConfig({
   testDir: 'e2e',
-  use: { baseURL: 'http://localhost:4173' },
+  // The loopback address, not "localhost": Playwright's Firefox gathers no
+  // ICE candidates on pages from that name, and the preview binds IPv4 only.
+  use: { baseURL: 'http://127.0.0.1:4173' },
   webServer: [
-    { command: 'pnpm preview --port 4173 --strictPort', port: 4173, reuseExistingServer: !process.env.CI },
+    {
+      command: 'pnpm preview --host 127.0.0.1 --port 4173 --strictPort',
+      url: 'http://127.0.0.1:4173/',
+      reuseExistingServer: !process.env.CI,
+    },
     ...(withServer
       ? [
           {
@@ -70,10 +76,6 @@ export default defineConfig({
             name: 'firefox',
             use: {
               ...devices['Desktop Firefox'],
-              // Playwright's Firefox gathers no ICE candidates on pages served
-              // from the name "localhost" (its profile routes localhost
-              // specially); the loopback address works.
-              baseURL: 'http://127.0.0.1:4173',
               launchOptions: {
                 firefoxUserPrefs: {
                   'media.navigator.streams.fake': true,
