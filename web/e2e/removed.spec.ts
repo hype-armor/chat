@@ -22,7 +22,7 @@ test("a removed member's late message reaches nobody", async ({ browser, browser
   await ben.getByRole('button', { name: /Club/ }).click()
   await ben.getByLabel('Message', { exact: true }).fill('Am I still here?')
   await ben.getByRole('button', { name: 'Send' }).click()
-  await expect(messages(ben).filter({ hasText: 'Am I still here?' })).toContainText('Sending')
+  await expect(messages(ben).filter({ hasText: 'Am I still here?' }).getByRole('img', { name: 'Sending…', exact: true })).toBeVisible()
   await conversationAction(ann, 'Group info')
   await ann.getByRole('button', { name: 'Remove Ben' }).click()
   await expect(ann.getByText('1 people')).toBeVisible()

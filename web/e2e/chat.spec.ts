@@ -14,7 +14,7 @@ test('two people exchange encrypted messages, and history survives a reload', as
   await alice.getByRole('button', { name: 'Start chat' }).click()
   await alice.getByLabel('Message').fill('Hello Bob')
   await alice.getByRole('button', { name: 'Send' }).click()
-  await expect(messages(alice).filter({ hasText: 'Hello Bob' })).toContainText('Sent')
+  await expect(messages(alice).filter({ hasText: 'Hello Bob' }).getByRole('img', { name: 'Sent', exact: true })).toBeVisible()
   // Bob's profile arrives once he joins, replacing the username.
   await expect(alice.getByRole('heading', { name: 'Bob' })).toBeVisible()
 
@@ -58,7 +58,7 @@ for (const width of [1280, 390]) {
       // uploading when this one was sent) may arrive after it.
       const sent = messages(page).filter({ hasText: text }).last()
       await expect(sent).toBeVisible()
-      await expect(sent).toContainText(/Sent|Delivered|Read/)
+      await expect(sent.getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
     }
     const expectBottom = async () => {
       await expect.poll(() => viewport.evaluate(
@@ -164,6 +164,64 @@ for (const width of [1280, 390]) {
   })
 }
 
+for (const colorScheme of ['light', 'dark'] as const) {
+  for (const width of [1280, 390]) {
+    test(`message runs keep accessible metadata (${colorScheme}, ${width}px)`, async ({ browser }) => {
+      const bobUsername = randomUsername()
+      const alice = await signUp(browser, 'Alice', randomUsername())
+      const bob = await signUp(browser, 'Bob', bobUsername)
+      for (const page of [alice, bob]) {
+        await page.setViewportSize({ width, height: 720 })
+        await page.emulateMedia({ colorScheme })
+      }
+      await alice.getByText('New group', { exact: true }).click()
+      await alice.getByLabel('Group name', { exact: true }).fill('Message polish')
+      await alice.getByLabel("Members' usernames").fill(bobUsername)
+      await alice.getByRole('button', { name: 'Create group' }).click()
+      await openChat(bob, /Message polish/)
+      for (const text of ['First in run', 'Last in run']) {
+        await alice.getByLabel('Message', { exact: true }).fill(text)
+        await alice.getByRole('button', { name: 'Send', exact: true }).click()
+        await expect(messages(bob).filter({ hasText: text })).toBeVisible()
+      }
+
+      for (const page of [alice, bob]) {
+        const bubbles = messages(page)
+        await expect(bubbles).toHaveCount(2)
+        await expect(page.getByRole('separator', { name: 'Today' })).toHaveCount(1)
+        await expect(page.getByRole('separator')).not.toHaveAttribute('data-testid', 'message')
+        await expect(bubbles.first()).toHaveClass(/run-first/)
+        await expect(bubbles.first()).not.toHaveClass(/run-last/)
+        await expect(bubbles.last()).not.toHaveClass(/run-first/)
+        await expect(bubbles.last()).toHaveClass(/run-last/)
+        await expect(bubbles.locator('time:not(.visually-hidden)')).toHaveCount(1)
+        const sender = page === alice ? 'You' : 'Alice'
+        for (const bubble of await bubbles.all()) {
+          expect(await bubble.ariaSnapshot()).toContain(sender)
+          await expect(bubble.locator('time')).toHaveAttribute('datetime', /T/)
+          await expect(bubble.locator('time')).toHaveAttribute('aria-label', /\d/)
+          await expect(bubble).toHaveAttribute('title', /\d/)
+          await expect(bubble.getByRole('img')).toHaveAccessibleName(
+            page === alice ? /^(Sent|Delivered|Read)$/ : 'Received',
+          )
+        }
+        // Joined bubbles stay inside the viewport, including on mobile.
+        const bounds = await bubbles.last().boundingBox()
+        expect(bounds!.x).toBeGreaterThanOrEqual(0)
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width)
+        await expect(bubbles.last()).toBeInViewport({ ratio: 1 })
+      }
+      await expect(messages(bob).locator('.sender')).toHaveCount(1)
+      await expect(messages(bob).first().locator('.sender')).toHaveText('Alice')
+      await expect(messages(alice).locator('.message-status')).toHaveCount(1)
+      await expect(messages(alice).last().locator('.message-status')).toBeVisible()
+      await expect(messages(bob).locator('.message-status')).toHaveCount(0)
+      await alice.context().close()
+      await bob.context().close()
+    })
+  }
+}
+
 test('groups: create, talk, and add someone later', async ({ browser }) => {
   const [annUsername, benUsername, catUsername, danUsername] = [randomUsername(), randomUsername(), randomUsername(), randomUsername()]
   const ann = await signUp(browser, 'Ann', annUsername)
@@ -178,7 +236,7 @@ test('groups: create, talk, and add someone later', async ({ browser }) => {
   await expect(ann.getByRole('heading', { name: 'Trip' })).toBeVisible()
   await ann.getByLabel('Message').fill('Hi team')
   await ann.getByRole('button', { name: 'Send' }).click()
-  await expect(messages(ann).filter({ hasText: 'Hi team' })).toContainText('Sent')
+  await expect(messages(ann).filter({ hasText: 'Hi team' }).getByRole('img', { name: 'Sent', exact: true })).toBeVisible()
 
   for (const page of [ben, cat]) {
     await openChat(page, /Trip/)

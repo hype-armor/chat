@@ -35,7 +35,7 @@ test('interrupted uploads and downloads resume where they stopped (ADR-0025)', a
   const sent = messages(alice).filter({ hasText: 'big.bin' })
   await expect(sent).toContainText('Failed')
   await sent.getByRole('button', { name: 'Retry' }).click()
-  await expect(sent).toContainText(/Sent|Delivered|Read/, { timeout: 30_000 })
+  await expect(sent.getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible({ timeout: 30_000 })
   // Part 0 went once: the retry asked the server what it had.
   expect(parts.sort()).toEqual(['0', '1', '2'])
 
