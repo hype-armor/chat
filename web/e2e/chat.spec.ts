@@ -54,8 +54,11 @@ for (const width of [1280, 390]) {
     const send = async (page: Page, text: string) => {
       await page.getByLabel('Message', { exact: true }).fill(text)
       await page.getByRole('button', { name: 'Send', exact: true }).click()
-      await expect(messages(page).last()).toContainText(text)
-      await expect(messages(page).last()).toContainText(/Sent|Delivered|Read/)
+      // By its text: a message from the other side (e.g. a file still
+      // uploading when this one was sent) may arrive after it.
+      const sent = messages(page).filter({ hasText: text }).last()
+      await expect(sent).toBeVisible()
+      await expect(sent).toContainText(/Sent|Delivered|Read/)
     }
     const expectBottom = async () => {
       await expect.poll(() => viewport.evaluate(
