@@ -121,7 +121,7 @@ their PRs merge.
 3. [x] SFrame on 1:1 calls, keyed from the MLS exporter (FR-CALL-3,
    ADR-0006); refuse to call without encoded transforms.
 4. [x] Echo bot call mode: it answers and sends your audio and video back.
-5. [ ] Group calls through LiveKit with SFrame: server-issued room tokens,
+5. [x] Group calls through LiveKit with SFrame: server-issued room tokens,
    join and leave an ongoing call, up to 16 video tiles (FR-CALL-2/3/6).
 6. [ ] Call quality: switching camera and audio output, ICE restart on
    network change, adaptive quality (FR-CALL-4/8).

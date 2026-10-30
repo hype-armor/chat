@@ -9,7 +9,8 @@ function productionHeaders(): Record<string, string> {
   const conf = readFileSync(new URL('../deploy/docker/security-headers.inc.template', import.meta.url), 'utf8')
   const headers: Record<string, string> = {}
   for (const [, name, value] of conf.matchAll(/^add_header (\S+) "(.*)" always;$/gm)) {
-    headers[name] = value.replace(' ${CSP_CONNECT_EXTRA}', '')
+    // e2e runs pass the test LiveKit's address (group calls).
+    headers[name] = value.replace(' ${CSP_CONNECT_EXTRA}', process.env.CSP_CONNECT_EXTRA ? ` ${process.env.CSP_CONNECT_EXTRA}` : '')
   }
   return headers
 }

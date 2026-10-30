@@ -1,6 +1,6 @@
 import { Fragment, type FormEvent, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { CoreClient } from '../core/client'
-import type { AppView, ChatMessage, ConversationSummary, MemberInfo } from '../core/protocol'
+import type { AppView, ChatMessage, ConversationSummary, GroupCallStatus, MemberInfo } from '../core/protocol'
 import { SetupActions, SetupBanner, useSetup } from './Banners'
 import { Devices } from './Devices'
 import { Invite } from './Invite'
@@ -14,6 +14,8 @@ import { LocationCard, ShareLocation } from './Location'
 import { LiveBanner, LiveCard } from './Live'
 import { CallScreen } from './Call'
 import { CallController } from './calls'
+import { GroupCallScreen, useGroupCall } from './GroupCall'
+import { GroupCallController } from './groupCall'
 import { probeClip } from './media'
 import type { MediaInfo } from '../core/protocol'
 import { BlockedList, DeleteAccount, ReportForm } from './Safety'
@@ -84,7 +86,19 @@ export function Chat({
   const [settings, setSettings] = useState(false)
   const setup = useSetup()
   const [calls] = useState(() => new CallController(core))
-  useEffect(() => () => calls.dispose(), [calls])
+  const [groupCalls] = useState(() => {
+    const g = new GroupCallController(core)
+    g.otherBusy = () => calls.busy
+    calls.otherBusy = () => g.busy
+    return g
+  })
+  useEffect(
+    () => () => {
+      calls.dispose()
+      groupCalls.dispose()
+    },
+    [calls, groupCalls],
+  )
   calls.relayOnly = view.relayCalls
   const conversation = view.conversations.find((c) => c.id === selected)
   const select = (id: string) => {
@@ -98,6 +112,7 @@ export function Chat({
     <>
       <LiveBanner core={core} sharing={view.liveSharing} />
       <CallScreen calls={calls} />
+      <GroupCallScreen calls={groupCalls} />
       <div
         hidden={showDiagnostics}
         className={`chat-layout ${conversation ? 'has-selection' : ''} ${view.liveSharing.length > 0 ? 'with-banner' : ''}`}
@@ -177,6 +192,7 @@ export function Chat({
             key={conversation.id}
             core={core}
             calls={calls}
+            groupCalls={groupCalls}
             id={conversation.id}
             title={conversation.title}
             isGroup={conversation.isGroup}
@@ -194,6 +210,51 @@ export function Chat({
         )}
       </div>
     </>
+  )
+}
+
+/** "Call in progress · Join" while people are in the group's latest call (ADR-0031). */
+function OngoingCall({
+  core,
+  groupCalls,
+  id,
+  title,
+}: {
+  core: CoreClient
+  groupCalls: GroupCallController
+  id: string
+  title: string
+}) {
+  const [call, setCall] = useState<GroupCallStatus>()
+  const inCall = useGroupCall(groupCalls)
+  useEffect(() => {
+    let live = true
+    const check = () =>
+      core
+        .groupCallStatus(id)
+        .then((c) => live && setCall(c))
+        .catch(() => live && setCall(undefined))
+    void check()
+    const timer = setInterval(check, 15_000)
+    const unsubscribe = core.subscribe((e) => e.type === 'messages' && e.conversationId === id && void check())
+    return () => {
+      live = false
+      clearInterval(timer)
+      unsubscribe()
+    }
+  }, [core, id])
+  if (!call || (inCall && inCall.phase !== 'incoming')) return null
+  return (
+    <p className="notice" role="note">
+      {call.video ? '🎥' : '📞'} Call in progress · {call.participants} {call.participants === 1 ? 'person' : 'people'}{' '}
+      <button
+        type="button"
+        className="link"
+        onClick={() => void groupCalls.join(id, call.callId, title, call.video).catch(() => undefined)}
+      >
+        Join
+      </button>
+    </p>
   )
 }
 
@@ -572,6 +633,7 @@ function AddPeople({ core, id, onDone }: { core: CoreClient; id: string; onDone:
 function Conversation({
   core,
   calls,
+  groupCalls,
   id,
   title,
   isGroup,
@@ -586,6 +648,7 @@ function Conversation({
 }: {
   core: CoreClient
   calls: CallController
+  groupCalls: GroupCallController
   id: string
   title: string
   isGroup: boolean
@@ -736,6 +799,26 @@ function Conversation({
           </button>
         </div>
         <div className="header-actions">
+          {isGroup && active && !request && (
+            <>
+              <button
+                type="button"
+                className="icon"
+                aria-label="Group voice call"
+                onClick={() => void groupCalls.start(id, title, false).catch((e) => setAttachError(String(e.message ?? e)))}
+              >
+                📞
+              </button>
+              <button
+                type="button"
+                className="icon"
+                aria-label="Group video call"
+                onClick={() => void groupCalls.start(id, title, true).catch((e) => setAttachError(String(e.message ?? e)))}
+              >
+                🎥
+              </button>
+            </>
+          )}
           {peer && active && !blocked && !request && (
             <>
               <button
@@ -760,6 +843,7 @@ function Conversation({
         </div>
       </header>
       {panel === 'add' && active && <AddPeople core={core} id={id} onDone={() => setPanel(undefined)} />}
+      {isGroup && active && !request && <OngoingCall core={core} groupCalls={groupCalls} id={id} title={title} />}
       {verification === 'changed' && panel !== 'verify' && (
         <p className="notice warning" role="note">
           {title}'s safety number changed since you verified it. Verify it again before sharing anything sensitive.

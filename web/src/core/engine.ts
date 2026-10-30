@@ -230,6 +230,8 @@ type State = {
   live: LiveSession[]
   /** Others' sessions shown here, to forget their points when they end. */
   liveSeen: { conversationId: string; messageId: string; expiresAt: number }[]
+  /** The latest group call started in each group (ADR-0031), to offer "join". */
+  groupCalls?: Record<string, { callId: string; video: boolean; startedAt: number }>
   /** Attachment uploads and downloads to resume after a reload or reconnect. */
   transfers: { conversationId: string; messageId: string; kind: 'upload' | 'download' }[]
 }
@@ -1597,6 +1599,7 @@ export class Engine {
    * so this user's other devices stop ringing once one of them answers.
    */
   async callSignal(conversationId: string, signal: CallSignal) {
+    if (signal.group) return this.startGroupCall(conversationId, signal)
     const conv = this.group(conversationId)
     if (conv.status || conv.self || conv.peers.length !== 1) throw new Error('Calls work in one-to-one chats')
     if (this.state.blocked.includes(conv.peers[0])) throw new Error('Unblock this contact to call them')
@@ -1615,6 +1618,7 @@ export class Engine {
         signal.candidate ?? '',
         signal.video ?? false,
         signal.toDevice ? fromHex(signal.toDevice) : new Uint8Array(),
+        false,
         now,
         messageId,
       )
@@ -1630,6 +1634,91 @@ export class Engine {
       await this.persist()
     })
     void this.flushOutbox()
+  }
+
+  /** Tells the group a call started in its LiveKit room (ADR-0031). */
+  private async startGroupCall(conversationId: string, signal: CallSignal) {
+    const conv = this.group(conversationId)
+    if (conv.status || conv.self || !this.isGroupConversation(conv)) throw new Error('Group calls work in groups')
+    if (signal.kind !== 'offer') return
+    if (this.connection !== 'online') throw new Error("You're offline")
+    await this.exclusive(async () => {
+      const { core } = this.ready()
+      const messageId = randomId()
+      const now = Date.now()
+      const envelope = core.sendCall(
+        fromHex(conversationId),
+        fromHex(signal.callId),
+        CALL_KINDS.indexOf('offer'),
+        '',
+        '',
+        signal.video ?? false,
+        new Uint8Array(),
+        true,
+        now,
+        messageId,
+      )
+      this.state.outbox.push({
+        messageId: toHex(messageId),
+        conversationId,
+        envelope: toBase64(envelope),
+        recipients: this.recipients(conversationId),
+      })
+      await this.noteGroupCall(conv, signal, 'You', now)
+      await this.persist()
+    })
+    void this.flushOutbox()
+  }
+
+  /** Remembers a group call and notes it in the conversation (under the lock). */
+  private async noteGroupCall(conv: Conversation, signal: CallSignal, by: string, at: number) {
+    this.state.groupCalls ??= {}
+    this.state.groupCalls[conv.id] = { callId: signal.callId, video: !!signal.video, startedAt: at }
+    await this.appendMessage(conv.id, {
+      id: toHex(randomId()),
+      from: '',
+      kind: 'notice',
+      text: `${signal.video ? '🎥' : '📞'} ${by} started a group ${signal.video ? 'video' : 'voice'} call`,
+      sentAt: at,
+      status: 'received',
+    })
+  }
+
+  private isGroupConversation(conv: Conversation): boolean {
+    return conv.name !== undefined || conv.peers.length > 1
+  }
+
+  /** A LiveKit URL and room token for a group call (ADR-0031). */
+  async groupCallJoin(conversationId: string, callId: string): Promise<{ url: string; token: string }> {
+    const conv = this.group(conversationId)
+    if (conv.status || !this.isGroupConversation(conv)) throw new Error('Group calls work in groups')
+    return api.callJoin(this.ready().account.token, toBase64(fromHex(conversationId)), toBase64(fromHex(callId)))
+  }
+
+  /** The group's latest call, if people are still in it. */
+  async groupCallStatus(
+    conversationId: string,
+  ): Promise<{ callId: string; video: boolean; participants: number } | undefined> {
+    const call = this.state.groupCalls?.[conversationId]
+    if (!call || Date.now() - call.startedAt > 12 * 3600_000) return undefined
+    const { participants } = await api.callStatus(
+      this.ready().account.token,
+      toBase64(fromHex(conversationId)),
+      toBase64(fromHex(call.callId)),
+    )
+    return participants > 0 ? { ...call, participants } : undefined
+  }
+
+  /** Display names of a conversation's member devices (hex), for call tiles. */
+  deviceNames(conversationId: string): Record<string, string> {
+    const { core } = this.ready()
+    const me = this.myAccount()
+    const names: Record<string, string> = {}
+    for (const m of core.members(fromHex(conversationId)) as Uint8Array[]) {
+      const { account, device } = splitIdentity(m)
+      names[toHex(device)] = account === me ? 'You' : this.nameOf(account)
+    }
+    return names
   }
 
   /**
@@ -1655,7 +1744,7 @@ export class Engine {
       return known.media
     }
     const conv = this.state.conversations[conversationId]
-    if (!conv || conv.status || conv.self || conv.peers.length !== 1) throw new Error('Calls work in one-to-one chats')
+    if (!conv || conv.status || conv.self || conv.peers.length === 0) throw new Error('No call in this conversation')
     if (!/^[0-9a-f]{32}$/.test(callId)) throw new Error('malformed call id')
     const media = new CallMedia()
     this.ready().core.installCallKeys(fromHex(conversationId), fromHex(callId), media)
@@ -2394,8 +2483,23 @@ export class Engine {
       if (callView) {
         const signal = parseCall(callView)
         callView.free()
-        const oneToOne = conv && !conv.status && !conv.self && conv.peers.length === 1
-        if (signal && oneToOne && !this.state.blocked.includes(from)) {
+        const oneToOne = conv && !conv.status && !conv.self && conv.peers.length === 1 && !conv.name
+        if (signal?.group && conv && !conv.status && !conv.request && this.isGroupConversation(conv)) {
+          if (signal.kind === 'offer' && !mine && !this.state.blocked.includes(from)) {
+            await this.noteGroupCall(conv, signal, this.nameOf(from), event.sentAtMs)
+            if (Date.now() - event.sentAtMs < STALE_OFFER_MS) {
+              const device = toHex(splitIdentity(event.sender).device)
+              this.emit({
+                type: 'call',
+                signal: { ...signal, conversationId, title: this.title(conv), fromDevice: device },
+              })
+            }
+          } else if (signal.kind === 'offer' && mine) {
+            // Started on another of our devices.
+            this.state.groupCalls ??= {}
+            this.state.groupCalls[conversationId] = { callId: signal.callId, video: !!signal.video, startedAt: event.sentAtMs }
+          }
+        } else if (signal && oneToOne && !this.state.blocked.includes(from)) {
           const device = toHex(splitIdentity(event.sender).device)
           await this.applyCall(conv, mine, device, event.sentAtMs, signal)
         }
@@ -2783,6 +2887,7 @@ function parseCall(view: CallView): CallSignal | undefined {
   const kind = CALL_KINDS[view.kind]
   if (!kind || view.callId.length !== 16) return undefined
   const signal: CallSignal = { callId: toHex(view.callId), kind }
+  if (kind === 'offer' && view.group) return { ...signal, group: true, video: view.video }
   if (kind === 'offer' || kind === 'answer') {
     signal.sdp = safeSignalText(view.sdp, 64 * 1024)
     if (!signal.sdp) return undefined

@@ -184,6 +184,8 @@ export type CallSignal = {
   video?: boolean
   /** Answers and candidates: the device (hex) they are for. */
   toDevice?: string
+  /** Offers: a group call in the conversation's LiveKit room (ADR-0031). */
+  group?: boolean
 }
 
 /** A signal for the call screen, from the other person or another of our devices. */
@@ -195,6 +197,8 @@ export type IncomingCallSignal = CallSignal & {
   /** Sent from another of this user's devices: answered or declined there. */
   elsewhere?: boolean
 }
+
+export type GroupCallStatus = { callId: string; video: boolean; participants: number }
 
 export type IceServer = { urls: string[]; username?: string; credential?: string }
 
@@ -223,6 +227,9 @@ export type CoreRequest =
   | { type: 'stopLive'; conversationId: string }
   | { type: 'iceServers' }
   | { type: 'callSignal'; conversationId: string; signal: CallSignal }
+  | { type: 'groupCallJoin'; conversationId: string; callId: string }
+  | { type: 'groupCallStatus'; conversationId: string }
+  | { type: 'deviceNames'; conversationId: string }
   | { type: 'mapInfo' }
   | { type: 'tile'; z: number; x: number; y: number }
   | { type: 'sendFile'; conversationId: string; file: File; caption: string; media?: MediaInfo }
@@ -268,6 +275,9 @@ export type CoreResponseBody =
   | { type: 'messages'; messages: ChatMessage[] }
   | { type: 'file'; blob: Blob }
   | { type: 'iceServers'; servers: IceServer[] }
+  | { type: 'groupCallJoin'; url: string; token: string }
+  | { type: 'groupCallStatus'; call?: GroupCallStatus }
+  | { type: 'deviceNames'; names: Record<string, string> }
   | { type: 'mapInfo'; info: MapInfo }
   | { type: 'tile'; data?: Uint8Array<ArrayBuffer> }
   | { type: 'members'; members: MemberInfo[] }

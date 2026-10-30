@@ -41,5 +41,10 @@ MLS. Two questions were open: who may join a room, and what LiveKit learns.
   and stops being able to decrypt once the epoch changes; a token already
   issued keeps them connected to the room until they leave, hearing only
   ciphertext under the new keys.
-- The browser side (joining, tiles, SFrame through LiveKit's peer
-  connections) is the next part of Phase 3 item 5.
+- Starting a group call sends an MLS `Call` offer with `group` set and no
+  SDP; members get a "join" prompt, and a banner while LiveKit reports
+  people in the call. LiveKit's browser client is loaded only when a call
+  starts; its own E2EE stays off and every sender and receiver goes
+  through the core worker for SFrame. Tracks are published muted and
+  unmuted once their sender's transform is attached, so nothing but
+  silence and black frames can leave before encryption.
