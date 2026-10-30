@@ -48,6 +48,8 @@ describe('visual viewport layout', () => {
 
   it('resets document panning on scroll events but leaves pinch zoom alone', () => {
     const { viewport, browser, properties, stop } = setup()
+    viewport.height = 500
+    viewport.dispatchEvent(new Event('resize'))
     browser.scrollTo.mockClear()
     viewport.dispatchEvent(new Event('scroll'))
     browser.dispatchEvent(new Event('scroll'))
@@ -56,14 +58,16 @@ describe('visual viewport layout', () => {
     viewport.height = 422
     viewport.dispatchEvent(new Event('resize'))
     viewport.dispatchEvent(new Event('scroll'))
-    expect(properties.get('--app-height')).toBe('844px')
-    expect(properties.has('--safe-bottom')).toBe(false)
+    expect(properties.get('--app-height')).toBe('500px')
+    expect(properties.get('--safe-bottom')).toBe('0px')
     expect(browser.scrollTo).toHaveBeenCalledTimes(2)
     stop!()
   })
 
   it('cleans up variables and all listeners when chat is hidden or unmounted', () => {
     const { viewport, browser, properties, stop } = setup()
+    viewport.height = 500
+    viewport.dispatchEvent(new Event('resize'))
     stop!()
     viewport.dispatchEvent(new Event('resize'))
     viewport.dispatchEvent(new Event('scroll'))
@@ -71,6 +75,14 @@ describe('visual viewport layout', () => {
     browser.dispatchEvent(new Event('scroll'))
     expect(properties.size).toBe(0)
     expect(browser.scrollTo).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not interfere with ordinary document scrolling when the keyboard is closed', () => {
+    const { viewport, browser, stop } = setup()
+    viewport.dispatchEvent(new Event('scroll'))
+    browser.dispatchEvent(new Event('scroll'))
+    expect(browser.scrollTo).not.toHaveBeenCalled()
+    stop!()
   })
 
   it('keeps the CSS fallback when VisualViewport is unavailable', () => {

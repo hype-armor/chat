@@ -3,18 +3,21 @@ import { useLayoutEffect } from 'react'
 export function trackVisualViewport(browser: Window, style: CSSStyleDeclaration): (() => void) | undefined {
   const viewport = browser.visualViewport
   if (!viewport) return
+  let keyboardOpen = false
 
   const update = () => {
     // Pinch zoom is not a keyboard resize; leave its size and panning alone.
     if (viewport.scale !== 1) return
     style.setProperty('--app-height', `${viewport.height}px`)
-    if (viewport.height < browser.innerHeight - 100) {
+    const wasOpen = keyboardOpen
+    keyboardOpen = viewport.height < browser.innerHeight - 100
+    if (keyboardOpen) {
       style.setProperty('--safe-bottom', '0px')
     } else {
       style.removeProperty('--safe-bottom')
     }
     // iOS pans the document to the focused textarea without resizing 100dvh.
-    browser.scrollTo(0, 0)
+    if (keyboardOpen || wasOpen) browser.scrollTo(0, 0)
   }
 
   update()

@@ -152,7 +152,7 @@ test.describe('touch composer', () => {
     await expect.poll(() => page.evaluate(`({
       height: document.documentElement.scrollHeight,
       top: window.scrollY,
-    })`))).toEqual({ height: 400, top: 0 })
+    })`)).toEqual({ height: 400, top: 0 })
     for (let i = 0; i < 6; i++) {
       await page.keyboard.type(`Next message ${i}`)
       await expect(input).toHaveValue(`Next message ${i}`)
@@ -209,7 +209,7 @@ test('iOS visual viewport removes the keyboard gap and restores the home-indicat
     height: document.documentElement.scrollHeight,
     clientHeight: document.documentElement.clientHeight,
     top: window.scrollY,
-  })`))).toEqual({ height: 844, clientHeight: 844, top: 0 })
+  })`)).toEqual({ height: 844, clientHeight: 844, top: 0 })
   await alice.evaluate(`(() => {
     delete window.visualViewport.height
     window.visualViewport.dispatchEvent(new Event('resize'))
