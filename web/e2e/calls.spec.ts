@@ -30,7 +30,7 @@ async function pair(browser: Browser, browserName: string) {
 }
 
 test.describe('calls', () => {
-  test.skip(({ browserName }) => browserName === 'webkit', 'Playwright WebKit has no fake camera on Linux')
+  test.skip(({ browserName }) => browserName === 'webkit', 'fake camera and microphone not set up for WebKit yet')
 
   test('a 1:1 video call connects peer to peer and is logged (FR-CALL-1/4/5)', async ({ browser, browserName }) => {
     const { alice, bob } = await pair(browser, browserName)
