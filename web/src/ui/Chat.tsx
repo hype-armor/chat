@@ -8,6 +8,7 @@ import { Backup } from './Backup'
 import { Attachment } from './Attachment'
 import { Recorder } from './Recorder'
 import { Media } from './Media'
+import { LocationCard, ShareLocation } from './Location'
 import { probeClip } from './media'
 import type { MediaInfo } from '../core/protocol'
 import { BlockedList, DeleteAccount, ReportForm } from './Safety'
@@ -648,6 +649,7 @@ function Conversation({
                   sending={m.status === 'sending'}
                 />
               )}
+              {m.location && <LocationCard core={core} location={m.location} />}
               {m.text && <span className="text">{m.text}</span>}
               <span className="meta small">
                 {new Date(m.sentAt).toLocaleTimeString([], {
@@ -698,6 +700,7 @@ function Conversation({
         >
           {attaching ? '…' : '+'}
         </button>
+        <ShareLocation core={core} conversationId={id} disabled={attaching} onError={setAttachError} />
         <Recorder
           disabled={attaching}
           onRecorded={(file, media) => void attach(file, media)}

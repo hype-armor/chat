@@ -134,6 +134,24 @@ helm upgrade chat deploy/helm/chat -n chat --reuse-values \
 MinIO stays inside the cluster: the chat server streams attachments to it.
 Include the `chat-blobs` bucket in the off-site backups (§5).
 
+### Map tiles (ADR-0026)
+
+Locations show on a map only once the server has a basemap: one
+[Protomaps](https://docs.protomaps.com/) PMTiles file, served by the web pod
+from `/tiles/basemap.pmtiles`. Without it, locations show as coordinates.
+Cut out the region you need with the `pmtiles` CLI, run on the host:
+
+```sh
+# A US-wide extract to zoom 15 is roughly 10–20 GB; a metro area is far smaller.
+pmtiles extract https://build.protomaps.com/$(date -u -d '-1 day' +%Y%m%d).pmtiles \
+  /srv/chat-tiles/basemap.pmtiles --bbox=-125,24,-66,50 --maxzoom=15
+helm upgrade chat deploy/helm/chat -n chat --reuse-values \
+  --set web.tiles.hostPath=/srv/chat-tiles
+```
+
+Phones never contact Protomaps: the file is downloaded once here, and the
+app reads map data only from this server. Refresh it every few months.
+
 ## 4. Calls (Phase 3)
 
 ```sh

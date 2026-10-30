@@ -94,8 +94,8 @@ order; tick items as their PRs merge.
 5. [x] Voice notes and audio/video clips (FR-MED-1, ADR-0024).
 6. [x] Resumable transfers and an auto-download policy (FR-MED-5/6, should;
    ADR-0025).
-7. [ ] Share location once, with self-hosted map tiles (FR-LOC-1/4/5,
-   ADR-0008).
+7. [x] Share location once, with self-hosted map tiles (FR-LOC-1/4/5,
+   ADR-0008, ADR-0026).
 8. [ ] Live location for 15 min / 1 h / 8 h while the app is open, with a
    persistent indicator (FR-LOC-2/3/6).
 9. [ ] Move backups into blob storage (they start in PostgreSQL).

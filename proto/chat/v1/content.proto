@@ -14,6 +14,7 @@ message Content {
     DeviceSync device_sync = 5;
     Receipt receipt = 6;
     Attachment attachment = 7;
+    Location location = 8;
   }
 }
 
@@ -74,4 +75,15 @@ message Attachment {
   uint32 duration_ms = 11;
   // Recorded in the app as a voice note (shown as one, not as a file).
   bool voice_note = 12;
+}
+
+// A location shared once (FR-LOC-1, doc 06). Coordinates travel only
+// inside MLS; the server never sees them (FR-LOC-4).
+message Location {
+  double latitude = 1;
+  double longitude = 2;
+  // Radius in metres the position is accurate to.
+  float accuracy_m = 3;
+  // Optional place name, chosen by the sender.
+  string label = 4;
 }

@@ -72,6 +72,7 @@ import type {
   DeviceInfo,
   InviteOffer,
   LinkOffer,
+  LocationInfo,
   MediaSettings,
   MemberInfo,
   SafetyNumber,
@@ -80,6 +81,7 @@ import { type MediaInfo, isPhoto, isPlayable } from './protocol'
 import { isMp4, scrubMp4 } from './mp4'
 import { DEFAULT_MEDIA, autoDownloads, onMobileData } from './policy'
 import * as transfers from './transfers'
+import { safeLocation } from './maps'
 import { acceptsGroupInfo, designatedCommitter, parseAdmins } from './roles'
 import { SecureStore } from './storage'
 
@@ -1351,6 +1353,34 @@ export class Engine {
     if (this.state.conversations[conversationId]?.status) throw new Error("You're no longer in this group")
   }
 
+  /** Shares a location once (FR-LOC-1); it travels only inside MLS. */
+  async sendLocation(conversationId: string, location: LocationInfo) {
+    const { core } = this.ready()
+    this.checkCanSend(conversationId)
+    const checked = safeLocation(location.latitude, location.longitude, location.accuracyM, location.label ?? '')
+    if (!checked) throw new Error("That location doesn't look right")
+    await this.exclusive(async () => {
+      const message: StoredMessage = {
+        id: toHex(randomId()),
+        from: 'me',
+        text: '',
+        sentAt: Date.now(),
+        status: 'sending',
+        location: checked,
+      }
+      const envelope = this.encode(core, conversationId, message)
+      this.state.outbox.push({
+        messageId: message.id,
+        conversationId,
+        envelope: toBase64(envelope),
+        recipients: this.recipients(conversationId),
+      })
+      await this.appendMessage(conversationId, message)
+      await this.persist()
+    })
+    void this.flushOutbox()
+  }
+
   async sendText(conversationId: string, text: string) {
     const { core } = this.ready()
     this.checkCanSend(conversationId)
@@ -1409,6 +1439,10 @@ export class Engine {
   /** Encrypts one of our messages for the group as it is now. */
   private encode(core: CoreClient, conversationId: string, m: StoredMessage): Uint8Array {
     const id = fromHex(m.id)
+    if (m.location) {
+      const l = m.location
+      return core.sendLocation(fromHex(conversationId), l.latitude, l.longitude, l.accuracyM, l.label ?? '', m.sentAt, id)
+    }
     if (!m.file) return core.sendText(fromHex(conversationId), m.text, m.sentAt, id)
     const f = m.file
     if (!f.blobId) throw new Error('not uploaded yet')
@@ -1855,8 +1889,11 @@ export class Engine {
       }
       const view = event.attachment
       const attachment = view && this.receivedFile(view)
-      // An unusable attachment is dropped with its caption.
-      const text = view ? attachment && view.caption : event.text
+      const place = event.location
+      const location = place && safeLocation(place.latitude, place.longitude, place.accuracyM, place.label)
+      place?.free()
+      // An unusable attachment is dropped with its caption, and a bad location with it.
+      const text = view ? attachment && view.caption : place ? location && '' : event.text
       view?.free()
       if (conv?.status && text !== undefined) return // no longer in the group
       if (this.state.blocked.includes(from)) return // blocked (FR-ID-8)
@@ -1881,6 +1918,7 @@ export class Engine {
           sentAt: event.sentAtMs,
           status: mine ? 'sent' : 'received',
           file: attachment,
+          location,
         })
         if (attachment && autoDownloads(this.state.media, attachment.mime, onMobileData())) {
           // After this delivery is stored: the download takes the lock to record itself.
@@ -2160,7 +2198,9 @@ export class Engine {
     await this.store.putJson(`messages:${conversationId}`, list)
     const conv = this.state.conversations[conversationId]
     if (conv && message.kind !== 'notice') {
-      conv.lastText = message.file
+      conv.lastText = message.location
+        ? 'Location'
+        : message.file
         ? [attachmentLabel(message.file.mime, message.file.name, message.file.voiceNote), message.text].filter(Boolean).join(': ')
         : message.text
       conv.lastAt = Math.max(conv.lastAt, message.sentAt)

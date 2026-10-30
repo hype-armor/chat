@@ -32,3 +32,4 @@ revisited; do it with a new ADR that supersedes the old one.
 | [0023](0023-blob-transfer-through-server.md) | Attachments stream through the server (not pre-signed URLs) | Accepted |
 | [0024](0024-attachment-encryption.md) | Attachments sealed with STREAM over AES-256-GCM in the core; photos re-drawn to drop metadata | Accepted |
 | [0025](0025-resumable-transfers.md) | Resumable uploads in parts, ranged downloads, auto-download settings | Accepted |
+| [0026](0026-location-and-map-tiles.md) | One-shot locations; PMTiles served by the web pod, read through the core worker | Accepted |

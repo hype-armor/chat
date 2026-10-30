@@ -15,6 +15,15 @@ server {
         try_files $uri =404;
     }
 
+    # Map tiles (ADR-0026): one PMTiles file read by byte range, mounted at
+    # /srv/tiles. Missing means no basemap: locations still show, without a map.
+    location /tiles/ {
+        include /etc/nginx/conf.d/security-headers.inc;
+        alias /srv/tiles/;
+        add_header Cache-Control "public, max-age=86400";
+        try_files $uri =404;
+    }
+
     # The service worker and app shell must always be revalidated.
     location ~ ^/(sw\.js|manifest\.webmanifest)$ {
         include /etc/nginx/conf.d/security-headers.inc;

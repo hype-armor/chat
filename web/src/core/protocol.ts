@@ -1,6 +1,8 @@
 // Messages between the UI thread and the core worker. The worker owns all
 // keys, storage and network connections; the UI only renders `AppView`.
 
+import type { MapInfo } from './maps'
+
 export type ConnectionState = 'offline' | 'connecting' | 'online'
 
 export type ConversationSummary = {
@@ -124,6 +126,15 @@ export type FileInfo = {
   downloaded?: boolean
 }
 
+/** A location shared once (FR-LOC-1). */
+export type LocationInfo = {
+  latitude: number
+  longitude: number
+  /** Metres. */
+  accuracyM: number
+  label?: string
+}
+
 export type ChatMessage = {
   id: string
   /** 'me' or the sender's account id (hex); empty for notices. */
@@ -144,6 +155,7 @@ export type ChatMessage = {
   error?: string
   /** An image or file; `text` is then its caption. */
   file?: FileInfo
+  location?: LocationInfo
 }
 
 export type CoreStatus = { version: string; selfTest: boolean }
@@ -165,6 +177,9 @@ export type CoreRequest =
   | { type: 'leaveGroup'; conversationId: string }
   | { type: 'messages'; conversationId: string }
   | { type: 'sendText'; conversationId: string; text: string }
+  | { type: 'sendLocation'; conversationId: string; location: LocationInfo }
+  | { type: 'mapInfo' }
+  | { type: 'tile'; z: number; x: number; y: number }
   | { type: 'sendFile'; conversationId: string; file: File; caption: string; media?: MediaInfo }
   | { type: 'openAttachment'; conversationId: string; messageId: string }
   | { type: 'startLink' }
@@ -206,6 +221,8 @@ export type CoreResponseBody =
   | { type: 'conversation'; conversationId: string }
   | { type: 'messages'; messages: ChatMessage[] }
   | { type: 'file'; blob: Blob }
+  | { type: 'mapInfo'; info: MapInfo }
+  | { type: 'tile'; data?: Uint8Array<ArrayBuffer> }
   | { type: 'members'; members: MemberInfo[] }
   | { type: 'pushKey'; key: string }
   | { type: 'link'; offer: LinkOffer }

@@ -148,5 +148,6 @@ Layered mitigations:
    serve the bundle themselves.
 
 Also: strict Content Security Policy (no inline script, no `eval`, WASM
-allowed via `wasm-unsafe-eval` only), Trusted Types, no third-party scripts
+allowed via `wasm-unsafe-eval` only), Trusted Types (policies `chat` and
+`default`, both limited to same-origin script URLs; ADR-0026), no third-party scripts
 or analytics, COOP/COEP isolation.

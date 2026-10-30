@@ -41,9 +41,23 @@ spec:
           volumeMounts:
             - { name: conf, mountPath: /etc/nginx/conf.d }
             - { name: tmp, mountPath: /tmp }
+            {{- if or .Values.web.tiles.existingClaim .Values.web.tiles.hostPath }}
+            - { name: tiles, mountPath: /srv/tiles, readOnly: true }
+            {{- end }}
       volumes:
         - { name: conf, emptyDir: {} }
         - { name: tmp, emptyDir: {} }
+        {{- if .Values.web.tiles.existingClaim }}
+        - name: tiles
+          persistentVolumeClaim:
+            claimName: {{ .Values.web.tiles.existingClaim }}
+            readOnly: true
+        {{- else if .Values.web.tiles.hostPath }}
+        - name: tiles
+          hostPath:
+            path: {{ .Values.web.tiles.hostPath }}
+            type: Directory
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service

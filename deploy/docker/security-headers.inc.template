@@ -2,7 +2,7 @@
 # directives inside a location that sets its own headers.
 # CSP per docs/04-security-and-cryptography.md §9: no inline script, no
 # eval, WASM allowed, no third-party origins.
-add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self' ${CSP_CONNECT_EXTRA}; img-src 'self' blob: data:; media-src 'self' blob:; style-src 'self'; font-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types chat" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self' ${CSP_CONNECT_EXTRA}; img-src 'self' blob: data:; media-src 'self' blob:; style-src 'self'; font-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types chat default" always;
 add_header Cross-Origin-Opener-Policy "same-origin" always;
 add_header Cross-Origin-Embedder-Policy "require-corp" always;
 add_header Cross-Origin-Resource-Policy "same-origin" always;

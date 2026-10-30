@@ -19,6 +19,12 @@ export function sameOriginScriptUrl(url: string, base: string = globalThis.locat
 // Browsers without Trusted Types (Firefox, Safari today) accept plain strings.
 const policy = factory?.createPolicy('chat', { createScriptURL: (url) => sameOriginScriptUrl(url) })
 
+// Libraries that pass plain strings to `new Worker()` (MapLibre starts its
+// own worker) go through the default policy, with the same rule: our own
+// origin only. It handles script URLs alone, so HTML and script sinks stay
+// blocked.
+factory?.createPolicy('default', { createScriptURL: (url) => sameOriginScriptUrl(url) })
+
 /** A script URL accepted by `new Worker()` and `serviceWorker.register()`. */
 export function scriptUrl(url: string): string {
   return (policy ? policy.createScriptURL(url) : sameOriginScriptUrl(url)) as string
