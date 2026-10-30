@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { expect, test } from '@playwright/test'
-import { messages, openChat, openSettings, randomUsername, signUp } from './support'
+import { messages, openChat, openSettings, randomUsername, signUp, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 test('interrupted uploads and downloads resume where they stopped (ADR-0025)', async ({ browser, browserName }) => {
@@ -11,8 +11,7 @@ test('interrupted uploads and downloads resume where they stopped (ADR-0025)', a
   const bobUsername = randomUsername()
   const alice = await signUp(browser, 'Alice', randomUsername())
   const bob = await signUp(browser, 'Bob', bobUsername)
-  await alice.getByLabel("Contact's username").fill(bobUsername)
-  await alice.getByRole('button', { name: 'Start chat' }).click()
+  await startChat(alice, bobUsername)
   await alice.getByLabel('Message', { exact: true }).fill('Hello')
   await alice.getByRole('button', { name: 'Send', exact: true }).click()
   await openChat(bob, /Alice/)
@@ -35,7 +34,7 @@ test('interrupted uploads and downloads resume where they stopped (ADR-0025)', a
   const sent = messages(alice).filter({ hasText: 'big.bin' })
   await expect(sent).toContainText('Failed')
   await sent.getByRole('button', { name: 'Retry' }).click()
-  await expect(sent).toContainText(/Sent|Delivered|Read/, { timeout: 30_000 })
+  await expect(sent.getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible({ timeout: 30_000 })
   // Part 0 went once: the retry asked the server what it had.
   expect(parts.sort()).toEqual(['0', '1', '2'])
 
@@ -66,8 +65,7 @@ test('photos download by themselves unless turned off (FR-MED-6)', async ({ brow
   const bobUsername = randomUsername()
   const alice = await signUp(browser, 'Alice', randomUsername())
   const bob = await signUp(browser, 'Bob', bobUsername)
-  await alice.getByLabel("Contact's username").fill(bobUsername)
-  await alice.getByRole('button', { name: 'Start chat' }).click()
+  await startChat(alice, bobUsername)
   await alice.getByLabel('Message', { exact: true }).fill('Hello')
   await alice.getByRole('button', { name: 'Send', exact: true }).click()
   await openChat(bob, /Alice/)

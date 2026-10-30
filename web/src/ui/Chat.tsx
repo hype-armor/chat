@@ -43,15 +43,20 @@ export function Chat({
   onDiagnostics: () => void
 }) {
   const [selected, setSelected] = useState<string>()
-  const [settings, setSettings] = useState(false)
+  const [panel, setPanel] = useState<'chats' | 'settings' | 'chat' | 'group'>('chats')
+  const sidebar = useRef<HTMLElement>(null)
   const setup = useSetup()
   const [calls] = useState(() => new CallController(core))
   useEffect(() => () => calls.dispose(), [calls])
   calls.relayOnly = view.relayCalls
   const conversation = view.conversations.find((c) => c.id === selected)
   const select = (id: string) => {
-    setSettings(false)
+    setPanel('chats')
     setSelected(id)
+  }
+  const backToChats = () => {
+    setPanel('chats')
+    sidebar.current?.querySelector<HTMLButtonElement>('[aria-label="New chat"]')?.focus()
   }
   const requests = view.conversations.filter((c) => c.request)
   const accepted = view.conversations.filter((c) => !c.request)
@@ -64,26 +69,33 @@ export function Chat({
         hidden={showDiagnostics}
         className={`chat-layout ${conversation ? 'has-selection' : ''} ${view.liveSharing.length > 0 ? 'with-banner' : ''}`}
       >
-        <aside className="sidebar">
+        <aside className="sidebar" ref={sidebar}>
           <header className="bar me">
             <Avatar name={view.me.displayName} id={view.me.username} />
             <div className="who">
               <strong>{view.me.displayName}</strong>
-              <div className="muted small">{view.me.username}</div>
             </div>
-            <span className={`connection ${view.connection}`} role="status">
-              {view.connection}
-            </span>
+            <Menu
+              triggerLabel="New chat"
+              triggerContent="✎"
+              items={[
+                { label: 'New chat', onSelect: () => setPanel('chat') },
+                { label: 'New group', onSelect: () => setPanel('group') },
+              ]}
+            />
             <button
               type="button"
               className="icon"
               aria-label="Settings"
-              aria-pressed={settings}
-              onClick={() => setSettings(!settings)}
+              aria-pressed={panel === 'settings'}
+              onClick={() => setPanel(panel === 'settings' ? 'chats' : 'settings')}
             >
               ⚙
             </button>
           </header>
+          <div className={view.connection === 'online' ? 'visually-hidden' : 'connection'} role="status">
+            {view.connection === 'online' ? 'Connected' : view.connection === 'connecting' ? 'Connecting…' : 'Offline'}
+          </div>
           {view.alerts.map((a) => (
             <div key={a.id} className="alert" role="alert">
               <p>{a.text}</p>
@@ -92,14 +104,15 @@ export function Chat({
               </button>
             </div>
           ))}
-          {settings ? (
+          {panel === 'settings' ? (
             <nav className="settings" aria-label="Settings">
               <div className="settings-head">
-                <button type="button" className="link" onClick={() => setSettings(false)}>
+                <button type="button" className="link" onClick={backToChats}>
                   ← Chats
                 </button>
                 <h2>Settings</h2>
               </div>
+              <p className="muted small settings-identity">Your username: {view.me.username}</p>
               <NotificationToggle core={core} />
               <Backup core={core} backup={view.backup} />
               <Invite core={core} />
@@ -116,20 +129,43 @@ export function Chat({
                 </button>
               </section>
             </nav>
+          ) : panel === 'chat' || panel === 'group' ? (
+            <section className="compose-panel" aria-label={panel === 'chat' ? 'New chat' : 'New group'}>
+              <div className="settings-head">
+                <button type="button" className="link" onClick={backToChats}>
+                  ← Back
+                </button>
+                <h2>{panel === 'chat' ? 'New chat' : 'New group'}</h2>
+              </div>
+              {panel === 'chat' ? <NewChat core={core} onStarted={select} /> : <NewGroup core={core} onCreated={select} />}
+            </section>
           ) : (
             <>
               <SetupBanner setup={setup} />
-              <NewChat core={core} onStarted={select} />
-              <NewGroup core={core} onCreated={select} />
-              {requests.length > 0 && (
-                <nav aria-label="Requests">
-                  <h3 className="list-heading small">Message requests</h3>
-                  <ConversationList conversations={requests} selected={selected} onSelect={select} />
-                </nav>
-              )}
               <nav aria-label="Conversations" className="conversation-nav">
+                {requests.length > 0 && (
+                  <details className="message-requests">
+                    <summary>Message requests ({requests.length})</summary>
+                    <nav aria-label="Requests">
+                      <ConversationList conversations={requests} selected={selected} onSelect={select} />
+                    </nav>
+                  </details>
+                )}
                 <ConversationList conversations={accepted} selected={selected} onSelect={select} />
-                {accepted.length === 0 && <p className="muted empty">No conversations yet.</p>}
+                {accepted.length === 0 && (
+                  <div className="empty">
+                    <p className="muted">No conversations yet</p>
+                    <button type="button" onClick={() => setPanel('chat')}>
+                      Start a chat
+                    </button>
+                    <p className="muted small">
+                      Not here yet?{' '}
+                      <button type="button" className="link" onClick={() => setPanel('settings')}>
+                        Invite someone
+                      </button>
+                    </p>
+                  </div>
+                )}
               </nav>
             </>
           )}
@@ -288,6 +324,7 @@ function NewChat({ core, onStarted }: { core: CoreClient; onStarted: (id: string
       <label>
         Contact's username
         <input
+          autoFocus
           value={username}
           onChange={(e) => setUsername(e.target.value)}
           required
@@ -463,33 +500,30 @@ function NewGroup({ core, onCreated }: { core: CoreClient; onCreated: (id: strin
   }
 
   return (
-    <details className="new-group">
-      <summary>New group</summary>
-      <form onSubmit={submit}>
-        <label>
-          Group name
-          <input value={name} onChange={(e) => setName(e.target.value)} required maxLength={64} />
-        </label>
-        <label>
-          Members' usernames
-          <textarea
-            value={usernames}
-            onChange={(e) => setUsernames(e.target.value)}
-            required
-            rows={3}
-            placeholder={'alex.27\nsam.04'}
-          />
-        </label>
-        <button type="submit" disabled={busy}>
-          Create group
-        </button>
-        {error && (
-          <p role="alert" className="error">
-            {error}
-          </p>
-        )}
-      </form>
-    </details>
+    <form className="new-group" onSubmit={submit}>
+      <label>
+        Group name
+        <input autoFocus value={name} onChange={(e) => setName(e.target.value)} required maxLength={64} />
+      </label>
+      <label>
+        Members' usernames
+        <textarea
+          value={usernames}
+          onChange={(e) => setUsernames(e.target.value)}
+          required
+          rows={3}
+          placeholder={'alex.27\nsam.04'}
+        />
+      </label>
+      <button type="submit" disabled={busy}>
+        Create group
+      </button>
+      {error && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
+    </form>
   )
 }
 

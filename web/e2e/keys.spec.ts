@@ -22,7 +22,7 @@ test('a device tops its key packages back up when others use them (roadmap 14)',
 
   // Bob's app reconnects, learns none are left and uploads a fresh batch.
   await bob.reload()
-  await expect(bob.getByRole('status')).toHaveText('online')
+  await expect(bob.getByRole('status')).toHaveText('Connected')
   await expect.poll(claim, { timeout: 10_000 }).toBe(true)
   for (let i = 0; i < 19; i++) expect(await claim(), `claim ${i + 2} of 20`).toBe(true)
 })

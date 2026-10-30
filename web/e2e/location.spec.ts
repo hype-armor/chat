@@ -1,5 +1,5 @@
 import { type Browser, expect, test } from '@playwright/test'
-import { messages, openChat, randomUsername } from './support'
+import { messages, openChat, randomUsername, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -17,7 +17,7 @@ async function signUp(browser: Browser, name: string, username: string, origins:
   await page.getByLabel('Username').fill(username)
   await page.getByLabel('Your name').fill(name)
   await page.getByRole('button', { name: 'Sign up' }).click()
-  await expect(page.getByRole('status')).toHaveText('online')
+  await expect(page.getByRole('status')).toHaveText('Connected')
   return page
 }
 
@@ -31,16 +31,15 @@ test('a location shared once arrives encrypted and maps without third parties (F
   const bobUsername = randomUsername()
   const alice = await signUp(browser, 'Alice', randomUsername(), origins, violations)
   const bob = await signUp(browser, 'Bob', bobUsername, origins, violations)
-  await alice.getByLabel("Contact's username").fill(bobUsername)
-  await alice.getByRole('button', { name: 'Start chat' }).click()
+  await startChat(alice, bobUsername)
 
   await alice.getByRole('button', { name: 'Share your location' }).click()
   const preview = alice.getByRole('dialog', { name: 'Share this location?' })
   await expect(preview).toContainText('48.85840, 2.29450 · ±12 m')
   await preview.getByRole('button', { name: 'Send location' }).click()
-  await expect(messages(alice).filter({ hasText: 'Location' })).toContainText(/Sent|Delivered|Read/)
+  await expect(messages(alice).filter({ hasText: 'Location' }).getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
 
-  await expect(bob.getByRole('button', { name: /Alice/ })).toContainText('Location')
+  await expect(bob.getByRole('button', { name: /Alice/, includeHidden: true })).toContainText('Location')
   await openChat(bob, /Alice/)
   const card = messages(bob).getByTestId('location')
   await expect(card).toContainText('48.85840, 2.29450 · ±12 m')
@@ -64,8 +63,7 @@ test('live location follows the sender and is gone when they stop (FR-LOC-2/3/6)
   const bobUsername = randomUsername()
   const alice = await signUp(browser, 'Alice', randomUsername(), new Set(), [])
   const bob = await signUp(browser, 'Bob', bobUsername, new Set(), [])
-  await alice.getByLabel("Contact's username").fill(bobUsername)
-  await alice.getByRole('button', { name: 'Start chat' }).click()
+  await startChat(alice, bobUsername)
 
   await alice.getByRole('button', { name: 'Share your location' }).click()
   await alice.getByRole('dialog', { name: 'Share this location?' }).getByRole('button', { name: '15 min' }).click()

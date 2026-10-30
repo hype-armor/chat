@@ -1,5 +1,5 @@
 import { type Page, expect, test } from '@playwright/test'
-import { conversationAction, randomUsername, signUp } from './support'
+import { conversationAction, createGroup, randomUsername, signUp, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -18,8 +18,7 @@ test('conversation menu supports keyboard, dismissal, actions and a 320px header
   const username = randomUsername()
   const alice = await signUp(browser, 'Alice', randomUsername())
   await signUp(browser, 'Bob with a long display name', username)
-  await alice.getByLabel("Contact's username").fill(username)
-  await alice.getByRole('button', { name: 'Start chat' }).click()
+  await startChat(alice, username)
   await alice.getByLabel('Message', { exact: true }).fill('Hello Bob')
   await alice.getByRole('button', { name: 'Send', exact: true }).click()
   await expect(alice.getByRole('heading', { name: 'Bob with a long display name' })).toBeVisible()
@@ -88,10 +87,7 @@ test('group title opens info and the menu keeps group actions on one row', async
   const username = randomUsername()
   const ann = await signUp(browser, 'Ann', randomUsername())
   await signUp(browser, 'Ben', username)
-  await ann.getByText('New group').click()
-  await ann.getByLabel('Group name').fill('A group with a very long title')
-  await ann.getByLabel("Members' usernames").fill(username)
-  await ann.getByRole('button', { name: 'Create group' }).click()
+  await createGroup(ann, 'A group with a very long title', [username])
   await expect(ann.getByRole('heading', { name: 'A group with a very long title' })).toBeVisible()
   await expect(ann.locator('.conversation-title')).toHaveAccessibleDescription(/2 people$/)
   await expectSingleRow(ann)

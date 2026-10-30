@@ -15,11 +15,34 @@ export async function signUp(browser: Browser, name: string, username: string, i
   await page.getByLabel('Username').fill(username)
   await page.getByLabel('Your name').fill(name)
   await page.getByRole('button', { name: 'Sign up' }).click()
-  await expect(page.getByRole('status')).toHaveText('online')
+  await expect(page.getByRole('status')).toHaveText('Connected')
   return page
 }
 
 export const messages = (page: Page) => page.getByTestId('message')
+
+/** Opens a compose panel from the sidebar menu. */
+export async function compose(page: Page, action: 'New chat' | 'New group') {
+  await page.getByRole('button', { name: 'New chat', exact: true }).click()
+  await page.getByRole('menuitem', { name: action, exact: true }).click()
+}
+
+/** Submits a 1:1 chat (leaves any validation error visible to the caller). */
+export async function startChat(page: Page, username: string) {
+  await compose(page, 'New chat')
+  await page.getByLabel("Contact's username").fill(username)
+  await page.getByRole('button', { name: 'Start chat', exact: true }).click()
+}
+
+/** Creates and opens a group. */
+export async function createGroup(page: Page, name: string, usernames: string[]) {
+  await compose(page, 'New group')
+  const panel = page.getByRole('region', { name: 'New group', exact: true })
+  await panel.getByLabel('Group name', { exact: true }).fill(name)
+  await panel.getByLabel("Members' usernames").fill(usernames.join('\n'))
+  await panel.getByRole('button', { name: 'Create group', exact: true }).click()
+  await expect(page.getByRole('heading', { name, exact: true })).toBeVisible()
+}
 
 /** Selects a secondary action from the conversation header. */
 export async function conversationAction(page: Page, action: string) {
@@ -52,13 +75,16 @@ export async function linkDevice(browser: Browser, page: Page): Promise<Page> {
   await expect(page.getByText('The new device will be able to read every message')).toBeVisible()
   await page.getByRole('button', { name: 'Link device' }).click()
   await expect(page.getByRole('button', { name: 'Link a new device' })).toBeVisible({ timeout: 30_000 })
-  await expect(laptop.getByRole('status')).toHaveText('online')
+  await expect(laptop.getByRole('status')).toHaveText('Connected')
   await closeSettings(page)
   return laptop
 }
 
 /** Opens a conversation, accepting it if it arrived as a message request. */
 export async function openChat(page: Page, name: RegExp) {
+  const row = page.getByRole('button', { name, includeHidden: true })
+  await expect(row).toBeAttached()
+  if (!(await row.isVisible())) await page.locator('.message-requests > summary').click()
   await page.getByRole('button', { name }).click()
   const accept = page.getByRole('button', { name: 'Accept' })
   if (await accept.isVisible()) await accept.click()

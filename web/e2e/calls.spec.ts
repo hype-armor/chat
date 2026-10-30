@@ -1,5 +1,5 @@
 import { type Browser, type Page, expect, test } from '@playwright/test'
-import { closeSettings, openChat, openSettings, randomUsername } from './support'
+import { closeSettings, openChat, openSettings, randomUsername, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -12,7 +12,7 @@ async function signUp(browser: Browser, browserName: string, name: string, usern
   await page.getByLabel('Username').fill(username)
   await page.getByLabel('Your name').fill(name)
   await page.getByRole('button', { name: 'Sign up' }).click()
-  await expect(page.getByRole('status')).toHaveText('online')
+  await expect(page.getByRole('status')).toHaveText('Connected')
   return page
 }
 
@@ -21,8 +21,7 @@ async function pair(browser: Browser, browserName: string) {
   const bobUsername = randomUsername()
   const alice = await signUp(browser, browserName, 'Alice', randomUsername())
   const bob = await signUp(browser, browserName, 'Bob', bobUsername)
-  await alice.getByLabel("Contact's username").fill(bobUsername)
-  await alice.getByRole('button', { name: 'Start chat' }).click()
+  await startChat(alice, bobUsername)
   await alice.getByLabel('Message', { exact: true }).fill('hi')
   await alice.getByRole('button', { name: 'Send', exact: true }).click()
   await openChat(bob, /Alice/)
@@ -114,8 +113,7 @@ test.describe('calls', () => {
 
   test('the echo bot answers a video call and sends it back, SFrame and all', async ({ browser, browserName }) => {
     const alice = await signUp(browser, browserName, 'Alice', randomUsername())
-    await alice.getByLabel("Contact's username").fill('echo.00')
-    await alice.getByRole('button', { name: 'Start chat' }).click()
+    await startChat(alice, 'echo.00')
     await expect(alice.getByRole('heading', { name: 'Echo (test bot)' })).toBeVisible({ timeout: 15_000 })
 
     await alice.getByRole('button', { name: 'Video call', exact: true }).click()

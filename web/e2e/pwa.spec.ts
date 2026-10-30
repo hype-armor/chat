@@ -34,7 +34,7 @@ test.describe('setup reminders and Settings', () => {
     await page.getByLabel('Username').fill(randomUsername())
     await page.getByLabel('Your name').fill('Pat')
     await page.getByRole('button', { name: 'Sign up' }).click()
-    await expect(page.getByRole('status')).toHaveText('online')
+    await expect(page.getByRole('status')).toHaveText('Connected')
   })
 
   test('shows only one setup reminder, and retains dismissed actions in Settings', async ({ page }) => {
@@ -66,7 +66,7 @@ test.describe('setup reminders and Settings', () => {
     await page.getByRole('region', { name: 'Storage' }).getByRole('button', { name: 'Not now' }).click()
     await page.getByRole('region', { name: 'Install' }).getByRole('button', { name: 'Not now' }).click()
     await page.reload()
-    await expect(page.getByRole('status')).toHaveText('online')
+    await expect(page.getByRole('status')).toHaveText('Connected')
     await expect(page.getByRole('region', { name: /^(Storage|Install)$/ })).toHaveCount(0)
     await page.evaluate(`
       const dismissed = JSON.parse(localStorage.getItem('chat.setup-dismissals'));

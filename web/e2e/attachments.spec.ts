@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { expect, test } from '@playwright/test'
-import { messages, openChat, randomUsername, signUp } from './support'
+import { messages, openChat, randomUsername, signUp, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -23,8 +23,7 @@ test('photos lose their metadata, and files arrive intact', async ({ browser }) 
   const bobUsername = randomUsername()
   const alice = await signUp(browser, 'Alice', randomUsername())
   const bob = await signUp(browser, 'Bob', bobUsername)
-  await alice.getByLabel("Contact's username").fill(bobUsername)
-  await alice.getByRole('button', { name: 'Start chat' }).click()
+  await startChat(alice, bobUsername)
 
   // Runs in the page (a string: this file is type-checked without DOM types).
   const jpeg = Buffer.from(
@@ -47,7 +46,7 @@ test('photos lose their metadata, and files arrive intact', async ({ browser }) 
   const sent = messages(alice).filter({ hasText: 'The view' })
   await expect(sent.or(alice.getByRole('alert'))).toBeVisible()
   expect(await alice.getByRole('alert').allTextContents()).toEqual([])
-  await expect(sent).toContainText('Sent')
+  await expect(sent.getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
   await expect(sent.getByRole('img', { name: 'beach.jpg' })).toBeVisible()
 
   await alice.getByTestId('attach-input').setInputFiles({
@@ -55,9 +54,9 @@ test('photos lose their metadata, and files arrive intact', async ({ browser }) 
     mimeType: 'text/plain',
     buffer: Buffer.from('hello, encrypted file'),
   })
-  await expect(messages(alice).filter({ hasText: 'notes.txt' })).toContainText('Sent')
+  await expect(messages(alice).filter({ hasText: 'notes.txt' }).getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
 
-  await expect(bob.getByRole('button', { name: /Alice/ })).toContainText('File: notes.txt')
+  await expect(bob.getByRole('button', { name: /Alice/, includeHidden: true })).toContainText('File: notes.txt')
   await openChat(bob, /Alice/)
   const received = messages(bob).filter({ hasText: 'The view' })
   await expect(received.getByRole('img', { name: 'beach.jpg' })).toBeVisible()

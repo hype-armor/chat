@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { messages, openChat, openSettings, randomUsername, signUp } from './support'
+import { messages, openChat, openSettings, randomUsername, signUp, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -9,8 +9,7 @@ test('restoring a backup on a wiped browser; contacts add the device back (ADR-0
   const bobUsername = randomUsername()
   const alice = await signUp(browser, 'Alice', aliceUsername)
   const bob = await signUp(browser, 'Bob', bobUsername)
-  await alice.getByLabel("Contact's username").fill(bobUsername)
-  await alice.getByRole('button', { name: 'Start chat' }).click()
+  await startChat(alice, bobUsername)
   await alice.getByLabel('Message', { exact: true }).fill('Before the backup')
   await alice.getByRole('button', { name: 'Send' }).click()
   await openChat(bob, /Alice/)
@@ -36,7 +35,7 @@ test('restoring a backup on a wiped browser; contacts add the device back (ADR-0
   await restored.getByLabel('Username').fill(aliceUsername)
   await restored.getByLabel('Recovery key').fill(recoveryKey.toLowerCase())
   await restored.getByRole('button', { name: 'Restore' }).click()
-  await expect(restored.getByRole('status')).toHaveText('online')
+  await expect(restored.getByRole('status')).toHaveText('Connected')
   await expect(restored.locator('header strong')).toHaveText('Alice')
 
   // History is back; Bob's app adds the new device and messages flow again.

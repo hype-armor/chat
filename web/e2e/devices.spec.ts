@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { linkDevice, messages, openChat, openSettings, randomUsername, signUp } from './support'
+import { linkDevice, messages, openChat, openSettings, randomUsername, signUp, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -8,8 +8,7 @@ test('linking a second device by code, then removing it (ADR-0019)', async ({ br
   const bobUsername = randomUsername()
   const alice = await signUp(browser, 'Alice', aliceUsername)
   const bob = await signUp(browser, 'Bob', bobUsername)
-  await alice.getByLabel("Contact's username").fill(bobUsername)
-  await alice.getByRole('button', { name: 'Start chat' }).click()
+  await startChat(alice, bobUsername)
   await alice.getByLabel('Message').fill('Before linking')
   await alice.getByRole('button', { name: 'Send' }).click()
   await expect(alice.getByRole('heading', { name: 'Bob' })).toBeVisible()
@@ -48,6 +47,6 @@ test('linking a second device by code, then removing it (ADR-0019)', async ({ br
   await expect(alice.getByRole('list', { name: 'Devices' }).getByRole('listitem')).toHaveCount(1)
   await bob.getByLabel('Message').fill('Just you now')
   await bob.getByRole('button', { name: 'Send' }).click()
-  await expect(messages(bob).filter({ hasText: 'Just you now' })).toContainText(/Sent|Delivered|Read/)
+  await expect(messages(bob).filter({ hasText: 'Just you now' }).getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
   await expect(messages(alice).filter({ hasText: 'Just you now' })).toBeVisible()
 })
