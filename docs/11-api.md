@@ -63,7 +63,7 @@ upload, whether or not they were fetched.
 | Method & path | Auth | Body → Response |
 |---------------|------|-----------------|
 | `PUT /v1/backup/key` | ✓ | `{auth_hash}` (base64 SHA-256 of the auth secret derived from the recovery key) → `204`. Turns backups on, or switches keys: an older backup is deleted |
-| `PUT /v1/backup` | ✓ | raw encrypted bytes (≤ 25 MB) → `204`; `409` without a key |
+| `PUT /v1/backup` | ✓ | raw encrypted bytes, `Content-Length` required (≤ 100 MB), kept in the blob store → `204`; `409` without a key |
 | `GET /v1/backup` | ✓ | → the account's backup (raw bytes) or `404` |
 | `POST /v1/backup/delete` | ✓ | → `204`: backups off |
 | `POST /v1/backup/restore` | — | `{username, auth, identity_key}` → `{account_id, device_id, token, username}`. With the right auth secret: deletes the account's devices, registers this one and tells members' open sessions (`DevicesChanged`). `401` for a wrong username or key alike |

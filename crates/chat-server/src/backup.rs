@@ -1,16 +1,22 @@
 //! Encrypted backups and restore (ADR-0022). The server stores the latest
 //! backup blob per account and SHA-256 of an auth secret derived from the
 //! user's recovery key; it can read neither. Restoring proves the auth
-//! secret and replaces the account's devices with a new one.
+//! secret and replaces the account's devices with a new one. Backups live
+//! in the blob store (`backups/{account}/{id}`); each upload is a new
+//! object, and the old one goes once the row points at the new one.
+
+use std::sync::Arc;
 
 use axum::{
     Json,
-    body::Bytes,
+    body::Body,
     extract::State,
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
+use futures_util::TryStreamExt;
+use object_store::{ObjectStore, ObjectStoreExt, PutPayload, path::Path};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -18,13 +24,52 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::{AuthDevice, Registered, create_device, db, normalize_username, parse_identity_key},
-    devices,
+    blobs, devices,
     error::ApiError,
     limits::{self, ClientIp},
 };
 
-/// While backups live in PostgreSQL (Phase 2 item 9 moves them).
-pub const MAX_BACKUP_BYTES: usize = 25 * 1024 * 1024;
+/// History plus photo thumbnails; the same cap as an attachment.
+pub const MAX_BACKUP_BYTES: u64 = 100 * 1024 * 1024;
+
+fn new_object(account: Uuid) -> String {
+    format!("backups/{account}/{}", Uuid::new_v4())
+}
+
+/// Deletes a replaced or abandoned backup object; one already gone is fine.
+pub async fn forget(store: &Arc<dyn ObjectStore>, key: Option<String>) {
+    if let Some(key) = key {
+        match store.delete(&Path::from(key)).await {
+            Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
+            Err(e) => tracing::warn!(error = %e, "deleting an old backup failed"),
+        }
+    }
+}
+
+/// Copies backups made before they moved to the blob store (migration
+/// 0010) out of PostgreSQL. Run at startup; does nothing once done.
+pub async fn move_to_store(db: &sqlx::PgPool, store: &Arc<dyn ObjectStore>) -> anyhow::Result<()> {
+    let old: Vec<(Uuid, Vec<u8>)> =
+        sqlx::query_as("SELECT account_id, blob FROM backups WHERE blob IS NOT NULL")
+            .fetch_all(db)
+            .await?;
+    for (account, blob) in old {
+        let key = new_object(account);
+        let size = blob.len() as i64;
+        store
+            .put(&Path::from(key.clone()), PutPayload::from(blob))
+            .await?;
+        sqlx::query(
+            "UPDATE backups SET object_key = $2, size_bytes = $3, blob = NULL WHERE account_id = $1",
+        )
+        .bind(account)
+        .bind(&key)
+        .bind(size)
+        .execute(db)
+        .await?;
+    }
+    Ok(())
+}
 
 fn secret(raw: &str) -> Result<Vec<u8>, ApiError> {
     STANDARD
@@ -56,38 +101,81 @@ pub async fn set_key(
     Json(req): Json<SetKey>,
 ) -> Result<StatusCode, ApiError> {
     let db = db(&state)?;
+    let store = blobs::store(&state)?;
     let account = account_of(db, device).await?;
+    let auth_hash = secret(&req.auth_hash)?;
+    let mut tx = db.begin().await?;
+    let old: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT object_key FROM backups WHERE account_id = $1 FOR UPDATE")
+            .bind(account)
+            .fetch_optional(&mut *tx)
+            .await?;
     sqlx::query(
         "INSERT INTO backups (account_id, auth_hash) VALUES ($1, $2)
-         ON CONFLICT (account_id) DO UPDATE SET auth_hash = $2, blob = NULL, updated_at = now()",
+         ON CONFLICT (account_id) DO UPDATE
+         SET auth_hash = $2, blob = NULL, object_key = NULL, size_bytes = NULL, updated_at = now()",
     )
     .bind(account)
-    .bind(secret(&req.auth_hash)?)
-    .execute(db)
+    .bind(auth_hash)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
+    forget(store, old.and_then(|(k,)| k)).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `PUT /v1/backup`: replaces the account's backup (encrypted bytes).
+/// `PUT /v1/backup`: replaces the account's backup (encrypted bytes,
+/// `Content-Length` required), streamed into the blob store.
 pub async fn upload(
     State(state): State<AppState>,
     AuthDevice(device): AuthDevice,
-    body: Bytes,
+    headers: HeaderMap,
+    body: Body,
 ) -> Result<StatusCode, ApiError> {
-    if body.is_empty() || body.len() > MAX_BACKUP_BYTES {
-        return Err(ApiError::BadRequest("a backup is 1 byte to 25 MB"));
+    let declared: u64 = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok())
+        .ok_or(ApiError::BadRequest("Content-Length is required"))?;
+    if declared == 0 || declared > MAX_BACKUP_BYTES {
+        return Err(ApiError::BadRequest("a backup is 1 byte to 100 MB"));
     }
     let db = db(&state)?;
+    let store = blobs::store(&state)?;
     let account = account_of(db, device).await?;
-    let updated =
-        sqlx::query("UPDATE backups SET blob = $2, updated_at = now() WHERE account_id = $1")
-            .bind(account)
-            .bind(body.as_ref())
-            .execute(db)
-            .await?;
-    if updated.rows_affected() == 0 {
+    let has_key: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM backups WHERE account_id = $1")
+        .bind(account)
+        .fetch_optional(db)
+        .await?;
+    if has_key.is_none() {
         return Err(ApiError::Conflict("set up a recovery key first"));
     }
+    let key = new_object(account);
+    let size = blobs::stream_to(store, &Path::from(key.clone()), declared, body).await?;
+    // Point the row at the new object, then drop the one it replaced.
+    let mut tx = db.begin().await?;
+    let old: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT object_key FROM backups WHERE account_id = $1 FOR UPDATE")
+            .bind(account)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let Some((old,)) = old else {
+        // Backups were turned off while this one uploaded.
+        tx.rollback().await?;
+        forget(store, Some(key)).await;
+        return Err(ApiError::Conflict("set up a recovery key first"));
+    };
+    sqlx::query(
+        "UPDATE backups SET object_key = $2, size_bytes = $3, blob = NULL, updated_at = now()
+         WHERE account_id = $1",
+    )
+    .bind(account)
+    .bind(&key)
+    .bind(size as i64)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    forget(store, old).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -97,16 +185,27 @@ pub async fn download(
     AuthDevice(device): AuthDevice,
 ) -> Result<impl IntoResponse, ApiError> {
     let db = db(&state)?;
+    let store = blobs::store(&state)?;
     let account = account_of(db, device).await?;
-    let row: Option<(Option<Vec<u8>>,)> =
-        sqlx::query_as("SELECT blob FROM backups WHERE account_id = $1")
+    let row: Option<(Option<String>, Option<i64>)> =
+        sqlx::query_as("SELECT object_key, size_bytes FROM backups WHERE account_id = $1")
             .bind(account)
             .fetch_optional(db)
             .await?;
-    let blob = row
-        .and_then(|(b,)| b)
-        .ok_or(ApiError::NotFound("no backup"))?;
-    Ok(([(header::CONTENT_TYPE, "application/octet-stream")], blob))
+    let Some((Some(key), Some(size))) = row else {
+        return Err(ApiError::NotFound("no backup"));
+    };
+    let object = store
+        .get(&Path::from(key))
+        .await
+        .map_err(|_| ApiError::NotFound("no backup"))?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/octet-stream".to_owned()),
+            (header::CONTENT_LENGTH, size.to_string()),
+        ],
+        Body::from_stream(object.into_stream().map_err(std::io::Error::other)),
+    ))
 }
 
 /// `POST /v1/backup/delete`: turns backups off.
@@ -115,11 +214,14 @@ pub async fn delete(
     AuthDevice(device): AuthDevice,
 ) -> Result<StatusCode, ApiError> {
     let db = db(&state)?;
+    let store = blobs::store(&state)?;
     let account = account_of(db, device).await?;
-    sqlx::query("DELETE FROM backups WHERE account_id = $1")
-        .bind(account)
-        .execute(db)
-        .await?;
+    let old: Option<(Option<String>,)> =
+        sqlx::query_as("DELETE FROM backups WHERE account_id = $1 RETURNING object_key")
+            .bind(account)
+            .fetch_optional(db)
+            .await?;
+    forget(store, old.and_then(|(k,)| k)).await;
     Ok(StatusCode::NO_CONTENT)
 }
 

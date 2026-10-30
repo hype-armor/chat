@@ -1,6 +1,7 @@
 //! Account deletion (FR-ID-9): removes everything the server holds for an
 //! account. Devices, tokens, queued envelopes, key packages, memberships,
-//! links, unused invites and reports about it go by cascade; its username
+//! links, unused invites, reports about it and its backup go (the backup's
+//! object explicitly, the rest by cascade); its username
 //! becomes free. Rate-limit windows naming its devices expire within two
 //! days.
 
@@ -43,11 +44,20 @@ pub async fn delete(
             .fetch_all(&mut *tx)
             .await?;
     let watchers = crate::devices::watchers(&mut tx, account).await?;
+    let backup: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT object_key FROM backups WHERE account_id = $1")
+            .bind(account)
+            .fetch_optional(&mut *tx)
+            .await?;
     sqlx::query("DELETE FROM accounts WHERE account_id = $1")
         .bind(account)
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
+    // The backup row went by cascade; its object goes here.
+    if let Some(store) = &state.blobs {
+        crate::backup::forget(store, backup.and_then(|(k,)| k)).await;
+    }
     for (device,) in devices {
         state.hub.disconnect(&device);
     }

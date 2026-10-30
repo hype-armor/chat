@@ -266,6 +266,8 @@ export class Engine {
   private recent = new RecentIds()
   private ws?: WebSocket
   private connection: ConnectionState = 'offline'
+  /** A link code this device is approving (ADR-0019), until the new device is known. */
+  private approving?: string
   /** Uploads under way, by message id. */
   private inflight = new Set<string>()
   private liveTimer?: ReturnType<typeof setInterval>
@@ -548,17 +550,29 @@ export class Engine {
     if (!code) throw new Error("That isn't a link code from this app")
     if (this.connection !== 'online') throw new Error('You need to be online to link a device')
     await api.linkApprove(account.token, code)
-    const until = Date.now() + LINK_APPROVAL_WAIT_MS
-    while (Date.now() < until) {
-      const { device_id } = await api.linkStatus(account.token, code)
-      if (device_id) {
-        this.state.expectedOwn = [...this.state.expectedOwn, deviceHex(device_id)]
-        await this.syncOwnDevices()
-        return
+    this.approving = code
+    try {
+      const until = Date.now() + LINK_APPROVAL_WAIT_MS
+      while (Date.now() < until) {
+        if (await this.expectLinkedDevice(code)) {
+          await this.syncOwnDevices()
+          return
+        }
+        await new Promise((resolve) => setTimeout(resolve, LINK_POLL_MS))
       }
-      await new Promise((resolve) => setTimeout(resolve, LINK_POLL_MS))
+      throw new Error('The new device did not finish linking; try again')
+    } finally {
+      this.approving = undefined
     }
-    throw new Error('The new device did not finish linking; try again')
+  }
+
+  /** Records the device a link code registered, once it has; true if it has. */
+  private async expectLinkedDevice(code: string): Promise<boolean> {
+    const { device_id } = await api.linkStatus(this.ready().account.token, code)
+    if (!device_id) return false
+    const device = deviceHex(device_id)
+    if (!this.state.expectedOwn.includes(device)) this.state.expectedOwn = [...this.state.expectedOwn, device]
+    return true
   }
 
   async devices(): Promise<DeviceInfo[]> {
@@ -1119,7 +1133,11 @@ export class Engine {
       const added = observeKeys(this.state.keys, account, keys)
       if (added.length === 0) continue
       if (account === me) {
-        if (added.every((k) => this.state.expectedOwn.includes(devices.get(k) ?? ''))) continue
+        const expected = () => added.every((k) => this.state.expectedOwn.includes(devices.get(k) ?? ''))
+        // The device being approved here can join our groups (member device
+        // sync) before the approval loop hears its id: ask now.
+        if (!expected() && this.approving) await this.expectLinkedDevice(this.approving).catch(() => false)
+        if (expected()) continue
         this.state.alerts.push({
           id: toHex(randomId()),
           text: `A new device was added to your account on ${new Date().toLocaleDateString()}. If this wasn't you, remove it in Linked devices.`,
