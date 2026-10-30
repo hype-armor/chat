@@ -3,7 +3,8 @@
 import { GroupBench, core_version, decodeQr, self_test } from './pkg/chat_core.js'
 import { Engine, describeError } from './engine'
 import { mapInfo, tile } from './maps'
-import type { CoreEvent, CoreResponseBody, RequestEnvelope } from './protocol'
+import type { CoreEvent, CoreResponseBody, MediaEnvelope, RequestEnvelope } from './protocol'
+import type { MediaTransformOptions } from './media'
 
 const engine = new Engine((event: CoreEvent) => self.postMessage({ id: 0, event }))
 const started = engine.start()
@@ -161,7 +162,23 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
   }
 }
 
-self.onmessage = async (event: MessageEvent<RequestEnvelope>) => {
+// Call media (ADR-0030): RTCRtpScriptTransform hands encoded frames here.
+self.addEventListener('rtctransform', (event) => {
+  const { transformer } = event as unknown as {
+    transformer: { readable: ReadableStream; writable: WritableStream; options: MediaTransformOptions }
+  }
+  void started
+    .then(() => engine.attachMedia(transformer.readable, transformer.writable, transformer.options))
+    .catch((e) => console.warn('call media transform failed', e))
+})
+
+self.onmessage = async (event: MessageEvent<RequestEnvelope | MediaEnvelope>) => {
+  if ('media' in event.data) {
+    // Chromium's encoded streams, transferred from the page.
+    const { readable, writable, media } = event.data
+    void started.then(() => engine.attachMedia(readable, writable, media))
+    return
+  }
   const { id } = event.data
   let body: CoreResponseBody
   try {

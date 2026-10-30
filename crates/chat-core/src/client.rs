@@ -356,6 +356,27 @@ impl Client {
         Ok((&self.device, conv))
     }
 
+    /// Installs a call's SFrame keys for the conversation's current epoch
+    /// (ADR-0030): this device sends under its own leaf; every other member
+    /// device's key is accepted. Call again when the epoch changes.
+    pub fn install_call_keys(
+        &self,
+        conversation_id: &[u8],
+        call_id: &[u8],
+        keys: &mut crate::call::CallKeys,
+    ) -> Result<()> {
+        let conv = self.conversation(conversation_id)?;
+        let own = conv.own_leaf();
+        let others: Vec<u32> = conv
+            .member_leaves()
+            .into_iter()
+            .map(|(_, leaf)| leaf)
+            .filter(|leaf| *leaf != own)
+            .collect();
+        let base = conv.export_call_key(&self.device, call_id)?;
+        keys.install(&base, conv.epoch(), own, &others)
+    }
+
     fn conversation(&self, id: &[u8]) -> Result<&Conversation> {
         self.conversations
             .get(id)
@@ -417,6 +438,32 @@ mod tests {
         assert!(
             matches!(alice.receive(&env).unwrap(), Event::Message { sender, .. } if sender == b"bob")
         );
+    }
+
+    #[test]
+    fn call_media_keys_agree_through_mls() {
+        use crate::call::CallKeys;
+        let mut alice = Client::new(Device::new(b"alice").unwrap());
+        let mut bob = Client::new(Device::new(b"bob").unwrap());
+        let kp = bob.key_packages(1).unwrap().remove(0);
+        let started = alice.start_conversation(&[&kp], vec![1]).unwrap();
+        let id = started.conversation_id.clone();
+        bob.receive(&started.welcome).unwrap();
+
+        let (mut a, mut b) = (CallKeys::new(), CallKeys::new());
+        alice.install_call_keys(&id, b"call-1", &mut a).unwrap();
+        bob.install_call_keys(&id, b"call-1", &mut b).unwrap();
+        let frame = a.encrypt(b"opus frame", 0).unwrap();
+        assert_eq!(b.decrypt(&frame, 0).unwrap(), b"opus frame");
+        assert_eq!(
+            a.decrypt(&b.encrypt(b"back", 0).unwrap(), 0).unwrap(),
+            b"back"
+        );
+
+        // Another call in the same conversation has other keys.
+        let mut other = CallKeys::new();
+        bob.install_call_keys(&id, b"call-2", &mut other).unwrap();
+        assert!(other.decrypt(&a.encrypt(b"x", 0).unwrap(), 0).is_err());
     }
 
     #[test]

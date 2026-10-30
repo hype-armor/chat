@@ -4,6 +4,7 @@
 
 import init, {
   AttachmentView,
+  CallMedia,
   type CallView,
   CoreClient,
   type LiveLocationView,
@@ -87,6 +88,7 @@ import { DEFAULT_MEDIA, autoDownloads, onMobileData } from './policy'
 import * as transfers from './transfers'
 import { safeLocation } from './maps'
 import { LIVE_DURATIONS_MS, plausibleExpiry, updateDue } from './live'
+import { type MediaTransformOptions, frameTransform } from './media'
 import { CALL_KINDS, type CallEnd, type CallRecord, GIVE_UP_MS, STALE_OFFER_MS, callNotice, safeSignalText } from './calls'
 import { acceptsGroupInfo, designatedCommitter, parseAdmins } from './roles'
 import { SecureStore } from './storage'
@@ -282,6 +284,8 @@ export class Engine {
   /** Calls ringing or running, by call id (ADR-0028); not kept across restarts. */
   private calls = new Map<string, CallRecord>()
   private callTimer?: ReturnType<typeof setInterval>
+  /** SFrame keys of calls with media flowing, by call id (ADR-0030). */
+  private media = new Map<string, { conversationId: string; media: CallMedia; createdAt: number }>()
   /** Downloads under way, by message id. */
   private downloads = new Map<string, Promise<Blob>>()
   private nextRequestId = 1
@@ -1628,6 +1632,55 @@ export class Engine {
     void this.flushOutbox()
   }
 
+  /**
+   * Encrypts (send) or decrypts (receive) one RTP sender's or receiver's
+   * encoded frames with the call's SFrame keys (ADR-0030).
+   */
+  attachMedia(readable: ReadableStream, writable: WritableStream, options: MediaTransformOptions) {
+    const session = this.callMedia(options.conversationId, options.callId)
+    const seal =
+      options.direction === 'send'
+        ? (data: Uint8Array, clear: number) => session.encrypt(data, clear)
+        : (data: Uint8Array, clear: number) => session.decrypt(data, clear)
+    void readable
+      .pipeThrough(frameTransform(options, seal))
+      .pipeTo(writable)
+      .catch(() => undefined)
+  }
+
+  private callMedia(conversationId: string, callId: string): CallMedia {
+    const known = this.media.get(callId)
+    if (known) {
+      if (known.conversationId !== conversationId) throw new Error('call belongs to another conversation')
+      return known.media
+    }
+    const conv = this.state.conversations[conversationId]
+    if (!conv || conv.status || conv.self || conv.peers.length !== 1) throw new Error('Calls work in one-to-one chats')
+    if (!/^[0-9a-f]{32}$/.test(callId)) throw new Error('malformed call id')
+    const media = new CallMedia()
+    this.ready().core.installCallKeys(fromHex(conversationId), fromHex(callId), media)
+    this.media.set(callId, { conversationId, media, createdAt: Date.now() })
+    this.callTimer ??= setInterval(() => void this.sweepCalls(), 15_000)
+    return media
+  }
+
+  /** After an epoch change: calls in the conversation move to the new epoch's keys. */
+  private refreshCallKeys(conversationId: string) {
+    for (const [callId, entry] of this.media) {
+      if (entry.conversationId !== conversationId) continue
+      try {
+        this.core!.installCallKeys(fromHex(conversationId), fromHex(callId), entry.media)
+      } catch (e) {
+        console.warn('updating call keys failed', e)
+      }
+    }
+  }
+
+  private forgetMedia(callId: string) {
+    this.media.get(callId)?.media.free()
+    this.media.delete(callId)
+  }
+
   /** A signal from the other person or another of our devices (under the lock). */
   private async applyCall(conv: Conversation, mine: boolean, device: string, sentAt: number, signal: CallSignal) {
     const now = Date.now()
@@ -1679,6 +1732,7 @@ export class Engine {
   /** Leaves a notice for a call that ended (under the lock). */
   private async endCall(callId: string, end: CallEnd, byMe: boolean) {
     const call = this.calls.get(callId)
+    this.forgetMedia(callId)
     if (!call) return
     this.calls.delete(callId)
     const conv = this.state.conversations[call.conversationId]
@@ -1711,7 +1765,11 @@ export class Engine {
         await this.persist()
       })
     }
-    if (this.calls.size === 0) {
+    // Keys of calls that never got going (e.g. the camera was refused).
+    for (const [callId, entry] of this.media) {
+      if (!this.calls.has(callId) && now - entry.createdAt > GIVE_UP_MS) this.forgetMedia(callId)
+    }
+    if (this.calls.size === 0 && this.media.size === 0) {
       clearInterval(this.callTimer)
       this.callTimer = undefined
     }
@@ -2279,6 +2337,7 @@ export class Engine {
         return
       }
       await this.observeKeysIn(conversationId)
+      this.refreshCallKeys(conversationId)
       if (conv.self) return
       // Introduce ourselves to anyone new.
       if (peers.some((p) => !conv.peers.includes(p))) this.queueProfile(conversationId)
@@ -2500,6 +2559,7 @@ export class Engine {
   private async finishCommit(p: PendingCommit) {
     const conv = this.state.conversations[p.conversationId]
     this.core!.confirmCommit(fromHex(p.conversationId))
+    this.refreshCallKeys(p.conversationId)
     if (conv && !conv.self) conv.peers = this.peersOf(p.conversationId)
     if (conv) await this.observeKeysIn(p.conversationId)
     if (!this.core!.hasPendingProposals(fromHex(p.conversationId))) delete this.state.leaving[p.conversationId]
