@@ -91,9 +91,9 @@ test('composer leaves room for text and supports keyboard menus and multiline dr
   expect(cappedHeight).toBeLessThan(initialHeight * 4)
   await input.fill('line\n'.repeat(20))
   expect((await input.boundingBox())!.height).toBe(cappedHeight)
-  await input.evaluate(`(input) => {
+  await input.evaluate((input) => {
     input.addEventListener('blur', () => { input.dataset.blurred = 'true' }, { once: true })
-  }`)
+  })
   await send.click()
   await expect(input).toBeFocused()
   await expect(input).not.toHaveAttribute('data-blurred')
@@ -136,16 +136,17 @@ test.describe('touch composer', () => {
     await expect(messages(page)).toHaveCount(0)
     await expect(input).toBeFocused()
     // A final focus assertion alone misses blur followed by programmatic re-focus.
-    await input.evaluate(`(input) => {
+    await input.evaluate((input) => {
       input.dataset.blurs = '0'
       input.addEventListener('blur', () => {
         input.dataset.blurs = String(Number(input.dataset.blurs) + 1)
       })
-    }`)
+    })
     await page.getByRole('button', { name: 'Send', exact: true }).tap()
     await expect(messages(page).filter({ hasText: 'Touch draft' }).getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
     await expect(input).toHaveValue('')
     await expect(input).toBeFocused()
+    await expect(input).toHaveAttribute('data-blurs', '0')
     // Approximate the space left by an on-screen keyboard; emulation has no OS keyboard.
     await page.setViewportSize({ width: 360, height: 400 })
     for (let i = 0; i < 6; i++) {

@@ -999,7 +999,7 @@ function Conversation({
           maxLength={4000}
         />
         {draft.length > 0 && !recording && (
-          <button type="submit" disabled={!draft.trim()} onPointerDown={(e) => e.preventDefault()}>
+          <button type="submit" disabled={!draft.trim()} onMouseDown={(e) => e.preventDefault()}>
             Send
           </button>
         )}
