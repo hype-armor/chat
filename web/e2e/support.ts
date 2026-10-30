@@ -21,6 +21,12 @@ export async function signUp(browser: Browser, name: string, username: string, i
 
 export const messages = (page: Page) => page.getByTestId('message')
 
+/** Selects a secondary action from the conversation header. */
+export async function conversationAction(page: Page, action: string) {
+  await page.getByRole('button', { name: 'Conversation menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: action, exact: true }).click()
+}
+
 /** Opens the Settings screen (backup, devices, privacy…). */
 export async function openSettings(page: Page) {
   const button = page.getByRole('button', { name: 'Settings' })
