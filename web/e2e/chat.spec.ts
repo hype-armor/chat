@@ -1,5 +1,5 @@
 import { type Page, expect, test } from '@playwright/test'
-import { messages, openChat, randomUsername, signUp } from './support'
+import { conversationAction, messages, openChat, randomUsername, signUp } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -54,8 +54,11 @@ for (const width of [1280, 390]) {
     const send = async (page: Page, text: string) => {
       await page.getByLabel('Message', { exact: true }).fill(text)
       await page.getByRole('button', { name: 'Send', exact: true }).click()
-      await expect(messages(page).last()).toContainText(text)
-      await expect(messages(page).last()).toContainText(/Sent|Delivered|Read/)
+      // By its text: a message from the other side (e.g. a file still
+      // uploading when this one was sent) may arrive after it.
+      const sent = messages(page).filter({ hasText: text }).last()
+      await expect(sent).toBeVisible()
+      await expect(sent).toContainText(/Sent|Delivered|Read/)
     }
     const expectBottom = async () => {
       await expect.poll(() => viewport.evaluate(
@@ -187,7 +190,7 @@ test('groups: create, talk, and add someone later', async ({ browser }) => {
   await expect(messages(ben)).toHaveText([/Hi team/, /Hello from Cat/])
 
   // Adding Dan needs a commit the server orders; he sees only later messages.
-  await ann.getByRole('button', { name: 'Add people' }).click()
+  await conversationAction(ann, 'Add people')
   await ann.getByLabel('Usernames to add').fill(danUsername)
   await ann.getByRole('button', { name: 'Add', exact: true }).click()
   await expect(ann.getByText('4 people')).toBeVisible()
@@ -216,9 +219,9 @@ test('group admin: rename, promote, remove, and members leaving', async ({ brows
   for (const page of [ben, cat, dee]) await openChat(page, /Club/)
 
   // Only admins can rename.
-  await ben.getByRole('button', { name: 'Group info' }).click()
+  await conversationAction(ben, 'Group info')
   await expect(ben.getByRole('button', { name: 'Rename' })).toHaveCount(0)
-  await ann.getByRole('button', { name: 'Group info' }).click()
+  await conversationAction(ann, 'Group info')
   await ann.getByLabel('Group name', { exact: true }).last().fill('Book club')
   await ann.getByRole('button', { name: 'Rename' }).click()
   await expect(ben.getByRole('heading', { name: 'Book club' })).toBeVisible()
@@ -233,7 +236,7 @@ test('group admin: rename, promote, remove, and members leaving', async ({ brows
   await expect(ann.getByText('3 people')).toBeVisible()
 
   // Dee leaves; Ann (first admin) commits it.
-  await dee.getByRole('button', { name: 'Group info' }).click()
+  await conversationAction(dee, 'Group info')
   await dee.getByRole('button', { name: 'Leave group' }).click()
   await expect(dee.getByText('You left this group.')).toBeVisible()
   await expect(ann.getByText('2 people')).toBeVisible()

@@ -1,4 +1,4 @@
-import { type FormEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { type FormEvent, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { CoreClient } from '../core/client'
 import type { AppView, ChatMessage, ConversationSummary, MemberInfo } from '../core/protocol'
 import { SetupActions, SetupBanner, useSetup } from './Banners'
@@ -6,6 +6,7 @@ import { Devices } from './Devices'
 import { Invite } from './Invite'
 import { Backup } from './Backup'
 import { Avatar } from './Avatar'
+import { Menu, type MenuItem } from './Menu'
 import { Attachment } from './Attachment'
 import { Recorder } from './Recorder'
 import { Media } from './Media'
@@ -560,6 +561,7 @@ function Conversation({
   onBack: () => void
 }) {
   const [panel, setPanel] = useState<'add' | 'info' | 'verify' | 'report'>()
+  const detailsId = useId()
   const [reported, setReported] = useState(false)
   const active = status === 'active'
   const toggle = (p: 'add' | 'info' | 'verify' | 'report') => setPanel((current) => (current === p ? undefined : p))
@@ -574,6 +576,13 @@ function Conversation({
   const previousMessages = useRef<ChatMessage[]>([])
   const [newMessages, setNewMessages] = useState(false)
   const picker = useRef<HTMLInputElement>(null)
+  const menuItems: MenuItem[] = [
+    ...(isGroup ? [{ label: 'Group info', onSelect: () => toggle('info') }] : []),
+    ...(peer ? [{ label: 'Verify safety number', onSelect: () => toggle('verify') }] : []),
+    ...(active ? [{ label: 'Add people', onSelect: () => toggle('add') }] : []),
+    ...(peer ? [{ label: 'Report', onSelect: () => toggle('report') }] : []),
+    ...(peer && !blocked ? [{ label: 'Block', onSelect: () => void core.block(peer), danger: true }] : []),
+  ]
 
   const scrollToBottom = useCallback(() => {
     atBottom.current = true
@@ -671,12 +680,22 @@ function Conversation({
           <button type="button" className="link back" onClick={onBack} aria-label="Back to conversations">
             ←
           </button>
-          <Avatar name={title} id={peer ?? id} />
-          <div className="who">
-            <h2>{title}</h2>
-            {isGroup && <span className="muted small">{memberCount} people</span>}
-          </div>
-          <VerificationBadge status={verification} />
+          <button
+            type="button"
+            className="conversation-title"
+            aria-label={isGroup ? 'Group info' : 'Verify safety number'}
+            aria-describedby={detailsId}
+            onClick={() => toggle(isGroup ? 'info' : 'verify')}
+          >
+            <Avatar name={title} id={peer ?? id} />
+            <span className="who" id={detailsId}>
+              <span className="conversation-name" role="heading" aria-level={2}>
+                {title}
+              </span>
+              {isGroup && <span className="muted small">{memberCount} people</span>}
+              <VerificationBadge status={verification} />
+            </span>
+          </button>
         </div>
         <div className="header-actions">
           {peer && active && !blocked && !request && (
@@ -699,31 +718,7 @@ function Conversation({
               </button>
             </>
           )}
-          {peer && (
-            <button type="button" className="link" onClick={() => toggle('verify')}>
-              {panel === 'verify' ? 'Close' : 'Verify'}
-            </button>
-          )}
-          {peer && (
-            <button type="button" className="link" onClick={() => toggle('report')}>
-              {panel === 'report' ? 'Cancel' : 'Report'}
-            </button>
-          )}
-          {peer && !blocked && (
-            <button type="button" className="link danger" onClick={() => void core.block(peer)}>
-              Block
-            </button>
-          )}
-          {active && (
-            <button type="button" className="link" onClick={() => toggle('add')}>
-              {panel === 'add' ? 'Cancel' : 'Add people'}
-            </button>
-          )}
-          {isGroup && (
-            <button type="button" className="link" onClick={() => toggle('info')}>
-              {panel === 'info' ? 'Close' : 'Group info'}
-            </button>
-          )}
+          <Menu key={id} triggerLabel="Conversation menu" triggerContent="⋮" items={menuItems} />
         </div>
       </header>
       {panel === 'add' && active && <AddPeople core={core} id={id} onDone={() => setPanel(undefined)} />}

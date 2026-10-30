@@ -7,12 +7,15 @@
 //!   invite code, needed once in invite-only mode;
 //! - `ECHO_STATE_DIR`: where its account and keys are kept (default `./echo-state`);
 //! - `ECHO_HEALTH_BIND`: optional address answering `200` while connected
-//!   (readiness checks), e.g. `127.0.0.1:8090`.
+//!   (readiness checks), e.g. `127.0.0.1:8090`;
+//! - `ECHO_CALL_IP`: the address callers' browsers reach for call media
+//!   (default: this machine's default-route address).
 //!
 //! For development and testing only: its keys live on the machine it runs
 //! on, and it reads whatever is sent to it.
 
 use std::{
+    collections::HashMap,
     path::PathBuf,
     sync::{
         Arc,
@@ -24,14 +27,20 @@ use std::{
 use anyhow::{Context, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use chat_core::{client::Client, mls::PendingDevice};
-use chat_echo::{DISPLAY_NAME, Echo};
+use chat_echo::{
+    CallCommand, DISPLAY_NAME, Echo, Outgoing,
+    media::{self, MediaCommand, MediaEvent},
+};
 use chat_proto::v1::{
     Ack, Authenticate, ClientFrame, Ping, SendEnvelope, ServerFrame, client_frame, server_frame,
 };
 use futures_util::{SinkExt, StreamExt};
 use prost::Message as _;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    sync::mpsc,
+};
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
@@ -98,6 +107,7 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(health(listener, connected.clone()));
     }
     tracing::warn!("echo bot for development and testing: it reads what it is sent");
+    media::init();
     let http = reqwest::Client::new();
     let mut backoff = Duration::from_secs(1);
     loop {
@@ -220,6 +230,25 @@ async fn upload_key_packages(
     Ok(())
 }
 
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
+}
+
+fn send_frame(next_id: &mut u64, out: Outgoing) -> Message {
+    *next_id += 1;
+    frame(
+        *next_id,
+        client_frame::Body::Send(SendEnvelope {
+            envelope: Some(out.envelope),
+            recipient_devices: out.recipients,
+            silent: out.silent,
+            ..SendEnvelope::default()
+        }),
+    )
+}
+
 fn frame(request_id: u64, body: client_frame::Body) -> Message {
     Message::Binary(
         ClientFrame {
@@ -256,6 +285,10 @@ async fn run(
     ))
     .await?;
     let mut ping = tokio::time::interval(Duration::from_secs(25));
+    // Calls being echoed; dropping a sender ends that call's media task.
+    let mut calls: HashMap<Vec<u8>, mpsc::Sender<MediaCommand>> = HashMap::new();
+    let (media_tx, mut media_rx) = mpsc::unbounded_channel();
+    let host = media::host_ip();
     loop {
         let msg = tokio::select! {
             msg = stream.next() => match msg {
@@ -265,6 +298,24 @@ async fn run(
             _ = ping.tick() => {
                 next_id += 1;
                 sink.send(frame(next_id, client_frame::Body::Ping(Ping {}))).await?;
+                continue;
+            }
+            Some(event) = media_rx.recv() => {
+                let out = match event {
+                    MediaEvent::Answer { call_id, sdp } => echo.answer(&call_id, sdp, now_ms()),
+                    MediaEvent::Ended { call_id } => {
+                        calls.remove(&call_id);
+                        echo.hang_up(&call_id, now_ms())
+                    }
+                };
+                match out {
+                    Ok(Some(out)) => {
+                        save(config, echo.client()).await?;
+                        sink.send(send_frame(&mut next_id, out)).await?;
+                    }
+                    Ok(None) => {}
+                    Err(e) => tracing::warn!("call signalling failed: {e}"),
+                }
                 continue;
             }
         };
@@ -283,27 +334,44 @@ async fn run(
                 }
             }
             Some(server_frame::Body::Deliver(env)) => {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)?
-                    .as_millis() as u64;
-                let replies = echo.handle(&env, now).unwrap_or_else(|e| {
+                let replies = echo.handle(&env, now_ms()).unwrap_or_else(|e| {
                     tracing::warn!("could not process a message: {e}");
                     Vec::new()
                 });
                 // Keys first, then replies, then the ack (the server deletes on ack).
                 save(config, echo.client()).await?;
                 for out in replies {
-                    next_id += 1;
-                    sink.send(frame(
-                        next_id,
-                        client_frame::Body::Send(SendEnvelope {
-                            envelope: Some(out.envelope),
-                            recipient_devices: out.recipients,
-                            silent: out.silent,
-                            ..SendEnvelope::default()
-                        }),
-                    ))
-                    .await?;
+                    sink.send(send_frame(&mut next_id, out)).await?;
+                }
+                for command in echo.take_call_commands() {
+                    match command {
+                        CallCommand::Start {
+                            call_id,
+                            offer,
+                            keys,
+                        } => {
+                            let (tx, rx) = mpsc::channel(32);
+                            calls.insert(call_id.clone(), tx);
+                            tokio::spawn(media::run_call(
+                                call_id,
+                                offer,
+                                keys,
+                                host,
+                                rx,
+                                media_tx.clone(),
+                            ));
+                        }
+                        CallCommand::Candidate { call_id, candidate } => {
+                            if let Some(tx) = calls.get(&call_id) {
+                                let _ = tx.try_send(MediaCommand::Candidate(candidate));
+                            }
+                        }
+                        CallCommand::Stop { call_id } => {
+                            if let Some(tx) = calls.remove(&call_id) {
+                                let _ = tx.try_send(MediaCommand::Stop);
+                            }
+                        }
+                    }
                 }
                 sink.send(frame(
                     0,

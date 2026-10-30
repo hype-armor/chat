@@ -206,6 +206,7 @@ form {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
 }
 
 .back {
@@ -813,9 +814,9 @@ button.icon[aria-pressed='true'] {
   grid-area: when;
 }
 
-/* Conversation header: who on one row, actions on the next (phones). */
+/* Keep the conversation header on one row, even on narrow phones. */
 .conversation-bar {
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .title-row {
@@ -823,22 +824,73 @@ button.icon[aria-pressed='true'] {
   align-items: center;
   gap: 0.5rem;
   flex: 1;
-  min-width: 12rem;
+  min-width: 0;
+}
+
+button.conversation-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
+}
+
+.conversation-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 1.1rem;
+  font-weight: 600;
 }
 
 .header-actions {
   display: flex;
+  flex: none;
   gap: 0.125rem;
-  overflow-x: auto;
   white-space: nowrap;
-  scrollbar-width: none;
 }
 
-@media (max-width: 40rem) {
-  .header-actions {
-    flex-basis: 100%;
-    margin: 0 -0.5rem -0.25rem;
-  }
+.menu {
+  position: relative;
+}
+
+.menu-items {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  right: 0;
+  z-index: 10;
+  display: grid;
+  width: max-content;
+  max-width: calc(100vw - 2rem);
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  box-shadow: 0 0.25rem 1rem #0003;
+}
+
+.menu-items button {
+  background: none;
+  color: var(--fg);
+  text-align: left;
+  white-space: normal;
+}
+
+.menu-items button:hover,
+.menu-items button:focus-visible {
+  background: var(--theirs);
+}
+
+.menu-items button.danger {
+  color: var(--danger);
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  margin-top: 0.25rem;
 }
 
 /* Our own bubbles: secondary text and links stay readable on blue. */

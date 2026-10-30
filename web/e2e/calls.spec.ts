@@ -111,4 +111,21 @@ test.describe('calls', () => {
     await alice.getByRole('button', { name: 'Video call', exact: true }).click()
     await expect(alice.getByRole('dialog', { name: 'Call with Bob' })).toContainText("can't encrypt call media")
   })
+
+  test('the echo bot answers a video call and sends it back, SFrame and all', async ({ browser, browserName }) => {
+    const alice = await signUp(browser, browserName, 'Alice', randomUsername())
+    await alice.getByLabel("Contact's username").fill('echo.00')
+    await alice.getByRole('button', { name: 'Start chat' }).click()
+    await expect(alice.getByRole('heading', { name: 'Echo (test bot)' })).toBeVisible({ timeout: 15_000 })
+
+    await alice.getByRole('button', { name: 'Video call', exact: true }).click()
+    await expect(alice.locator('.call-status')).toHaveText(/^\d+:\d\d$/, { timeout: 20_000 })
+    // Alice's own (fake) camera, decrypted by the bot, re-encrypted under its key and decrypted here.
+    const video = alice.getByLabel("Echo (test bot)'s video")
+    await expect
+      .poll(() => video.evaluate((v) => (v as { videoWidth: number }).videoWidth), { timeout: 20_000 })
+      .toBeGreaterThan(0)
+    await alice.getByRole('button', { name: 'Hang up' }).click()
+    await expect(alice.getByTestId('notice').filter({ hasText: /🎥 Video call · \d+:\d\d/ })).toBeVisible()
+  })
 })
