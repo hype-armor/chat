@@ -61,6 +61,11 @@ web:
   replicaCount: 1
   # Extra CSP connect-src origins, e.g. the LiveKit signalling URL.
   cspConnectExtra: "wss://rtc.chat.example.com"
+  # Map tiles (ADR-0026): a directory holding basemap.pmtiles, from a PVC
+  # or (single-node k3s) a host directory. Unset: no map, coordinates only.
+  tiles:
+    existingClaim: ""
+    hostPath: ""
   resources:
     requests: { cpu: 20m, memory: 32Mi }
     limits: { memory: 128Mi }

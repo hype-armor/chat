@@ -46,6 +46,10 @@
   vector tiles in a single file, served by our server or any self-hoster
   with HTTP range requests). Regions can be cached in OPFS for offline
   mode.
+- **How it's served (ADR-0026):** one `basemap.pmtiles` file on the web
+  pod at `/tiles/`. The core worker reads tiles by range for the page's map
+  (a `chat://` protocol), so the page fetches no map data itself. Label
+  layers wait for self-hosted glyphs.
 - Reverse geocoding (place names) is done by the **sender** and sent inside
   the encrypted message, or skipped.
 - Persistent UI indicator during live sharing (FR-LOC-6); OS-level

@@ -2,6 +2,7 @@
 // thread (docs/03-architecture.md §3).
 import { GroupBench, core_version, decodeQr, self_test } from './pkg/chat_core.js'
 import { Engine, describeError } from './engine'
+import { mapInfo, tile } from './maps'
 import type { CoreEvent, CoreResponseBody, RequestEnvelope } from './protocol'
 
 const engine = new Engine((event: CoreEvent) => self.postMessage({ id: 0, event }))
@@ -48,6 +49,15 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
     case 'sendText':
       await engine.sendText(request.conversationId, request.text)
       return { type: 'ok' }
+    case 'sendLocation':
+      await engine.sendLocation(request.conversationId, request.location)
+      return { type: 'ok' }
+    case 'mapInfo':
+      return { type: 'mapInfo', info: await mapInfo() }
+    case 'tile': {
+      const data = await tile(request.z, request.x, request.y)
+      return { type: 'tile', data: data as Uint8Array<ArrayBuffer> | undefined }
+    }
     case 'sendFile':
       await engine.sendFile(request.conversationId, request.file, request.caption, request.media)
       return { type: 'ok' }

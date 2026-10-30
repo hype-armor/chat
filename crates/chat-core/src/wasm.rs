@@ -2,8 +2,8 @@
 
 use chat_proto::v1::{
     Ack, Attachment, Authenticate, ClientFrame, Content, ContentType, DeviceSync, Envelope,
-    GroupInfo, Ping, Profile, Receipt, SendEnvelope, ServerFrame, Text, client_frame, content,
-    receipt, server_frame,
+    GroupInfo, Location, Ping, Profile, Receipt, SendEnvelope, ServerFrame, Text, client_frame,
+    content, receipt, server_frame,
 };
 use js_sys::{Array, Uint8Array};
 use prost::Message;
@@ -206,6 +206,20 @@ pub struct EventView {
     pub receipt_ids: Vec<u8>,
     #[wasm_bindgen(getter_with_clone)]
     pub attachment: Option<AttachmentView>,
+    #[wasm_bindgen(getter_with_clone)]
+    pub location: Option<LocationView>,
+}
+
+/// A `Location` message body.
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct LocationView {
+    pub latitude: f64,
+    pub longitude: f64,
+    #[wasm_bindgen(js_name = accuracyM)]
+    pub accuracy_m: f32,
+    #[wasm_bindgen(getter_with_clone)]
+    pub label: String,
 }
 
 impl EventView {
@@ -223,6 +237,7 @@ impl EventView {
             receipt_kind: None,
             receipt_ids: Vec::new(),
             attachment: None,
+            location: None,
         }
     }
 }
@@ -615,6 +630,32 @@ impl CoreClient {
         )
     }
 
+    /// Returns the encoded `Envelope`.
+    #[wasm_bindgen(js_name = sendLocation)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn send_location(
+        &mut self,
+        conversation_id: &[u8],
+        latitude: f64,
+        longitude: f64,
+        accuracy_m: f32,
+        label: String,
+        sent_at_ms: f64,
+        message_id: Vec<u8>,
+    ) -> Result<Vec<u8>, JsError> {
+        self.send(
+            conversation_id,
+            sent_at_ms,
+            content::Body::Location(Location {
+                latitude,
+                longitude,
+                accuracy_m,
+                label,
+            }),
+            message_id,
+        )
+    }
+
     #[wasm_bindgen(js_name = sendProfile)]
     pub fn send_profile(
         &mut self,
@@ -695,6 +736,14 @@ impl CoreClient {
                     }
                     Some(content::Body::DeviceSync(d)) => view.device_sync = Some(d.state),
                     Some(content::Body::Attachment(a)) => view.attachment = Some(a.into()),
+                    Some(content::Body::Location(l)) => {
+                        view.location = Some(LocationView {
+                            latitude: l.latitude,
+                            longitude: l.longitude,
+                            accuracy_m: l.accuracy_m,
+                            label: l.label,
+                        })
+                    }
                     Some(content::Body::Receipt(r)) => {
                         view.receipt_kind =
                             Some(u8::from(r.kind == i32::from(receipt::Kind::Read)));

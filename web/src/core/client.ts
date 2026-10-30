@@ -11,6 +11,7 @@ import type {
   DeviceInfo,
   InviteOffer,
   LinkOffer,
+  LocationInfo,
   MediaInfo,
   MediaSettings,
   ResponseEnvelope,
@@ -18,6 +19,7 @@ import type {
   BlockedContact,
   ReportReason,
 } from './protocol'
+import type { MapInfo } from './maps'
 import workerUrl from './worker.ts?worker&url'
 
 /** The subset of `Worker` the client uses, so tests can substitute a fake. */
@@ -157,6 +159,20 @@ export class CoreClient {
   }
 
   /** Re-sends a message that failed. */
+  async sendLocation(conversationId: string, location: LocationInfo) {
+    expect(await this.call({ type: 'sendLocation', conversationId, location }), 'ok')
+  }
+
+  /** Whether the server has a basemap (ADR-0026). */
+  async mapInfo(): Promise<MapInfo> {
+    return expect(await this.call({ type: 'mapInfo' }), 'mapInfo').info
+  }
+
+  /** One basemap tile, fetched by the core worker. */
+  async tile(z: number, x: number, y: number): Promise<Uint8Array<ArrayBuffer> | undefined> {
+    return expect(await this.call({ type: 'tile', z, x, y }), 'tile').data
+  }
+
   /** Sends a photo or file; `caption` may be empty. */
   async sendFile(conversationId: string, file: File, caption: string, media?: MediaInfo) {
     expect(await this.call({ type: 'sendFile', conversationId, file, caption, media }), 'ok')
