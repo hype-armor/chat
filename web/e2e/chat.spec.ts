@@ -59,17 +59,15 @@ for (const width of [1280, 390]) {
     }
     const expectBottom = async () => {
       await expect.poll(() => viewport.evaluate(
-        '(list) => list.scrollHeight - list.scrollTop - list.clientHeight',
+        (list) => list.scrollHeight - list.scrollTop - list.clientHeight,
       )).toBeLessThanOrEqual(1)
       await expect(messages(alice).last()).toBeInViewport({ ratio: 1 })
       await expect(pill).toHaveCount(0)
     }
     const scrollUp = async () => {
-      await viewport.evaluate(`async (list) => {
-        list.scrollTop = 0
-        await new Promise(requestAnimationFrame)
-        await new Promise(requestAnimationFrame)
-      }`)
+      await viewport.evaluate((list) => { list.scrollTop = 0 })
+      await alice.evaluate('new Promise(requestAnimationFrame)')
+      await alice.evaluate('new Promise(requestAnimationFrame)')
       await expect(messages(alice).first()).toBeInViewport()
     }
 
@@ -77,7 +75,7 @@ for (const width of [1280, 390]) {
     await alice.getByRole('button', { name: 'Start chat' }).click()
     for (let i = 0; i < 24; i++) await send(alice, `History ${i}`)
     await expect.poll(() => viewport.evaluate(
-      '(list) => list.scrollHeight - list.clientHeight',
+      (list) => list.scrollHeight - list.clientHeight,
     )).toBeGreaterThan(300)
     await expectBottom()
 
@@ -87,28 +85,28 @@ for (const width of [1280, 390]) {
     await expectBottom()
 
     // Delayed content growth must pin even without a new message or core event.
-    await messages(alice).last().evaluate('(message) => { message.style.paddingBottom = "240px" }')
+    await messages(alice).last().evaluate((message) => { message.style.paddingBottom = '240px' })
     await expectBottom()
 
     await scrollUp()
-    const position = await viewport.evaluate('(list) => list.scrollTop')
+    const position = await viewport.evaluate((list) => list.scrollTop)
     await send(bob, 'Arrived while reading history')
     await expect(pill).toBeVisible()
-    await expect.poll(() => viewport.evaluate('(list) => list.scrollTop')).toBe(position)
+    await expect.poll(() => viewport.evaluate((list) => list.scrollTop)).toBe(position)
     await expect(messages(alice).last()).not.toBeInViewport()
-    await messages(alice).last().evaluate('(message) => { message.style.paddingBottom = "240px" }')
+    await messages(alice).last().evaluate((message) => { message.style.paddingBottom = '240px' })
     await alice.evaluate('new Promise(requestAnimationFrame)')
-    expect(await viewport.evaluate('(list) => list.scrollTop')).toBe(position)
+    expect(await viewport.evaluate((list) => list.scrollTop)).toBe(position)
     await pill.click()
     await expectBottom()
 
     await scrollUp()
     await send(bob, 'Growth during a pending scroll')
     await expect(pill).toBeVisible()
-    await pill.evaluate(`(button) => {
-      button.click()
+    await alice.evaluate(`(() => {
+      document.querySelector('.new-messages button').click()
       document.querySelector('.messages li:last-child').style.paddingBottom = '320px'
-    }`)
+    })()`)
     await expectBottom()
 
     await scrollUp()
@@ -124,11 +122,11 @@ for (const width of [1280, 390]) {
     await expectBottom()
 
     // Being close to the bottom counts as pinned.
-    await viewport.evaluate(`async (list) => {
+    await viewport.evaluate((list) => {
       list.scrollTop = list.scrollHeight - list.clientHeight - 60
-      await new Promise(requestAnimationFrame)
-      await new Promise(requestAnimationFrame)
-    }`)
+    })
+    await alice.evaluate('new Promise(requestAnimationFrame)')
+    await alice.evaluate('new Promise(requestAnimationFrame)')
     await send(bob, 'Arrived near the bottom')
     await expect(messages(alice).last()).toContainText('Arrived near the bottom')
     await expectBottom()
