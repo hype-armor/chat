@@ -210,7 +210,6 @@ form {
 .messages-viewport {
   min-height: 0;
   overflow-y: auto;
-  overflow-anchor: none;
   flex: 1;
 }
 

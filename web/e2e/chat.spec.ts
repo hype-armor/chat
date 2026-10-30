@@ -103,6 +103,15 @@ for (const width of [1280, 390]) {
     await expectBottom()
 
     await scrollUp()
+    await send(bob, 'Growth during a pending scroll')
+    await expect(pill).toBeVisible()
+    await pill.evaluate(`(button) => {
+      button.click()
+      document.querySelector('.messages li:last-child').style.paddingBottom = '320px'
+    }`)
+    await expectBottom()
+
+    await scrollUp()
     await send(alice, 'Sending from history')
     await expectBottom()
     await scrollUp()

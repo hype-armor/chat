@@ -552,6 +552,7 @@ function Conversation({
   const viewport = useRef<HTMLDivElement>(null)
   const content = useRef<HTMLOListElement>(null)
   const atBottom = useRef(true)
+  const lastScrollTop = useRef(0)
   const previousMessages = useRef<ChatMessage[]>([])
   const [newMessages, setNewMessages] = useState(false)
   const picker = useRef<HTMLInputElement>(null)
@@ -559,12 +560,18 @@ function Conversation({
   const scrollToBottom = useCallback(() => {
     atBottom.current = true
     setNewMessages(false)
-    if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight
+    if (viewport.current) {
+      viewport.current.scrollTop = viewport.current.scrollHeight
+      lastScrollTop.current = viewport.current.scrollTop
+    }
   }, [])
 
   const onScroll = () => {
     const list = viewport.current
     if (!list) return
+    // A queued event from our own scroll must not unpin newly grown content.
+    if (list.scrollTop === lastScrollTop.current) return
+    lastScrollTop.current = list.scrollTop
     atBottom.current = list.scrollHeight - list.scrollTop - list.clientHeight <= 80
     if (atBottom.current) setNewMessages(false)
   }
