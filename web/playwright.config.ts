@@ -70,6 +70,10 @@ export default defineConfig({
             name: 'firefox',
             use: {
               ...devices['Desktop Firefox'],
+              // Playwright's Firefox gathers no ICE candidates on pages served
+              // from the name "localhost" (its profile routes localhost
+              // specially); the loopback address works.
+              baseURL: 'http://127.0.0.1:4173',
               launchOptions: {
                 firefoxUserPrefs: {
                   'media.navigator.streams.fake': true,
