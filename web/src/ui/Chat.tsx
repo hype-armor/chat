@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useRef, useState } from 'react'
+import { type FormEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CoreClient } from '../core/client'
 import type { AppView, ChatMessage, ConversationSummary, MemberInfo } from '../core/protocol'
 import { SetupActions, SetupBanner, useSetup } from './Banners'
@@ -135,6 +135,7 @@ export function Chat({
         </aside>
         {conversation ? (
           <Conversation
+            key={conversation.id}
             core={core}
             calls={calls}
             id={conversation.id}
@@ -566,8 +567,32 @@ function Conversation({
   const [draft, setDraft] = useState('')
   const [attaching, setAttaching] = useState(false)
   const [attachError, setAttachError] = useState<string>()
-  const end = useRef<HTMLDivElement>(null)
+  const viewport = useRef<HTMLDivElement>(null)
+  const content = useRef<HTMLOListElement>(null)
+  const atBottom = useRef(true)
+  const lastScrollTop = useRef(0)
+  const previousMessages = useRef<ChatMessage[]>([])
+  const [newMessages, setNewMessages] = useState(false)
   const picker = useRef<HTMLInputElement>(null)
+
+  const scrollToBottom = useCallback(() => {
+    atBottom.current = true
+    setNewMessages(false)
+    if (viewport.current) {
+      viewport.current.scrollTop = viewport.current.scrollHeight
+      lastScrollTop.current = viewport.current.scrollTop
+    }
+  }, [])
+
+  const onScroll = useCallback(() => {
+    const list = viewport.current
+    if (!list) return
+    // A queued event from our own scroll must not unpin newly grown content.
+    if (list.scrollTop === lastScrollTop.current) return
+    lastScrollTop.current = list.scrollTop
+    atBottom.current = list.scrollHeight - list.scrollTop - list.clientHeight <= 80
+    if (atBottom.current) setNewMessages(false)
+  }, [])
 
   useEffect(() => {
     let live = true
@@ -591,11 +616,28 @@ function Conversation({
     return () => document.removeEventListener('visibilitychange', mark)
   }, [core, id, messages, request])
 
-  useEffect(() => {
-    // Block body: scrollIntoView may return a Promise, which React would
-    // mistake for an effect cleanup function.
-    end.current?.scrollIntoView({ block: 'end' })
-  }, [messages.length])
+  useLayoutEffect(() => {
+    onScroll()
+    const previousIds = new Set(previousMessages.current.map((m) => m.id))
+    const added = messages.filter((m) => !previousIds.has(m.id))
+    previousMessages.current = messages
+    if (atBottom.current || added.some((m) => m.from === 'me')) {
+      scrollToBottom()
+    } else if (added.length > 0) {
+      setNewMessages(true)
+    }
+  }, [messages, onScroll, scrollToBottom])
+
+  useLayoutEffect(() => {
+    const observer = new ResizeObserver(() => {
+      onScroll()
+      if (atBottom.current) scrollToBottom()
+    })
+    // The list grows with loaded media; the viewport can shrink as panels open.
+    observer.observe(content.current!)
+    observer.observe(viewport.current!)
+    return () => observer.disconnect()
+  }, [onScroll, scrollToBottom])
 
   const send = async (e: FormEvent) => {
     e.preventDefault()
@@ -747,45 +789,46 @@ function Conversation({
         />
       )}
       {panel === 'info' && <GroupInfo core={core} id={id} title={title} amAdmin={amAdmin && active} active={active} />}
-      <ol className="messages">
-        {messages.map((m) =>
-          m.kind === 'notice' ? (
-            <li key={m.id} className="notice-msg small" data-testid="notice">
-              {m.text}
-            </li>
-          ) : (
-            <li key={m.id} className={m.from === 'me' ? 'mine' : 'theirs'} data-testid="message">
-              {isGroup && m.from !== 'me' && <span className="sender small">{m.fromName}</span>}
-              {m.file && (
-                <Attachment
-                  core={core}
-                  conversationId={id}
-                  messageId={m.id}
-                  file={m.file}
-                  sending={m.status === 'sending'}
-                />
-              )}
-              {m.location && <LocationCard core={core} location={m.location} />}
-              {m.live && <LiveCard core={core} conversationId={id} message={m} live={m.live} />}
-              {m.text && <span className="text">{m.text}</span>}
-              <span className="meta small">
-                {new Date(m.sentAt).toLocaleTimeString([], {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })}
-                {STATUS_LABEL[m.status] && ` · ${STATUS_LABEL[m.status]}`}
-                {m.status === 'failed' && m.error && `: ${m.error}`}
-              </span>
-              {m.status === 'failed' && active && (
-                <button type="button" className="link small" onClick={() => void core.retryMessage(id, m.id)}>
-                  Retry
-                </button>
-              )}
-            </li>
-          ),
-        )}
-      </ol>
-      <div ref={end} />
+      <div className="messages-viewport" ref={viewport} onScroll={onScroll}>
+        <ol className="messages" ref={content}>
+          {messages.map((m) =>
+            m.kind === 'notice' ? (
+              <li key={m.id} className="notice-msg small" data-testid="notice">
+                {m.text}
+              </li>
+            ) : (
+              <li key={m.id} className={m.from === 'me' ? 'mine' : 'theirs'} data-testid="message">
+                {isGroup && m.from !== 'me' && <span className="sender small">{m.fromName}</span>}
+                {m.file && (
+                  <Attachment
+                    core={core}
+                    conversationId={id}
+                    messageId={m.id}
+                    file={m.file}
+                    sending={m.status === 'sending'}
+                  />
+                )}
+                {m.location && <LocationCard core={core} location={m.location} />}
+                {m.live && <LiveCard core={core} conversationId={id} message={m} live={m.live} />}
+                {m.text && <span className="text">{m.text}</span>}
+                <span className="meta small">
+                  {new Date(m.sentAt).toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}
+                  {STATUS_LABEL[m.status] && ` · ${STATUS_LABEL[m.status]}`}
+                  {m.status === 'failed' && m.error && `: ${m.error}`}
+                </span>
+                {m.status === 'failed' && active && (
+                  <button type="button" className="link small" onClick={() => void core.retryMessage(id, m.id)}>
+                    Retry
+                  </button>
+                )}
+              </li>
+            ),
+          )}
+        </ol>
+      </div>
       {!active && (
         <p className="notice" role="note">
           {status === 'restoring'
@@ -800,6 +843,13 @@ function Conversation({
           {attachError}
         </p>
       )}
+      <div className="new-messages">
+        {newMessages && (
+          <button type="button" onClick={scrollToBottom}>
+            ↓ New messages
+          </button>
+        )}
+      </div>
       <form className="composer" onSubmit={send} hidden={!active || blocked || request}>
         <input
           ref={picker}
