@@ -9,7 +9,9 @@
 //! - `ECHO_HEALTH_BIND`: optional address answering `200` while connected
 //!   (readiness checks), e.g. `127.0.0.1:8090`;
 //! - `ECHO_CALL_IP`: the address callers' browsers reach for call media
-//!   (default: this machine's default-route address).
+//!   (default: this machine's default-route address);
+//! - `ECHO_CALL_PORT`: a fixed UDP port for call media (default: any), so it
+//!   can be published from a container; one call at a time uses it.
 //!
 //! For development and testing only: its keys live on the machine it runs
 //! on, and it reads whatever is sent to it.
@@ -288,7 +290,7 @@ async fn run(
     // Calls being echoed; dropping a sender ends that call's media task.
     let mut calls: HashMap<Vec<u8>, mpsc::Sender<MediaCommand>> = HashMap::new();
     let (media_tx, mut media_rx) = mpsc::unbounded_channel();
-    let host = media::host_ip();
+    let host = media::MediaAddress::from_env();
     loop {
         let msg = tokio::select! {
             msg = stream.next() => match msg {

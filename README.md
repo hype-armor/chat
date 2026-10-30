@@ -88,8 +88,10 @@ Call it (voice or video) and it answers and sends your audio and video back:
 it decrypts each SFrame frame with your key and encrypts it again under its
 own, like any participant (ADR-0030). One call at a time (others hear
 "busy"), up to 10 minutes. Its media address is this machine's default
-route, or `ECHO_CALL_IP`; under docker compose, calls from other devices
-reach it through the coturn relay.
+route, or `ECHO_CALL_IP`, on any port or `ECHO_CALL_PORT`. Under docker
+compose it uses UDP port 50100, published from the container and offered
+at `CHAT_HOST` (so set `CHAT_HOST` to this machine's LAN address to call
+it from other devices; without it, only this machine can reach it).
 
 ```sh
 docker compose -f deploy/compose/docker-compose.yml --profile echo up --build

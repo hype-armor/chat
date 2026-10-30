@@ -62,6 +62,28 @@ pub fn reflect(keys: &mut CallKeys, kind: MediaKind, frame: &[u8]) -> Option<Vec
     keys.encrypt(&plain, clear).ok()
 }
 
+/// Where call media goes: the address offered to browsers, and the UDP
+/// port, fixed with `ECHO_CALL_PORT` so it can be published from a
+/// container (then the address offered is the host's, not the container's).
+#[derive(Clone, Copy, Debug)]
+pub struct MediaAddress {
+    pub ip: IpAddr,
+    /// 0: any free port, offered as bound.
+    pub port: u16,
+}
+
+impl MediaAddress {
+    pub fn from_env() -> Self {
+        Self {
+            ip: host_ip(),
+            port: std::env::var("ECHO_CALL_PORT")
+                .ok()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(0),
+        }
+    }
+}
+
 /// The address to offer as our host candidate: `ECHO_CALL_IP`, or the
 /// address of the default route (browsers ignore loopback candidates).
 pub fn host_ip() -> IpAddr {
@@ -86,11 +108,11 @@ pub async fn run_call(
     call_id: Vec<u8>,
     offer: String,
     mut keys: CallKeys,
-    host: IpAddr,
+    address: MediaAddress,
     mut commands: mpsc::Receiver<MediaCommand>,
     events: mpsc::UnboundedSender<MediaEvent>,
 ) {
-    if let Err(e) = echo(&call_id, offer, &mut keys, host, &mut commands, &events).await {
+    if let Err(e) = echo(&call_id, offer, &mut keys, address, &mut commands, &events).await {
         tracing::warn!("call ended: {e:#}");
     }
     let _ = events.send(MediaEvent::Ended { call_id });
@@ -100,12 +122,19 @@ async fn echo(
     call_id: &[u8],
     offer: String,
     keys: &mut CallKeys,
-    host: IpAddr,
+    address: MediaAddress,
     commands: &mut mpsc::Receiver<MediaCommand>,
     events: &mpsc::UnboundedSender<MediaEvent>,
 ) -> anyhow::Result<()> {
-    let socket = UdpSocket::bind(SocketAddr::new(host, 0)).await?;
-    let local = socket.local_addr()?;
+    let (socket, local) = if address.port == 0 {
+        let socket = UdpSocket::bind(SocketAddr::new(address.ip, 0)).await?;
+        let local = socket.local_addr()?;
+        (socket, local)
+    } else {
+        // A published port: bind everywhere, offer the address browsers reach.
+        let socket = UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], address.port))).await?;
+        (socket, SocketAddr::new(address.ip, address.port))
+    };
     let mut rtc: Rtc = RtcConfig::new().build(Instant::now());
     rtc.add_local_candidate(Candidate::host(local, "udp")?);
     let answer = rtc
