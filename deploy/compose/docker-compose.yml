@@ -83,6 +83,11 @@ services:
       ECHO_SERVER: http://server:8080
       ECHO_STATE_DIR: /echo/state
       ECHO_INVITE_FILE: /echo/invite
+      # Call media on one published UDP port, offered at the host's address
+      # (the container's own address isn't reachable from browsers).
+      ECHO_CALL_IP: ${CHAT_HOST:-127.0.0.1}
+      ECHO_CALL_PORT: "50100"
+    ports: ["50100:50100/udp"]
     user: "0:0"
     volumes: [echo:/echo]
     restart: unless-stopped
