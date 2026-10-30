@@ -716,6 +716,7 @@ function Conversation({
     const text = draft.trim()
     if (!text) return
     setDraft('')
+    // Keyboard activation unmounts the focused Send button; pointer sends keep focus here.
     composer.current?.focus({ preventScroll: true })
     try {
       await core.sendText(id, text)
@@ -957,6 +958,7 @@ function Conversation({
           core={core}
           conversationId={id}
           onError={setAttachError}
+          onSend={() => composer.current?.focus({ preventScroll: true })}
           trigger={(locate) =>
             recording ? null : attaching ? (
               <span className="small" role="status">Attaching…</span>
@@ -997,7 +999,7 @@ function Conversation({
           maxLength={4000}
         />
         {draft.length > 0 && !recording && (
-          <button type="submit" disabled={!draft.trim()}>
+          <button type="submit" disabled={!draft.trim()} onPointerDown={(e) => e.preventDefault()}>
             Send
           </button>
         )}
