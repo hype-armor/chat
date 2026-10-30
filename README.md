@@ -18,6 +18,7 @@ messenger yet. Design docs: [`docs/`](docs/README.md).
 | `crates/chat-server` | Server (Rust, axum): username sign-up with invites, key directory, authenticated WebSocket delivery queue ([API](docs/11-api.md)) |
 | `web/` | Web client / PWA (TypeScript, React, Vite): sign-up, 1:1 chats; keys, storage and networking live in a Web Worker |
 | `deploy/docker` | Container images (server; web served by nginx with a strict CSP) |
+| `crates/chat-echo` | Echo test bot (development only) |
 | `deploy/compose` | Local development stack |
 | `deploy/helm/chat` | Helm chart for Kubernetes |
 | `deploy/k8s` | Cluster prerequisites (PostgreSQL, TLS, LiveKit) |
@@ -74,6 +75,25 @@ its own certificate authority; browsers warn once):
 CHAT_HOST=192.168.1.20 docker compose -f deploy/compose/docker-compose.yml --profile https up --build
 # then open https://192.168.1.20:8443, and create invites for that address
 ```
+
+### Echo test bot
+
+`echo.00` sends back whatever you send it, so you can try features alone
+from one device: text, photos, files, voice notes, locations (live location
+too: its pin mirrors yours), with read receipts. It is a real client
+(`crates/chat-echo`) with its own account and keys, so everything still goes
+end to end encrypted through the server. Calls join it in Phase 3.
+
+```sh
+docker compose -f deploy/compose/docker-compose.yml --profile echo up --build
+# then start a chat with the username echo.00
+```
+
+Without compose: `ECHO_SERVER=http://localhost:8080 ECHO_INVITE=<code>
+cargo run -p chat-echo` (the invite is needed once, in invite-only mode). For
+development and testing only: it reads what it is sent and keeps its keys on
+the machine it runs on, so don't run it on a production server. The e2e
+tests start it too (`web/e2e/echo.spec.ts`).
 
 ## Deployment
 

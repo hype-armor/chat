@@ -16,7 +16,9 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::from_env()?;
     if std::env::args().nth(1).as_deref() == Some("create-invite") {
         // The operator's invite for the first account (ADR-0021). Usage:
-        // chat-server create-invite [https://chat.example.com]
+        // chat-server create-invite [https://chat.example.com] [--code-file PATH]
+        // `--code-file` also writes the bare code to PATH (e.g. for the echo
+        // test bot's first sign-up in docker compose).
         let url = config
             .database_url
             .as_deref()
@@ -24,9 +26,18 @@ async fn main() -> anyhow::Result<()> {
         let code = invites::create_invite(&connect_db(url).await?, None)
             .await
             .map_err(|e| anyhow::anyhow!("creating the invite failed: {}", e.message()))?;
-        let base = std::env::args()
-            .nth(2)
-            .unwrap_or_else(|| "https://<host>".into());
+        let mut args = std::env::args().skip(2);
+        let mut base = "https://<host>".to_owned();
+        while let Some(arg) = args.next() {
+            if arg == "--code-file" {
+                let path = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--code-file needs a path"))?;
+                std::fs::write(path, &code)?;
+            } else {
+                base = arg;
+            }
+        }
         println!("invite code: {code}\nlink (valid 7 days): {base}/#invite={code}");
         return Ok(());
     }
