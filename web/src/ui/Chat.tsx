@@ -7,6 +7,7 @@ import { Invite } from './Invite'
 import { Backup } from './Backup'
 import { Avatar } from './Avatar'
 import { Menu, type MenuItem } from './Menu'
+import { useVisualViewport } from './useVisualViewport'
 import { Attachment } from './Attachment'
 import { Recorder } from './Recorder'
 import { Media } from './Media'
@@ -82,6 +83,7 @@ export function Chat({
   showDiagnostics: boolean
   onDiagnostics: () => void
 }) {
+  useVisualViewport(!showDiagnostics)
   const [selected, setSelected] = useState<string>()
   const [panel, setPanel] = useState<'chats' | 'settings' | 'chat' | 'group'>('chats')
   const sidebar = useRef<HTMLElement>(null)

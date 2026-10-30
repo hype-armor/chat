@@ -145,6 +145,14 @@ test.describe('touch composer', () => {
     await expect(input).toHaveAttribute('data-blurs', '0')
     // Approximate the space left by an on-screen keyboard; emulation has no OS keyboard.
     await page.setViewportSize({ width: 360, height: 400 })
+    await expect(page.locator('.conversation-bar')).toBeInViewport({ ratio: 1 })
+    await expect.poll(() => page.locator('.composer').evaluate(
+      (composer) => composer.getBoundingClientRect().bottom,
+    )).toBe(400)
+    await expect.poll(() => page.evaluate(`({
+      height: document.documentElement.scrollHeight,
+      top: window.scrollY,
+    })`))).toEqual({ height: 400, top: 0 })
     for (let i = 0; i < 6; i++) {
       await page.keyboard.type(`Next message ${i}`)
       await expect(input).toHaveValue(`Next message ${i}`)
@@ -162,13 +170,61 @@ test.describe('touch composer', () => {
   })
 })
 
+test('iOS visual viewport removes the keyboard gap and restores the home-indicator inset', async ({ browser }) => {
+  const bobUsername = randomUsername()
+  await signUp(browser, 'Bob', bobUsername)
+  const alice = await signUp(browser, 'Alice', randomUsername())
+  await alice.setViewportSize({ width: 390, height: 844 })
+  await startChat(alice, bobUsername)
+  const input = alice.getByLabel('Message', { exact: true })
+  const composer = alice.locator('.composer')
+  // Desktop engines report a zero safe area. Model the iPhone's retained inset.
+  await alice.locator('.chat-layout').evaluate((layout) => {
+    layout.style.paddingBottom = 'var(--safe-bottom, 34px)'
+  })
+  await expect.poll(() => composer.evaluate((el) => el.getBoundingClientRect().bottom)).toBe(810)
+  for (let i = 0; i < 18; i++) {
+    await input.fill(`Keyboard history ${i}`)
+    await input.press('Enter')
+  }
+  await expect(messages(alice).last().getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
+  await input.focus()
+  // iOS changes only the visual viewport, not innerHeight or 100dvh.
+  await alice.evaluate(`(() => {
+    Object.defineProperty(window.visualViewport, 'height', { configurable: true, value: 500 })
+    window.visualViewport.dispatchEvent(new Event('resize'))
+    window.visualViewport.dispatchEvent(new Event('scroll'))
+  })()`)
+  expect(await alice.evaluate('window.innerHeight')).toBe(844)
+  await expect.poll(() => composer.evaluate((el) => el.getBoundingClientRect().bottom)).toBe(500)
+  await expect(alice.locator('.conversation-bar')).toBeInViewport({ ratio: 1 })
+  expect((await alice.locator('.conversation-bar').boundingBox())!.y).toBe(0)
+  await expect.poll(() => alice.locator('.messages-viewport').evaluate(
+    (list) => list.scrollHeight - list.scrollTop - list.clientHeight,
+  )).toBeLessThanOrEqual(1)
+  const newest = (await messages(alice).last().boundingBox())!
+  expect(newest.y + newest.height).toBeLessThanOrEqual((await composer.boundingBox())!.y)
+  await expect(input).toBeFocused()
+  await expect.poll(() => alice.evaluate(`({
+    height: document.documentElement.scrollHeight,
+    clientHeight: document.documentElement.clientHeight,
+    top: window.scrollY,
+  })`))).toEqual({ height: 844, clientHeight: 844, top: 0 })
+  await alice.evaluate(`(() => {
+    delete window.visualViewport.height
+    window.visualViewport.dispatchEvent(new Event('resize'))
+  })()`)
+  await expect.poll(() => composer.evaluate((el) => el.getBoundingClientRect().bottom)).toBe(810)
+  await expect(alice.locator('.conversation-bar')).toBeInViewport({ ratio: 1 })
+})
+
 for (const width of [1280, 390]) {
   test(`conversation scrolling stays pinned unless reading history (${width}px)`, async ({ browser }) => {
     test.setTimeout(90_000)
     const bobUsername = randomUsername()
     const alice = await signUp(browser, 'Alice', randomUsername())
     const bob = await signUp(browser, 'Bob', bobUsername)
-    const height = width === 390 ? 740 : 800
+    let height = width === 390 ? 740 : 800
     await alice.setViewportSize({ width, height })
     await bob.setViewportSize({ width, height })
     const viewport = alice.locator('.messages-viewport')
@@ -214,6 +270,16 @@ for (const width of [1280, 390]) {
     )).toBeGreaterThan(300)
     await expectBottom()
     await expectPageFits()
+    // Keep the newest message pinned when the keyboard resizes the viewport.
+    const fullHeight = height
+    height = 500
+    await alice.setViewportSize({ width, height })
+    await expectBottom()
+    await expectPageFits()
+    await expect(alice.locator('.conversation-bar')).toBeInViewport({ ratio: 1 })
+    height = fullHeight
+    await alice.setViewportSize({ width, height })
+    await expectBottom()
     for (const selector of ['.conversation-bar', '.composer']) {
       await alice.locator(selector).hover()
       await alice.mouse.wheel(0, 1000)
