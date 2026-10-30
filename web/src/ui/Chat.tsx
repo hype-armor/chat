@@ -50,6 +50,11 @@ export function dayLabel(at: number, now: number): string {
   return date.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
+export function messageDateTime(at: number): string | undefined {
+  const date = new Date(at)
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString()
+}
+
 export function messageLayout(messages: readonly ChatMessage[], now: number) {
   const sameDay = (a: ChatMessage, b: ChatMessage) =>
     new Date(a.sentAt).toDateString() === new Date(b.sentAt).toDateString()
@@ -850,7 +855,7 @@ function Conversation({
                   <span className={last || m.status === 'failed' ? 'meta small' : 'visually-hidden'}>
                     <time
                       className={last ? undefined : 'visually-hidden'}
-                      dateTime={new Date(m.sentAt).toISOString()}
+                      dateTime={messageDateTime(m.sentAt)}
                       title={new Date(m.sentAt).toLocaleString()}
                       aria-label={new Date(m.sentAt).toLocaleString()}
                     >

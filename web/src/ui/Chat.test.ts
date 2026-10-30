@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatMessage } from '../core/protocol'
-import { dayLabel, messageLayout, parseUsernames } from './Chat'
+import { dayLabel, messageDateTime, messageLayout, parseUsernames } from './Chat'
 
 const now = new Date(2026, 9, 30, 12).getTime()
 const message = (from: string, sentAt = now, kind?: 'notice'): ChatMessage => ({
@@ -21,6 +21,18 @@ describe('dayLabel', () => {
     expect(dayLabel(older.getTime(), now)).toBe(
       older.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' }),
     )
+  })
+
+  describe('messageDateTime', () => {
+    it('provides a machine-readable timestamp', () => {
+      expect(messageDateTime(now)).toBe(new Date(now).toISOString())
+    })
+
+    it('does not throw for timestamps outside the JavaScript Date range', () => {
+      for (const at of [Number.MAX_SAFE_INTEGER, -Number.MAX_SAFE_INTEGER, NaN, Infinity]) {
+        expect(messageDateTime(at)).toBeUndefined()
+      }
+    })
   })
 
   it('handles month and year boundaries', () => {

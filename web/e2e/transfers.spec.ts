@@ -34,8 +34,16 @@ test('interrupted uploads and downloads resume where they stopped (ADR-0025)', a
   await alice.getByTestId('attach-input').setInputFiles({ name: 'big.bin', mimeType: 'application/octet-stream', buffer: data })
   const sent = messages(alice).filter({ hasText: 'big.bin' })
   await expect(sent).toContainText('Failed')
+  await alice.getByLabel('Message', { exact: true }).fill('After the failed upload')
+  await alice.getByRole('button', { name: 'Send', exact: true }).click()
+  await expect(messages(alice).last().getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
+  await expect(sent).not.toHaveClass(/run-last/)
+  await expect(sent.locator('.message-failure')).toBeVisible()
+  await expect(sent.locator('.message-failure')).toContainText(/Not sent: .+/)
+  await expect(sent.getByRole('button', { name: 'Retry' })).toBeVisible()
   await sent.getByRole('button', { name: 'Retry' }).click()
-  await expect(sent.getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible({ timeout: 30_000 })
+  await expect(sent.getByRole('img')).toHaveAccessibleName(/^(Sent|Delivered|Read)$/, { timeout: 30_000 })
+  await expect(sent.locator('.message-failure')).toHaveCount(0)
   // Part 0 went once: the retry asked the server what it had.
   expect(parts.sort()).toEqual(['0', '1', '2'])
 
