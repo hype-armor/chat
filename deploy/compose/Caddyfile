@@ -1,0 +1,8 @@
+# Optional HTTPS for opening the compose stack from other devices
+# (`--profile https`). Browsers allow the app's encryption only on secure
+# pages, so plain http:// works only on the machine itself (localhost).
+# `tls internal` uses Caddy's own certificate authority: browsers warn once.
+{$CHAT_HOST} {
+	tls internal
+	reverse_proxy web:8080
+}
