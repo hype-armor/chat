@@ -38,7 +38,7 @@ const UPLOAD_TTL_HOURS: i32 = 24;
 
 /// Opens the store named by `CHAT_BLOB_STORE`: `memory` (development),
 /// `file:///path`, or `s3://bucket` with the usual `AWS_*` variables
-/// (`AWS_ENDPOINT` for MinIO).
+/// (`AWS_ENDPOINT` for SeaweedFS or another S3-compatible store).
 pub fn open_store(url: &str) -> anyhow::Result<Arc<dyn ObjectStore>> {
     Ok(match url {
         "memory" => Arc::new(object_store::memory::InMemory::new()),

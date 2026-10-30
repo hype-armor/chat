@@ -114,25 +114,33 @@ helm upgrade --install chat deploy/helm/chat -n chat \
 kubectl -n chat exec deploy/chat-server -- chat-server create-invite https://chat.example.com
 ```
 
-### Attachments: MinIO (ADR-0023)
+### Attachments and backups: SeaweedFS (ADR-0005, ADR-0023)
+
+SeaweedFS runs in the cluster as the S3-compatible store (MinIO's community
+edition is no longer maintained). One access key, used only by the chat
+server:
 
 ```sh
-helm repo add minio https://charts.min.io/
-helm upgrade --install minio minio/minio -n minio --create-namespace \
-  --set mode=standalone,replicas=1,persistence.size=50Gi \
-  --set rootUser=chat,rootPassword="$(openssl rand -hex 24)" \
-  --set buckets[0].name=chat-blobs,buckets[0].policy=none
+KEY=chat SECRET="$(openssl rand -hex 24)"
+kubectl -n chat create secret generic seaweedfs-s3 --from-literal=s3.json="$(cat <<JSON
+{"identities":[{"name":"chat","credentials":[{"accessKey":"$KEY","secretKey":"$SECRET"}],
+  "actions":["Read","Write","List","Tagging"]}]}
+JSON
+)"
 kubectl -n chat create secret generic chat-blobs \
-  --from-literal=AWS_ACCESS_KEY_ID=chat \
-  --from-literal=AWS_SECRET_ACCESS_KEY="$(kubectl -n minio get secret minio -o jsonpath='{.data.rootPassword}' | base64 -d)"
+  --from-literal=AWS_ACCESS_KEY_ID="$KEY" --from-literal=AWS_SECRET_ACCESS_KEY="$SECRET"
+kubectl apply -n chat -f deploy/k8s/seaweedfs.yaml
+kubectl -n chat rollout status deploy/seaweedfs
+kubectl -n chat exec deploy/seaweedfs -- sh -c 'echo "s3.bucket.create -name chat-blobs" | weed shell'
 helm upgrade chat deploy/helm/chat -n chat --reuse-values \
   --set server.blobs.bucket=chat-blobs \
-  --set server.blobs.endpoint=http://minio.minio.svc:9000 \
+  --set server.blobs.endpoint=http://seaweedfs.chat.svc:8333 \
   --set server.blobs.existingSecret=chat-blobs
 ```
 
-MinIO stays inside the cluster: the chat server streams attachments to it.
-Include the `chat-blobs` bucket in the off-site backups (§5).
+SeaweedFS stays inside the cluster (its NetworkPolicy admits only the chat
+server); the server streams attachments and backups to it. The store holds
+only ciphertext. Include the `seaweedfs` volume in the off-site backups (§5).
 
 ### Map tiles (ADR-0026)
 

@@ -9,14 +9,14 @@
 Docs 03 and 05 planned pre-signed URLs: clients upload and download
 encrypted attachments directly to object storage. The web client must not
 talk to any origin but its own (CLAUDE.md, CSP `connect-src 'self'`).
-Pre-signed URLs point at the storage host (MinIO, Linode Object Storage,
+Pre-signed URLs point at the storage host (SeaweedFS, Linode Object Storage,
 S3), so they would need that host in the CSP, or the ingress to expose the
 storage under the app's origin with its own auth.
 
 ## Options considered
 1. **Pre-signed URLs to the storage host.** No server bandwidth, but
    another origin in the CSP, and storage reachable from the internet.
-2. **Pre-signed URLs through an ingress path** (`/blobs/…` → MinIO).
+2. **Pre-signed URLs through an ingress path** (`/blobs/…` → SeaweedFS).
    Same origin, but couples the chart to one storage product, and the
    storage still faces the internet.
 3. **The server streams bytes to and from the store.** Same origin and the
@@ -29,7 +29,7 @@ Option 3, for the 100-user launch.
   `Content-Length`, the 100 MB limit (FR-MED-3) and a per-device daily
   quota.
 - `GET /v1/blobs/{id}` streams it back.
-- The store is any `object_store` backend: `s3://bucket` (MinIO on k3s,
+- The store is any `object_store` backend: `s3://bucket` (SeaweedFS on k3s,
   Linode Object Storage, AWS), `file:///path`, or `memory` for
   development.
 - Blobs expire after 30 days (doc 05).

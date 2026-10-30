@@ -88,7 +88,7 @@ order; tick items as their PRs merge.
 2. [x] Encrypted backup with a recovery key, and restore onto a new device
    (FR-MSG-13, ADR-0010, ADR-0022).
 3. [x] Blob storage for encrypted attachments: upload and download, 100 MB
-   limit, 30-day expiry (FR-MED-2/3, S3-compatible; MinIO on k3s).
+   limit, 30-day expiry (FR-MED-2/3, S3-compatible; SeaweedFS on k3s).
 4. [x] Images and files: encrypted on the device, EXIF stripped,
    thumbnails sent encrypted (FR-MED-1/2/4/8, ADR-0024).
 5. [x] Voice notes and audio/video clips (FR-MED-1, ADR-0024).
