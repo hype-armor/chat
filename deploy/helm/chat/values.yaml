@@ -70,6 +70,15 @@ web:
     requests: { cpu: 20m, memory: 32Mi }
     limits: { memory: 128Mi }
 
+# Group calls (ADR-0031) through LiveKit, installed separately
+# (deploy/k8s/livekit-values.yaml). `url` is what browsers connect to (also
+# add it to web.cspConnectExtra); the Secret holds `api-key` and
+# `api-secret`, the same pair LiveKit is configured with. Unset url: off.
+livekit:
+  url: ""                 # e.g. wss://rtc.chat.example.com
+  apiUrl: ""              # default: url with http(s); e.g. http://livekit-server.chat.svc:7880
+  existingSecret: chat-livekit
+
 # TURN relay for 1:1 calls (coturn, ADR-0029). Needs the node's UDP and
 # TCP `port`, TCP `tls.port` and UDP `relayPorts` open to the internet, and
 # DNS for `host` pointing at the node. The secret is shared with the server,

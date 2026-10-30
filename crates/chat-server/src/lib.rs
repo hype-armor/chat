@@ -5,6 +5,7 @@ mod account;
 mod auth;
 pub mod backup;
 pub mod blobs;
+pub mod calls;
 pub mod config;
 mod delivery;
 mod devices;
@@ -46,6 +47,10 @@ pub struct AppState {
     pub blobs: Option<Arc<dyn object_store::ObjectStore>>,
     /// STUN/TURN servers handed to calling clients (ADR-0028).
     pub turn: Arc<turn::TurnConfig>,
+    /// The SFU for group calls (ADR-0031); unset turns group calls off.
+    pub livekit: Arc<calls::LiveKitConfig>,
+    /// Outgoing requests (LiveKit's API).
+    pub http: reqwest::Client,
 }
 
 impl AppState {
@@ -55,6 +60,11 @@ impl AppState {
             open_registration: false,
             blobs: None,
             turn: Arc::default(),
+            livekit: Arc::default(),
+            http: reqwest::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .expect("HTTP client"),
             hub: hub::Hub::default(),
             push: None,
             limits: limits::Limits::default(),
@@ -70,6 +80,11 @@ impl AppState {
 
     pub fn with_turn(mut self, turn: turn::TurnConfig) -> Self {
         self.turn = Arc::new(turn);
+        self
+    }
+
+    pub fn with_livekit(mut self, livekit: calls::LiveKitConfig) -> Self {
+        self.livekit = Arc::new(livekit);
         self
     }
 
@@ -149,6 +164,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/push/subscription", post(push::subscribe))
         .route("/v1/push/unsubscribe", post(push::unsubscribe))
         .route("/v1/turn", get(turn::credentials))
+        .route("/v1/calls/join", post(calls::join))
+        .route("/v1/calls/status", post(calls::status))
         .route("/v1/ws", get(ws::upgrade))
         .with_state(state)
 }

@@ -182,11 +182,24 @@ app reads map data only from this server. Refresh it every few months.
 
 ## 4. Calls (Phase 3)
 
+Group calls go through LiveKit (ADR-0031). One API key pair, shared by
+LiveKit and the chat server, which hands out room tokens to members:
+
 ```sh
+KEY=chat SECRET="$(openssl rand -hex 32)"
+kubectl -n chat create secret generic chat-livekit \
+  --from-literal=api-key="$KEY" --from-literal=api-secret="$SECRET"
 helm repo add livekit https://helm.livekit.io
 helm upgrade --install livekit livekit/livekit-server -n chat \
-  -f deploy/k8s/livekit-values.yaml
+  -f deploy/k8s/livekit-values.yaml --set "livekit.keys.$KEY=$SECRET"
+helm upgrade chat deploy/helm/chat -n chat --reuse-values \
+  --set livekit.url=wss://rtc.chat.example.com \
+  --set livekit.apiUrl=http://livekit-livekit-server.chat.svc:80 \
+  --set web.cspConnectExtra=wss://rtc.chat.example.com
 ```
+
+Check the service name with `kubectl -n chat get svc`. Media is
+SFrame-encrypted in the browsers; LiveKit forwards frames it can't read.
 
 ## 5. Backups — required on a single machine
 

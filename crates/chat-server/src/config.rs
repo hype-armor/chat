@@ -36,6 +36,8 @@ pub struct Config {
     /// `turns:host:5349`), and `CHAT_TURN_SECRET`, coturn's
     /// `static-auth-secret`. Without a secret no TURN servers are offered.
     pub turn: crate::turn::TurnConfig,
+    /// Group calls (ADR-0031): see [`crate::calls::LiveKitConfig`].
+    pub livekit: crate::calls::LiveKitConfig,
 }
 
 impl Config {
@@ -70,6 +72,12 @@ impl Config {
                 secret: std::env::var("CHAT_TURN_SECRET")
                     .ok()
                     .filter(|s| !s.is_empty()),
+            },
+            livekit: crate::calls::LiveKitConfig {
+                url: non_empty("CHAT_LIVEKIT_URL"),
+                api_url: non_empty("CHAT_LIVEKIT_API_URL"),
+                api_key: non_empty("CHAT_LIVEKIT_API_KEY").unwrap_or_default(),
+                api_secret: non_empty("CHAT_LIVEKIT_API_SECRET").unwrap_or_default(),
             },
             vapid_subject: std::env::var("CHAT_VAPID_SUBJECT")
                 .unwrap_or_else(|_| "mailto:admin@localhost".to_owned()),
@@ -125,4 +133,8 @@ fn list_var(name: &str) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
         .collect()
+}
+
+fn non_empty(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.is_empty())
 }
