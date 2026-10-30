@@ -98,7 +98,8 @@ order; tick items as their PRs merge.
    ADR-0008, ADR-0026).
 8. [x] Live location for 15 min / 1 h / 8 h while the app is open, with a
    persistent indicator (FR-LOC-2/3/6, ADR-0027).
-9. [ ] Move backups into blob storage (they start in PostgreSQL).
+9. [x] Move backups into blob storage (they started in PostgreSQL; ADR-0022
+   addendum).
 
 **Exit:** feature-complete beta.
 

@@ -3,7 +3,7 @@
 
 mod account;
 mod auth;
-mod backup;
+pub mod backup;
 pub mod blobs;
 pub mod config;
 mod delivery;
@@ -109,7 +109,7 @@ pub fn router(state: AppState) -> Router {
             put(backup::upload)
                 .get(backup::download)
                 .layer(axum::extract::DefaultBodyLimit::max(
-                    backup::MAX_BACKUP_BYTES,
+                    backup::MAX_BACKUP_BYTES as usize,
                 )),
         )
         .route(

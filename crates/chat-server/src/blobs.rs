@@ -56,7 +56,7 @@ pub fn open_store(url: &str) -> anyhow::Result<Arc<dyn ObjectStore>> {
     })
 }
 
-fn store(state: &AppState) -> Result<&Arc<dyn ObjectStore>, ApiError> {
+pub(crate) fn store(state: &AppState) -> Result<&Arc<dyn ObjectStore>, ApiError> {
     state.blobs.as_ref().ok_or(ApiError::Unavailable)
 }
 
@@ -96,9 +96,32 @@ pub async fn upload(
     take_quota(&state, device, declared).await?;
 
     let id = Uuid::new_v4();
-    let path = object_path(id);
+    let received = stream_to(&store, &object_path(id), declared, body).await?;
+    sqlx::query(
+        "INSERT INTO blobs (blob_id, size_bytes, expires_at)
+         VALUES ($1, $2, now() + make_interval(days => $3))",
+    )
+    .bind(id)
+    .bind(received as i64)
+    .bind(BLOB_TTL_DAYS)
+    .execute(db)
+    .await?;
+    Ok(Json(Uploaded {
+        blob_id: id,
+        expires_in_days: BLOB_TTL_DAYS,
+    }))
+}
+
+/// Streams a request body of exactly `declared` bytes into a new object;
+/// nothing is left behind if it falls short or runs over.
+pub(crate) async fn stream_to(
+    store: &Arc<dyn ObjectStore>,
+    path: &Path,
+    declared: u64,
+    body: Body,
+) -> Result<u64, ApiError> {
     let mut writer = WriteMultipart::new_with_chunk_size(
-        store.put_multipart(&path).await.map_err(internal)?,
+        store.put_multipart(path).await.map_err(internal)?,
         PART_BYTES,
     );
     let mut received: u64 = 0;
@@ -123,22 +146,10 @@ pub async fn upload(
         return Err(ApiError::BadRequest("upload interrupted"));
     }
     writer.finish().await.map_err(internal)?;
-    sqlx::query(
-        "INSERT INTO blobs (blob_id, size_bytes, expires_at)
-         VALUES ($1, $2, now() + make_interval(days => $3))",
-    )
-    .bind(id)
-    .bind(received as i64)
-    .bind(BLOB_TTL_DAYS)
-    .execute(db)
-    .await?;
-    Ok(Json(Uploaded {
-        blob_id: id,
-        expires_in_days: BLOB_TTL_DAYS,
-    }))
+    Ok(received)
 }
 
-fn content_length(headers: &HeaderMap) -> Result<u64, ApiError> {
+pub(crate) fn content_length(headers: &HeaderMap) -> Result<u64, ApiError> {
     let declared: u64 = headers
         .get(header::CONTENT_LENGTH)
         .and_then(|v| v.to_str().ok())
@@ -480,6 +491,6 @@ pub async fn expire(db: &sqlx::PgPool, store: &Arc<dyn ObjectStore>) -> anyhow::
     Ok(())
 }
 
-fn internal(e: object_store::Error) -> ApiError {
+pub(crate) fn internal(e: object_store::Error) -> ApiError {
     ApiError::Internal(e.into())
 }

@@ -47,9 +47,8 @@ gzip-compressed on the device:
 It never includes MLS state, device keys or tokens.
 
 **Backup schedule.** Uploaded after changes (debounced), at most every 10
-minutes, and on demand. The server keeps the latest per account (25 MB cap
-while backups live in PostgreSQL; Phase 2 item 9 moves them to blob
-storage).
+minutes, and on demand. The server keeps the latest per account, in the
+blob store (100 MB cap; see the addendum).
 
 **Restore.** On a new browser, the user enters username and recovery key.
 The client proves the auth secret, and the server then:
@@ -93,3 +92,24 @@ server injecting devices would show.
   messages flow both ways.
 - **Server tests:** restore needs the right proof; it deletes the old
   devices; it is rate-limited.
+
+## Addendum (2026-10-30): backups in the blob store (Phase 2 item 9)
+- **Storage:**
+  - backups now live in the blob store (ADR-0023) as
+    `backups/{account}/{id}`, streamed through the server like attachments;
+  - the `backups` row keeps the auth hash and names the current object;
+  - the cap is 100 MB, the same as an attachment.
+- **Replacement:** each upload is a new object. The old one is deleted only
+  after the row points at the new one, so an interrupted upload never
+  damages the last good backup.
+- **Deletion:** a new recovery key, turning backups off, and deleting the
+  account all delete the object.
+- **Migration:** at startup, backups still in PostgreSQL are copied out and
+  their column cleared (migration 0010). A later migration drops the
+  column.
+- **Tests:**
+  - a 30 MB backup round trip;
+  - replacement leaves one object;
+  - the object is gone after a key change, after turning backups off and
+    after deleting the account;
+  - backups left in PostgreSQL move to the blob store.

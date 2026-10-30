@@ -77,6 +77,10 @@ async fn main() -> anyhow::Result<()> {
         );
     }
     let blobs = chat_server::blobs::open_store(&config.blob_store)?;
+    if let Some(db) = &db {
+        // Backups made while they lived in PostgreSQL (migration 0010).
+        chat_server::backup::move_to_store(db, &blobs).await?;
+    }
     if let Some(db) = db.clone() {
         let store = blobs.clone();
         tokio::spawn(async move {
