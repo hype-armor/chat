@@ -59,6 +59,20 @@ Full stack with PostgreSQL, Valkey, SeaweedFS (S3) and LiveKit:
 
 ```sh
 docker compose -f deploy/compose/docker-compose.yml up --build
+# first invite (sign-up is invite-only):
+docker compose -f deploy/compose/docker-compose.yml exec server \
+  chat-server create-invite http://localhost:8000
+```
+
+Open **http://localhost:8000 on the same machine**. Browsers enable the
+encryption the app needs (WebCrypto) only on secure pages, so plain
+`http://<server-ip>:8000` from another device shows a "must be opened over a
+secure connection" page. For other devices, add the HTTPS front (Caddy with
+its own certificate authority; browsers warn once):
+
+```sh
+CHAT_HOST=192.168.1.20 docker compose -f deploy/compose/docker-compose.yml --profile https up --build
+# then open https://192.168.1.20:8443, and create invites for that address
 ```
 
 ## Deployment

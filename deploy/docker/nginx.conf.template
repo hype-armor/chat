@@ -3,6 +3,10 @@ server {
     listen 8080;
     root /usr/share/nginx/html;
 
+    # Deployment-specific locations, e.g. deploy/compose/api-proxy.conf
+    # (Kubernetes routes /v1 at the ingress instead).
+    include /etc/nginx/conf.d/extra/*.conf;
+
     location = /healthz {
         access_log off;
         return 200 "ok";

@@ -1,5 +1,11 @@
 # Local development stack. Run from the repository root:
 #   docker compose -f deploy/compose/docker-compose.yml up --build
+# then open http://localhost:8000 on this machine. From other devices use
+# HTTPS: CHAT_HOST=192.168.1.20 docker compose ... --profile https up
+# and open https://192.168.1.20:8443 (browsers allow the app's encryption
+# only on secure pages). First invite:
+#   docker compose -f deploy/compose/docker-compose.yml exec server \
+#     chat-server create-invite http://localhost:8000
 # Production runs on Kubernetes (deploy/helm, docs/10-deployment-kubernetes.md).
 name: chat
 
@@ -11,6 +17,8 @@ services:
     environment:
       DATABASE_URL: postgres://chat:chat@postgres:5432/chat
       CHAT_LOG_FORMAT: pretty
+      # Behind the web container's /v1 proxy (rate limits by client IP).
+      CHAT_TRUST_PROXY_HEADERS: "true"
       # Attachments and backups in SeaweedFS (no S3 auth in development).
       CHAT_BLOB_STORE: s3://chat-blobs
       AWS_ENDPOINT: http://seaweedfs:8333
@@ -32,6 +40,22 @@ services:
     environment:
       CSP_CONNECT_EXTRA: "ws://localhost:7880"
     ports: ["8000:8080"]
+    # Forwards /v1 to the server (Kubernetes does this at the ingress).
+    volumes:
+      - ./api-proxy.conf:/etc/nginx/conf.d/extra/api-proxy.conf:ro
+    depends_on: [server]
+
+  # Optional HTTPS front for other devices: --profile https, CHAT_HOST set.
+  https:
+    image: caddy:2.10-alpine
+    profiles: [https]
+    environment:
+      CHAT_HOST: ${CHAT_HOST:-localhost}
+    ports: ["8443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy:/data
+    depends_on: [web]
 
   postgres:
     image: postgres:18
@@ -74,5 +98,6 @@ services:
       - "7882:7882/udp"
 
 volumes:
+  caddy:
   postgres:
   seaweedfs:
