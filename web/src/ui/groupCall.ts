@@ -16,6 +16,8 @@ const PROMPT_MS = 45_000
 
 export type Tile = {
   id: string
+  /** A shared screen rather than a person's camera. */
+  screen?: boolean
   name: string
   local: boolean
   video?: MediaStreamTrack
@@ -34,6 +36,9 @@ export type GroupCallState = {
   muted: boolean
   cameraOff: boolean
   tiles: Tile[]
+  /** LiveKit's rating of this device's connection (FR-CALL-8). */
+  quality?: 'good' | 'poor'
+  sharing?: boolean
 }
 
 function randomCallId(): string {
@@ -88,6 +93,7 @@ export class GroupCallController {
       await this.core.callSignal(conversationId, { callId, kind: 'offer', group: true, video })
       await this.connect(video)
     } catch (e) {
+      if (canEncryptCalls()) this.core.recordCall('group', false)
       this.finish(e instanceof Error ? e.message : String(e))
     }
   }
@@ -100,6 +106,7 @@ export class GroupCallController {
       if (!canEncryptCalls()) throw new Error(NO_FRAME_ENCRYPTION)
       await this.connect(video)
     } catch (e) {
+      if (canEncryptCalls()) this.core.recordCall('group', false)
       this.finish(e instanceof Error ? e.message : String(e))
     }
   }
@@ -143,6 +150,48 @@ export class GroupCallController {
     this.refresh()
   }
 
+  /** Next camera; LiveKit swaps the track on the same (encrypted) sender. */
+  async switchCamera() {
+    const room = this.room
+    if (!room) return
+    const cameras = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput')
+    if (cameras.length < 2) return
+    const current = room.getActiveDevice('videoinput')
+    const at = cameras.findIndex((d) => d.deviceId === current)
+    await room.switchActiveDevice('videoinput', cameras[(at + 1) % cameras.length].deviceId)
+    this.refresh()
+  }
+
+  /** Shares the screen as its own track (FR-CALL-7), encrypted like the others. */
+  async toggleScreenShare() {
+    const room = this.room
+    const lk = this.lk
+    const s = this.state
+    if (!room || !lk || !s) return
+    const pub = room.localParticipant.getTrackPublication(lk.Track.Source.ScreenShare)
+    if (pub?.track) {
+      await room.localParticipant.unpublishTrack(pub.track)
+      this.set({ ...this.state!, sharing: false })
+    } else {
+      let tracks: LocalTrack[]
+      try {
+        tracks = await lk.createLocalScreenTracks({ audio: false })
+      } catch {
+        return // cancelled
+      }
+      for (const t of tracks) {
+        t.mediaStreamTrack.addEventListener('ended', () => this.state?.sharing && void this.toggleScreenShare())
+      }
+      await this.publish(tracks, lk.Track.Source.ScreenShare)
+      this.set({ ...this.state!, sharing: true })
+    }
+    this.refresh()
+  }
+
+  async setSpeaker(deviceId: string) {
+    await this.room?.switchActiveDevice('audiooutput', deviceId)
+  }
+
   private onStarted(s: IncomingCallSignal) {
     if (this.busy || this.otherBusy() || s.elsewhere) return
     this.show({ conversationId: s.conversationId, callId: s.callId, title: s.title, video: !!s.video, phase: 'incoming' })
@@ -152,6 +201,7 @@ export class GroupCallController {
 
   private async connect(video: boolean) {
     const s = this.state!
+    const started = Date.now()
     const { url, token } = await this.core.groupCallJoin(s.conversationId, s.callId)
     this.names = await this.core.deviceNames(s.conversationId)
     const lk = (this.lk ??= await import('livekit-client'))
@@ -176,6 +226,12 @@ export class GroupCallController {
       .on(RoomEvent.ParticipantConnected, update)
       .on(RoomEvent.ParticipantDisconnected, update)
       .on(RoomEvent.ActiveSpeakersChanged, update)
+      .on(RoomEvent.ConnectionQualityChanged, (quality, participant) => {
+        if (participant !== room.localParticipant || !this.state) return
+        const poor = quality === lk.ConnectionQuality.Poor || quality === lk.ConnectionQuality.Lost
+        this.set({ ...this.state, quality: poor ? 'poor' : 'good' })
+      })
+      .on(RoomEvent.Reconnecting, () => this.state && this.set({ ...this.state, quality: 'poor' }))
       .on(RoomEvent.Disconnected, () => this.state?.phase === 'active' && this.finish('Call ended'))
     // Chromium: no frame moves until our encoded streams are taken.
     const rtcConfig = useEncodedStreams()
@@ -185,6 +241,7 @@ export class GroupCallController {
     if (this.room !== room) return void room.disconnect()
     this.set({ ...this.state!, phase: 'active', cameraOff: !video })
     await this.publish(await lk.createLocalTracks({ audio: true, video }))
+    this.core.recordCall('group', true, Date.now() - started)
     this.refresh()
   }
 
@@ -194,11 +251,11 @@ export class GroupCallController {
    * silence and black (RTCRtpScriptTransform can only be set on a sender
    * that exists).
    */
-  private async publish(tracks: LocalTrack[]) {
+  private async publish(tracks: LocalTrack[], source?: import('livekit-client').Track.Source) {
     const room = this.room!
     for (const track of tracks) {
       await track.mute()
-      const pub = await room.localParticipant.publishTrack(track)
+      const pub = await room.localParticipant.publishTrack(track, source ? { source } : undefined)
       const sender = pub.track?.sender
       if (!sender) throw new Error("The call can't be encrypted")
       this.protect(sender, 'send', track.kind === 'video' ? 'video' : 'audio')
@@ -231,7 +288,19 @@ export class GroupCallController {
         muted: !mic || mic.isMuted,
       }
     }
-    const tiles = [tile(room.localParticipant, true), ...[...room.remoteParticipants.values()].map((p) => tile(p, false))]
+    const screen = (p: Participant, local: boolean): Tile[] => {
+      const share = p.getTrackPublication(Track.Source.ScreenShare)
+      const video = share && !share.isMuted ? share.track?.mediaStreamTrack : undefined
+      if (!video) return []
+      const name = local ? 'You' : (this.names[p.identity] ?? 'Someone')
+      return [{ id: `${p.identity}:screen`, screen: true, name: `${name} (screen)`, local, video, speaking: false, muted: true }]
+    }
+    const everyone: [Participant, boolean][] = [
+      [room.localParticipant, true],
+      ...[...room.remoteParticipants.values()].map((p): [Participant, boolean] => [p, false]),
+    ]
+    // Shared screens first: they are what people are looking at.
+    const tiles = [...everyone.flatMap(([p, l]) => screen(p, l)), ...everyone.map(([p, l]) => tile(p, l))]
     this.set({ ...s, tiles })
   }
 

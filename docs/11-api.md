@@ -220,6 +220,7 @@ queued and re-sends it after 5 s, doubling to 2 minutes.
 | `GET /v1/turn` | ✓ | → `{ice_servers: [{urls, username?, credential?}], ttl}`: STUN servers (`CHAT_STUN_URLS`), and TURN servers (`CHAT_TURN_URLS`) with coturn REST-API credentials valid for `ttl` seconds when `CHAT_TURN_SECRET` is set |
 
 | `POST /v1/calls/join` | ✓ | `{conversation_id, call_id}` (base64; call id 16 bytes) → `{url, token}`: a LiveKit room token for a group call (ADR-0031), members of the conversation only (`403` otherwise, `404` when group calls are off) |
+| `POST /v1/stats/calls` | — | `{direct, group}`, each `{connected, failed, setup_seconds: [..]}` → `204`: opt-in daily totals (ADR-0032), unauthenticated, 6 per IP a day |
 | `POST /v1/calls/status` | ✓ | same body → `{participants}`: how many are in that call now (`0` once it ended) |
 
 Offers, answers, candidates and hang-ups are end-to-end encrypted messages

@@ -157,7 +157,12 @@ export function Chat({
               <Backup core={core} backup={view.backup} />
               <Invite core={core} />
               <Devices core={core} />
-              <Privacy core={core} readReceipts={view.readReceipts} relayCalls={view.relayCalls} />
+              <Privacy
+                core={core}
+                readReceipts={view.readReceipts}
+                relayCalls={view.relayCalls}
+                callStats={view.callStats}
+              />
               <Media core={core} media={view.media} />
               <BlockedList core={core} />
               <DeleteAccount core={core} />
@@ -298,7 +303,19 @@ function ConversationList({
   )
 }
 
-function Privacy({ core, readReceipts, relayCalls }: { core: CoreClient; readReceipts: boolean; relayCalls: boolean }) {
+function Privacy({
+  core,
+  readReceipts,
+  relayCalls,
+  callStats,
+}: {
+  core: CoreClient
+  readReceipts: boolean
+  relayCalls: boolean
+  callStats: boolean
+}) {
+  const [stats, setStats] = useState(callStats)
+  useEffect(() => setStats(callStats), [callStats])
   // Local state so the boxes flip at once; the worker's view follows.
   const [on, setOn] = useState(readReceipts)
   useEffect(() => setOn(readReceipts), [readReceipts])
@@ -333,6 +350,21 @@ function Privacy({ core, readReceipts, relayCalls }: { core: CoreClient; readRec
       <p className="muted small">
         Calls go through this service's relay, so the people you call don't see your IP address. Calls may sound or
         look a little worse.
+      </p>
+      <label className="choice">
+        <input
+          type="checkbox"
+          checked={stats}
+          onChange={(e) => {
+            setStats(e.target.checked)
+            void core.setCallStats(e.target.checked)
+          }}
+        />
+        Share anonymous call statistics
+      </label>
+      <p className="muted small">
+        Once a day, how many of your calls connected or failed and how long they took to connect, with nothing that
+        identifies you, who you called or when. It helps make calls reliable.
       </p>
     </details>
   )

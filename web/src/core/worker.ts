@@ -119,6 +119,12 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
     case 'setReadReceipts':
       await engine.setReadReceipts(request.on)
       return { type: 'ok' }
+    case 'setCallStats':
+      await engine.setCallStats(request.on)
+      return { type: 'ok' }
+    case 'recordCall':
+      await engine.recordCall(request.kind, request.connected, request.setupMs)
+      return { type: 'ok' }
     case 'setRelayCalls':
       await engine.setRelayCalls(request.on)
       return { type: 'ok' }
