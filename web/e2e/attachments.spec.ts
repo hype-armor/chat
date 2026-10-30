@@ -43,12 +43,17 @@ test('photos lose their metadata, and files arrive intact', async ({ browser }) 
   expect(photo.includes(MARKER)).toBe(true)
 
   await alice.getByLabel('Message').fill('The view')
-  await alice.getByTestId('attach-input').setInputFiles({ name: 'beach.jpg', mimeType: 'image/jpeg', buffer: photo })
+  await alice.getByRole('button', { name: 'Add attachment' }).click()
+  const chooser = alice.waitForEvent('filechooser')
+  await alice.getByRole('menuitem', { name: 'Photo or file' }).click()
+  await (await chooser).setFiles({ name: 'beach.jpg', mimeType: 'image/jpeg', buffer: photo })
   const sent = messages(alice).filter({ hasText: 'The view' })
   await expect(sent.or(alice.getByRole('alert'))).toBeVisible()
   expect(await alice.getByRole('alert').allTextContents()).toEqual([])
   await expect(sent.getByRole('img', { name: 'Sent', exact: true })).toBeVisible()
   await expect(sent.getByRole('img', { name: 'beach.jpg' })).toBeVisible()
+  await expect(alice.getByLabel('Message', { exact: true })).toHaveValue('')
+  await expect(alice.getByLabel('Message', { exact: true })).toBeFocused()
 
   await alice.getByTestId('attach-input').setInputFiles({
     name: 'notes.txt',
@@ -56,6 +61,14 @@ test('photos lose their metadata, and files arrive intact', async ({ browser }) 
     buffer: Buffer.from('hello, encrypted file'),
   })
   await expect(messages(alice).filter({ hasText: 'notes.txt' }).getByRole('img', { name: 'Sent', exact: true })).toBeVisible()
+
+  await alice.getByTestId('attach-input').setInputFiles({
+    name: 'empty.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.alloc(0),
+  })
+  await expect(alice.getByRole('alert')).toHaveText('That file is empty')
+  await expect(alice.getByRole('button', { name: 'Add attachment' })).toBeVisible()
 
   await expect(bob.getByRole('button', { name: /Alice/ })).toContainText('File: notes.txt')
   await openChat(bob, /Alice/)
