@@ -62,6 +62,23 @@ jobs:
       - run: pnpm build
       - name: Install browsers
         run: pnpm --filter web exec playwright install --with-deps chromium firefox webkit
+      - name: Build chat-server and the echo bot for messaging e2e tests
+        run: cargo build -p chat-server -p chat-echo
+      - name: Start LiveKit for the group-call tests
+        run: |
+          docker run -d --name livekit --network host livekit/livekit-server:v1.13 \
+            --dev --bind 0.0.0.0 --node-ip "$(hostname -I | awk '{print $1}')"
+      - name: End-to-end tests (Chromium, Firefox, WebKit)
+        run: pnpm --filter web e2e
+        env:
+          E2E_LIVEKIT: ws://127.0.0.1:7880
+          PW_ALL_BROWSERS: "1"
+          CI: "1"
+          E2E_SERVER: "1"
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      - name: LiveKit log
+        if: failure()
+        run: docker logs livekit > target/livekit.log 2>&1 || true
       - name: Upload server log on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -70,16 +87,9 @@ jobs:
           path: |
             target/e2e-server.log
             target/e2e-echo.log
+            target/livekit.log
+            web/test-results
           if-no-files-found: ignore
-      - name: Build chat-server and the echo bot for messaging e2e tests
-        run: cargo build -p chat-server -p chat-echo
-      - name: End-to-end tests (Chromium, Firefox, WebKit)
-        run: pnpm --filter web e2e
-        env:
-          PW_ALL_BROWSERS: "1"
-          CI: "1"
-          E2E_SERVER: "1"
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
 
   helm:
     runs-on: ubuntu-latest

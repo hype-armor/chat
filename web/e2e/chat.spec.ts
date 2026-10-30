@@ -39,14 +39,138 @@ test('unknown usernames are reported', async ({ browser }) => {
   await expect(page.getByRole('alert')).toHaveText('no one has that username')
 })
 
+test('composer leaves room for text and supports keyboard menus and multiline drafts', async ({ browser }) => {
+  const bobUsername = randomUsername()
+  const alice = await signUp(browser, 'Alice', randomUsername())
+  await signUp(browser, 'Bob', bobUsername)
+  await alice.setViewportSize({ width: 360, height: 720 })
+  await startChat(alice, bobUsername)
+  const input = alice.getByRole('textbox', { name: 'Message', exact: true })
+  const add = alice.getByRole('button', { name: 'Add attachment' })
+  const mic = alice.getByRole('button', { name: 'Record a voice note' })
+  const send = alice.getByRole('button', { name: 'Send', exact: true })
+  await expect(input).toHaveJSProperty('tagName', 'TEXTAREA')
+  await expect(mic).toBeVisible()
+  await expect(send).toHaveCount(0)
+  expect((await input.boundingBox())!.width).toBeGreaterThan(180)
+
+  await add.focus()
+  await add.press('ArrowDown')
+  await expect(add).toHaveAttribute('aria-expanded', 'true')
+  await expect(alice.getByRole('menuitem', { name: 'Photo or file' })).toBeFocused()
+  await alice.keyboard.press('ArrowDown')
+  await expect(alice.getByRole('menuitem', { name: 'Location', exact: true })).toBeFocused()
+  await alice.keyboard.press('Escape')
+  await expect(add).toHaveAttribute('aria-expanded', 'false')
+  await expect(add).toBeFocused()
+
+  const initialHeight = (await input.boundingBox())!.height
+  await input.fill('First line')
+  await expect(mic).toBeHidden()
+  await expect(send).toBeEnabled()
+  expect((await input.boundingBox())!.width).toBeGreaterThan(180)
+  await input.press('Shift+Enter')
+  await input.press('L')
+  await expect(input).toHaveValue('First line\nL')
+  expect((await input.boundingBox())!.height).toBeGreaterThan(initialHeight)
+  await input.dispatchEvent('keydown', { key: 'Enter', isComposing: true })
+  await input.dispatchEvent('keydown', { key: 'Enter', keyCode: 229 })
+  await expect(messages(alice)).toHaveCount(0)
+  await input.press('Enter')
+  await expect(messages(alice).filter({ hasText: 'First line' }).getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
+  await expect(input).toHaveValue('')
+  await expect(input).toBeFocused()
+  await expect(mic).toBeVisible()
+  expect((await input.boundingBox())!.height).toBe(initialHeight)
+
+  await input.fill('line\n'.repeat(10))
+  const cappedHeight = (await input.boundingBox())!.height
+  expect(cappedHeight).toBeLessThan(initialHeight * 4)
+  await input.fill('line\n'.repeat(20))
+  expect((await input.boundingBox())!.height).toBe(cappedHeight)
+  await input.evaluate((input) => {
+    input.addEventListener('blur', () => { input.dataset.blurred = 'true' }, { once: true })
+  })
+  await send.click()
+  await expect(input).toBeFocused()
+  await expect(input).not.toHaveAttribute('data-blurred')
+  await expect(input).toHaveValue('')
+  expect((await input.boundingBox())!.height).toBe(initialHeight)
+  for (const key of ['Enter', 'Space']) {
+    await input.fill(`Send with ${key}`)
+    await input.press('Tab')
+    await expect(send).toBeFocused()
+    await send.press(key)
+    await expect(messages(alice).filter({ hasText: `Send with ${key}` }).getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
+    await expect(input).toHaveValue('')
+    await expect(input).toBeFocused()
+  }
+  await input.fill(' ')
+  await expect(send).toBeDisabled()
+  await input.press('Enter')
+  await expect(input).toHaveValue(' ')
+})
+
+test.describe('touch composer', () => {
+  test.skip(({ browserName }) => browserName === 'firefox', 'Firefox does not emulate touch contexts')
+  test.use({ hasTouch: true, viewport: { width: 360, height: 720 } })
+
+  test('Enter inserts a newline and tapping Send never blurs the composer', async ({ page, browser }) => {
+    const bobUsername = randomUsername()
+    await signUp(browser, 'Bob', bobUsername)
+    await page.goto('/')
+    await page.getByLabel('Username').fill(randomUsername())
+    await page.getByLabel('Your name').fill('Alice')
+    await page.getByRole('button', { name: 'Sign up' }).click()
+    await expect(page.getByRole('status')).toHaveText('Connected')
+    await startChat(page, bobUsername)
+    const input = page.getByLabel('Message', { exact: true })
+    await input.fill('Touch draft')
+    await input.press('Enter')
+    await input.press('L')
+    await expect(input).toHaveValue('Touch draft\nL')
+    await expect(messages(page)).toHaveCount(0)
+    await expect(input).toBeFocused()
+    // A final focus assertion alone misses blur followed by programmatic re-focus.
+    await input.evaluate((input) => {
+      input.dataset.blurs = '0'
+      input.addEventListener('blur', () => {
+        input.dataset.blurs = String(Number(input.dataset.blurs) + 1)
+      })
+    })
+    await page.getByRole('button', { name: 'Send', exact: true }).tap()
+    await expect(messages(page).filter({ hasText: 'Touch draft' }).getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
+    await expect(input).toHaveValue('')
+    await expect(input).toBeFocused()
+    await expect(input).toHaveAttribute('data-blurs', '0')
+    // Approximate the space left by an on-screen keyboard; emulation has no OS keyboard.
+    await page.setViewportSize({ width: 360, height: 400 })
+    for (let i = 0; i < 6; i++) {
+      await page.keyboard.type(`Next message ${i}`)
+      await expect(input).toHaveValue(`Next message ${i}`)
+      await page.getByRole('button', { name: 'Send', exact: true }).tap()
+      await expect(input).toBeFocused()
+      await expect(input).toHaveAttribute('data-blurs', '0')
+      const sent = messages(page).last()
+      await expect(sent).toContainText(`Next message ${i}`)
+      await expect(sent.getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
+      await expect(sent).toBeInViewport({ ratio: 1 })
+      const bounds = (await sent.boundingBox())!
+      expect(bounds.y + bounds.height)
+        .toBeLessThanOrEqual((await page.locator('form.composer').boundingBox())!.y)
+    }
+  })
+})
+
 for (const width of [1280, 390]) {
   test(`conversation scrolling stays pinned unless reading history (${width}px)`, async ({ browser }) => {
     test.setTimeout(90_000)
     const bobUsername = randomUsername()
     const alice = await signUp(browser, 'Alice', randomUsername())
     const bob = await signUp(browser, 'Bob', bobUsername)
-    await alice.setViewportSize({ width, height: 720 })
-    await bob.setViewportSize({ width, height: 720 })
+    const height = width === 390 ? 740 : 800
+    await alice.setViewportSize({ width, height })
+    await bob.setViewportSize({ width, height })
     const viewport = alice.locator('.messages-viewport')
     const pill = alice.getByRole('button', { name: '↓ New messages' })
     const send = async (page: Page, text: string) => {
@@ -65,6 +189,17 @@ for (const width of [1280, 390]) {
       await expect(messages(alice).last()).toBeInViewport({ ratio: 1 })
       await expect(pill).toHaveCount(0)
     }
+    const expectPageFits = async () => {
+      await expect.poll(() => alice.locator('html').evaluate((root) => {
+        const scroller = root.ownerDocument.scrollingElement!
+        return {
+          height: scroller.scrollHeight,
+          width: scroller.scrollWidth,
+          top: scroller.scrollTop,
+          left: scroller.scrollLeft,
+        }
+      })).toEqual({ height, width, top: 0, left: 0 })
+    }
     const scrollUp = async () => {
       await viewport.evaluate((list) => { list.scrollTop = 0 })
       await alice.evaluate('new Promise(requestAnimationFrame)')
@@ -77,6 +212,22 @@ for (const width of [1280, 390]) {
     await expect.poll(() => viewport.evaluate(
       (list) => list.scrollHeight - list.clientHeight,
     )).toBeGreaterThan(300)
+    await expectBottom()
+    await expectPageFits()
+    for (const selector of ['.conversation-bar', '.composer']) {
+      await alice.locator(selector).hover()
+      await alice.mouse.wheel(0, 1000)
+      await alice.evaluate('new Promise(requestAnimationFrame)')
+      await alice.evaluate('new Promise(requestAnimationFrame)')
+      await expectPageFits()
+      await expectBottom()
+    }
+    const bottom = await viewport.evaluate((list) => list.scrollTop)
+    await viewport.hover()
+    await alice.mouse.wheel(0, -500)
+    await expect.poll(() => viewport.evaluate((list) => list.scrollTop)).toBeLessThan(bottom)
+    await expectPageFits()
+    await viewport.evaluate((list) => { list.scrollTop = list.scrollHeight })
     await expectBottom()
 
     await openChat(bob, /Alice/)
@@ -97,6 +248,7 @@ for (const width of [1280, 390]) {
     const position = await viewport.evaluate((list) => list.scrollTop)
     await send(bob, 'Arrived while reading history')
     await expect(pill).toBeVisible()
+    await expectPageFits()
     await expect.poll(() => viewport.evaluate((list) => list.scrollTop)).toBe(position)
     await expect(messages(alice).last()).not.toBeInViewport()
     await messages(alice).last().evaluate((message) => { message.style.paddingBottom = '240px' })
@@ -153,6 +305,12 @@ for (const width of [1280, 390]) {
     await openChat(alice, /Bob/)
     await expect(messages(alice).last()).toContainText('Unread before switching')
     await expectBottom()
+    await expectPageFits()
+    if (width <= 640) await alice.getByRole('button', { name: 'Back to conversations' }).click()
+    await expectPageFits()
+    await alice.getByRole('button', { name: 'Settings', exact: true }).click()
+    await expect(alice.getByRole('navigation', { name: 'Settings', exact: true })).toBeVisible()
+    await expectPageFits()
     await alice.context().close()
     await bob.context().close()
   })

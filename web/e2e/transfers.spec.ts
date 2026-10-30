@@ -33,6 +33,8 @@ test('interrupted uploads and downloads resume where they stopped (ADR-0025)', a
   await alice.getByTestId('attach-input').setInputFiles({ name: 'big.bin', mimeType: 'application/octet-stream', buffer: data })
   const sent = messages(alice).filter({ hasText: 'big.bin' })
   await expect(sent).toContainText('Failed')
+  await expect(alice.getByRole('button', { name: 'Add attachment' })).toBeVisible()
+  await expect(alice.getByRole('button', { name: 'Record a voice note' })).toBeEnabled()
   await alice.getByLabel('Message', { exact: true }).fill('After the failed upload')
   await alice.getByRole('button', { name: 'Send', exact: true }).click()
   await expect(messages(alice).last().getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()

@@ -11,10 +11,14 @@ type Recording = { recorder: MediaRecorder; stream: MediaStream; startedAt: numb
 
 export function Recorder({
   disabled,
+  hidden,
+  onRecordingChange,
   onRecorded,
   onError,
 }: {
   disabled: boolean
+  hidden: boolean
+  onRecordingChange: (recording: boolean) => void
   onRecorded: (file: File, media: MediaInfo) => void
   onError: (message: string) => void
 }) {
@@ -58,6 +62,7 @@ export function Recorder({
       for (const track of stream.getTracks()) track.stop()
       recording.current = undefined
       setElapsed(undefined)
+      onRecordingChange(false)
       const durationMs = Date.now() - r.startedAt
       if (!send.current || durationMs < 500) return
       const mime = type.split(';')[0]
@@ -68,6 +73,7 @@ export function Recorder({
     recording.current = r
     recorder.start(1000)
     setElapsed(0)
+    onRecordingChange(true)
   }
 
   if (elapsed === undefined) {
@@ -77,6 +83,7 @@ export function Recorder({
         className="icon"
         onClick={() => void start()}
         disabled={disabled}
+        hidden={hidden}
         aria-label="Record a voice note"
       >
         🎤
@@ -89,7 +96,7 @@ export function Recorder({
       <button type="button" className="link small" onClick={() => stop(false)}>
         Cancel
       </button>
-      <button type="button" onClick={() => stop(true)}>
+      <button type="button" autoFocus onClick={() => stop(true)}>
         Send voice note
       </button>
     </span>

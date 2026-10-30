@@ -1,7 +1,7 @@
 // Locations shared once (FR-LOC-1): a card in the conversation, and the
 // share flow in the composer. Coordinates are read here (the Geolocation API
 // exists only on the page) and handed to the core worker to encrypt.
-import { useState } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import type { CoreClient } from '../core/client'
 import type { LocationInfo } from '../core/protocol'
 import { MapView } from './MapView'
@@ -39,21 +39,34 @@ export function LocationCard({ core, location }: { core: CoreClient; location: L
   )
 }
 
-/** The composer's location button: find the position, preview it, send it. */
+/** The composer's location action: find the position, preview it, send it. */
 export function ShareLocation({
   core,
   conversationId,
-  disabled,
+  trigger,
   onError,
+  onSend,
 }: {
   core: CoreClient
   conversationId: string
-  disabled: boolean
+  trigger: (locate: () => void) => ReactNode
   onError: (message: string) => void
+  onSend: () => void
 }) {
   const [state, setState] = useState<'idle' | 'locating' | LocationInfo>('idle')
+  const dialog = useRef<HTMLDialogElement>(null)
+
+  useEffect(() => {
+    if (typeof state === 'object') dialog.current?.showModal()
+  }, [state])
+
+  const close = () => {
+    dialog.current?.close()
+    setState('idle')
+  }
 
   const locate = () => {
+    if (state !== 'idle') return
     if (!navigator.geolocation) return onError("This browser can't share a location")
     setState('locating')
     navigator.geolocation.getCurrentPosition(
@@ -64,7 +77,7 @@ export function ShareLocation({
           accuracyM: Math.round(p.coords.accuracy),
         }),
       (e) => {
-        setState('idle')
+        close()
         onError(e.code === e.PERMISSION_DENIED ? 'Allow location access to share where you are' : "Couldn't find your location")
       },
       { enableHighAccuracy: true, timeout: 20_000, maximumAge: 30_000 },
@@ -72,7 +85,8 @@ export function ShareLocation({
   }
 
   const send = async (location: LocationInfo) => {
-    setState('idle')
+    close()
+    onSend()
     try {
       await core.sendLocation(conversationId, location)
     } catch (e) {
@@ -81,7 +95,8 @@ export function ShareLocation({
   }
 
   const live = async (location: LocationInfo, durationMs: number) => {
-    setState('idle')
+    close()
+    onSend()
     try {
       await core.startLive(conversationId, durationMs, location)
     } catch (e) {
@@ -91,17 +106,10 @@ export function ShareLocation({
 
   return (
     <>
-      <button
-        type="button"
-        className="icon"
-        onClick={locate}
-        disabled={disabled || state !== 'idle'}
-        aria-label="Share your location"
-      >
-        {state === 'locating' ? '…' : '📍'}
-      </button>
+      {trigger(locate)}
+      {state === 'locating' && <span className="location-progress small" role="status">Finding location…</span>}
       {typeof state === 'object' && (
-        <div className="share-location" role="dialog" aria-label="Share this location?">
+        <dialog className="share-location" ref={dialog} aria-label="Share this location?" onCancel={close}>
           <MapView core={core} latitude={state.latitude} longitude={state.longitude} />
           <p className="small">
             {formatCoordinates(state)} · ±{state.accuracyM} m. Only the people in this conversation will see it.
@@ -116,11 +124,11 @@ export function ShareLocation({
                 {label}
               </button>
             ))}
-            <button type="button" className="link" onClick={() => setState('idle')}>
+            <button type="button" className="link" onClick={close}>
               Cancel
             </button>
           </span>
-        </div>
+        </dialog>
       )}
     </>
   )

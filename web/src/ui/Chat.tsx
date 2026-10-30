@@ -1,6 +1,6 @@
 import { Fragment, type FormEvent, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { CoreClient } from '../core/client'
-import type { AppView, ChatMessage, ConversationSummary, MemberInfo } from '../core/protocol'
+import type { AppView, ChatMessage, ConversationSummary, GroupCallStatus, MemberInfo } from '../core/protocol'
 import { SetupActions, SetupBanner, useSetup } from './Banners'
 import { Devices } from './Devices'
 import { Invite } from './Invite'
@@ -14,6 +14,8 @@ import { LocationCard, ShareLocation } from './Location'
 import { LiveBanner, LiveCard } from './Live'
 import { CallScreen } from './Call'
 import { CallController } from './calls'
+import { GroupCallScreen, useGroupCall } from './GroupCall'
+import { GroupCallController } from './groupCall'
 import { probeClip } from './media'
 import type { MediaInfo } from '../core/protocol'
 import { BlockedList, DeleteAccount, ReportForm } from './Safety'
@@ -85,7 +87,19 @@ export function Chat({
   const sidebar = useRef<HTMLElement>(null)
   const setup = useSetup()
   const [calls] = useState(() => new CallController(core))
-  useEffect(() => () => calls.dispose(), [calls])
+  const [groupCalls] = useState(() => {
+    const g = new GroupCallController(core)
+    g.otherBusy = () => calls.busy
+    calls.otherBusy = () => g.busy
+    return g
+  })
+  useEffect(
+    () => () => {
+      calls.dispose()
+      groupCalls.dispose()
+    },
+    [calls, groupCalls],
+  )
   calls.relayOnly = view.relayCalls
   const conversation = view.conversations.find((c) => c.id === selected)
   const select = (id: string) => {
@@ -103,6 +117,7 @@ export function Chat({
     <>
       <LiveBanner core={core} sharing={view.liveSharing} />
       <CallScreen calls={calls} />
+      <GroupCallScreen calls={groupCalls} />
       <div
         hidden={showDiagnostics}
         className={`chat-layout ${conversation ? 'has-selection' : ''} ${view.liveSharing.length > 0 ? 'with-banner' : ''}`}
@@ -155,7 +170,12 @@ export function Chat({
               <Backup core={core} backup={view.backup} />
               <Invite core={core} />
               <Devices core={core} />
-              <Privacy core={core} readReceipts={view.readReceipts} relayCalls={view.relayCalls} />
+              <Privacy
+                core={core}
+                readReceipts={view.readReceipts}
+                relayCalls={view.relayCalls}
+                callStats={view.callStats}
+              />
               <Media core={core} media={view.media} />
               <BlockedList core={core} />
               <DeleteAccount core={core} />
@@ -213,6 +233,7 @@ export function Chat({
             key={conversation.id}
             core={core}
             calls={calls}
+            groupCalls={groupCalls}
             id={conversation.id}
             title={conversation.title}
             isGroup={conversation.isGroup}
@@ -230,6 +251,51 @@ export function Chat({
         )}
       </div>
     </>
+  )
+}
+
+/** "Call in progress · Join" while people are in the group's latest call (ADR-0031). */
+function OngoingCall({
+  core,
+  groupCalls,
+  id,
+  title,
+}: {
+  core: CoreClient
+  groupCalls: GroupCallController
+  id: string
+  title: string
+}) {
+  const [call, setCall] = useState<GroupCallStatus>()
+  const inCall = useGroupCall(groupCalls)
+  useEffect(() => {
+    let live = true
+    const check = () =>
+      core
+        .groupCallStatus(id)
+        .then((c) => live && setCall(c))
+        .catch(() => live && setCall(undefined))
+    void check()
+    const timer = setInterval(check, 15_000)
+    const unsubscribe = core.subscribe((e) => e.type === 'messages' && e.conversationId === id && void check())
+    return () => {
+      live = false
+      clearInterval(timer)
+      unsubscribe()
+    }
+  }, [core, id])
+  if (!call || (inCall && inCall.phase !== 'incoming')) return null
+  return (
+    <p className="notice" role="note">
+      {call.video ? '🎥' : '📞'} Call in progress · {call.participants} {call.participants === 1 ? 'person' : 'people'}{' '}
+      <button
+        type="button"
+        className="link"
+        onClick={() => void groupCalls.join(id, call.callId, title, call.video).catch(() => undefined)}
+      >
+        Join
+      </button>
+    </p>
   )
 }
 
@@ -273,7 +339,19 @@ function ConversationList({
   )
 }
 
-function Privacy({ core, readReceipts, relayCalls }: { core: CoreClient; readReceipts: boolean; relayCalls: boolean }) {
+function Privacy({
+  core,
+  readReceipts,
+  relayCalls,
+  callStats,
+}: {
+  core: CoreClient
+  readReceipts: boolean
+  relayCalls: boolean
+  callStats: boolean
+}) {
+  const [stats, setStats] = useState(callStats)
+  useEffect(() => setStats(callStats), [callStats])
   // Local state so the boxes flip at once; the worker's view follows.
   const [on, setOn] = useState(readReceipts)
   useEffect(() => setOn(readReceipts), [readReceipts])
@@ -308,6 +386,21 @@ function Privacy({ core, readReceipts, relayCalls }: { core: CoreClient; readRec
       <p className="muted small">
         Calls go through this service's relay, so the people you call don't see your IP address. Calls may sound or
         look a little worse.
+      </p>
+      <label className="choice">
+        <input
+          type="checkbox"
+          checked={stats}
+          onChange={(e) => {
+            setStats(e.target.checked)
+            void core.setCallStats(e.target.checked)
+          }}
+        />
+        Share anonymous call statistics
+      </label>
+      <p className="muted small">
+        Once a day, how many of your calls connected or failed and how long they took to connect, with nothing that
+        identifies you, who you called or when. It helps make calls reliable.
       </p>
     </details>
   )
@@ -606,6 +699,7 @@ function AddPeople({ core, id, onDone }: { core: CoreClient; id: string; onDone:
 function Conversation({
   core,
   calls,
+  groupCalls,
   id,
   title,
   isGroup,
@@ -620,6 +714,7 @@ function Conversation({
 }: {
   core: CoreClient
   calls: CallController
+  groupCalls: GroupCallController
   id: string
   title: string
   isGroup: boolean
@@ -648,6 +743,9 @@ function Conversation({
   const previousMessages = useRef<ChatMessage[]>([])
   const [newMessages, setNewMessages] = useState(false)
   const picker = useRef<HTMLInputElement>(null)
+  const composer = useRef<HTMLTextAreaElement>(null)
+  const [recording, setRecording] = useState(false)
+  const wasRecording = useRef(false)
   const menuItems: MenuItem[] = [
     ...(isGroup ? [{ label: 'Group info', onSelect: () => toggle('info') }] : []),
     ...(peer ? [{ label: 'Verify safety number', onSelect: () => toggle('verify') }] : []),
@@ -720,12 +818,40 @@ function Conversation({
     return () => observer.disconnect()
   }, [onScroll, scrollToBottom])
 
-  const send = async (e: FormEvent) => {
-    e.preventDefault()
+  useLayoutEffect(() => {
+    const input = composer.current
+    if (!input || recording) return
+    const resize = () => {
+      input.style.height = 'auto'
+      input.style.height = `${input.scrollHeight + input.offsetHeight - input.clientHeight}px`
+    }
+    resize()
+    let width = input.clientWidth
+    const observer = new ResizeObserver(() => {
+      if (width === input.clientWidth) return
+      width = input.clientWidth
+      resize()
+    })
+    observer.observe(input)
+    return () => observer.disconnect()
+  }, [draft, recording])
+
+  useLayoutEffect(() => {
+    if (wasRecording.current && !recording) composer.current?.focus({ preventScroll: true })
+    wasRecording.current = recording
+  }, [recording])
+
+  const send = async () => {
     const text = draft.trim()
     if (!text) return
     setDraft('')
-    await core.sendText(id, text)
+    // Keyboard activation unmounts the focused Send button; pointer sends keep focus here.
+    composer.current?.focus({ preventScroll: true })
+    try {
+      await core.sendText(id, text)
+    } catch (e) {
+      setAttachError(e instanceof Error ? e.message : String(e))
+    }
   }
 
   // The draft, if any, goes with the file as its caption.
@@ -742,6 +868,7 @@ function Conversation({
       setAttachError(e instanceof Error ? e.message : String(e))
     } finally {
       setAttaching(false)
+      composer.current?.focus({ preventScroll: true })
     }
   }
 
@@ -770,6 +897,26 @@ function Conversation({
           </button>
         </div>
         <div className="header-actions">
+          {isGroup && active && !request && (
+            <>
+              <button
+                type="button"
+                className="icon"
+                aria-label="Group voice call"
+                onClick={() => void groupCalls.start(id, title, false).catch((e) => setAttachError(String(e.message ?? e)))}
+              >
+                📞
+              </button>
+              <button
+                type="button"
+                className="icon"
+                aria-label="Group video call"
+                onClick={() => void groupCalls.start(id, title, true).catch((e) => setAttachError(String(e.message ?? e)))}
+              >
+                🎥
+              </button>
+            </>
+          )}
           {peer && active && !blocked && !request && (
             <>
               <button
@@ -794,6 +941,7 @@ function Conversation({
         </div>
       </header>
       {panel === 'add' && active && <AddPeople core={core} id={id} onDone={() => setPanel(undefined)} />}
+      {isGroup && active && !request && <OngoingCall core={core} groupCalls={groupCalls} id={id} title={title} />}
       {verification === 'changed' && panel !== 'verify' && (
         <p className="notice warning" role="note">
           {title}'s safety number changed since you verified it. Verify it again before sharing anything sensitive.
@@ -941,7 +1089,14 @@ function Conversation({
           </button>
         )}
       </div>
-      <form className="composer" onSubmit={send} hidden={!active || blocked || request}>
+      <form
+        className="composer"
+        onSubmit={(e) => {
+          e.preventDefault()
+          void send()
+        }}
+        hidden={!active || blocked || request}
+      >
         <input
           ref={picker}
           type="file"
@@ -949,35 +1104,62 @@ function Conversation({
           data-testid="attach-input"
           onChange={(e) => void attach(e.target.files?.[0])}
         />
-        <button
-          type="button"
-          className="icon"
-          onClick={() => picker.current?.click()}
-          disabled={attaching}
-          aria-label="Attach a photo or file"
-        >
-          {attaching ? '…' : '+'}
-        </button>
-        <ShareLocation core={core} conversationId={id} disabled={attaching} onError={setAttachError} />
-        <Recorder
-          disabled={attaching}
-          onRecorded={(file, media) => void attach(file, media)}
+        <ShareLocation
+          core={core}
+          conversationId={id}
           onError={setAttachError}
+          onSend={() => composer.current?.focus({ preventScroll: true })}
+          trigger={(locate) =>
+            recording ? null : attaching ? (
+              <span className="small" role="status">Attaching…</span>
+            ) : (
+              <Menu
+                triggerLabel="Add attachment"
+                triggerContent="+"
+                items={[
+                  { label: 'Photo or file', onSelect: () => picker.current?.click() },
+                  { label: 'Location', onSelect: locate },
+                ]}
+              />
+            )
+          }
         />
         <label className="visually-hidden" htmlFor="composer">
           Message
         </label>
-        <input
+        <textarea
+          ref={composer}
           id="composer"
+          rows={1}
+          hidden={recording}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (
+              e.key === 'Enter' && !e.shiftKey &&
+              !e.nativeEvent.isComposing && e.nativeEvent.keyCode !== 229 &&
+              !matchMedia('(pointer: coarse)').matches
+            ) {
+              e.preventDefault()
+              void send()
+            }
+          }}
           placeholder="Message"
           autoComplete="off"
           maxLength={4000}
         />
-        <button type="submit" disabled={!draft.trim()}>
-          Send
-        </button>
+        {draft.length > 0 && !recording && (
+          <button type="submit" disabled={!draft.trim()} onMouseDown={(e) => e.preventDefault()}>
+            Send
+          </button>
+        )}
+        <Recorder
+          hidden={draft.length > 0}
+          disabled={attaching}
+          onRecordingChange={setRecording}
+          onRecorded={(file, media) => void attach(file, media)}
+          onError={setAttachError}
+        />
       </form>
     </section>
   )

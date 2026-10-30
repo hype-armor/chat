@@ -127,6 +127,11 @@ export const api = {
   unsubscribePush: (token: string) => post<void>('/v1/push/unsubscribe', {}, token),
   groupEpoch: (token: string, groupId: string) =>
     post<{ epoch: number; last_commit_hash: string }>('/v1/groups/epoch', { group_id: groupId }, token),
+  callJoin: (token: string, conversationId: string, callId: string) =>
+    post<{ url: string; token: string }>('/v1/calls/join', { conversation_id: conversationId, call_id: callId }, token),
+  callStatus: (token: string, conversationId: string, callId: string) =>
+    post<{ participants: number }>('/v1/calls/status', { conversation_id: conversationId, call_id: callId }, token),
+  callStats: (stats: unknown) => post<void>('/v1/stats/calls', stats),
   iceServers: (token: string) =>
     get<{ ice_servers: { urls: string[]; username?: string; credential?: string }[] }>('/v1/turn', token),
   devices: (token: string) => get<{ devices: ServerDevice[] }>('/v1/devices', token),

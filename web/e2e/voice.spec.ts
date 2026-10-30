@@ -15,12 +15,34 @@ test('voice notes and video clips play on the other side (FR-MED-1)', async ({ b
   const alice = await signUp(browser, 'Alice', randomUsername())
   const bob = await signUp(browser, 'Bob', bobUsername)
   await startChat(alice, bobUsername)
+  await alice.setViewportSize({ width: 360, height: 720 })
 
+  // Complete a pending location lookup after the recorder takes over the row.
+  await alice.evaluate(`navigator.geolocation.getCurrentPosition = (success) => {
+    window.finishLocation = () => success({ coords: { latitude: 48.8584, longitude: 2.2945, accuracy: 12 } })
+  }`)
+  await alice.getByRole('button', { name: 'Add attachment' }).click()
+  await alice.getByRole('menuitem', { name: 'Location', exact: true }).click()
+  await expect(alice.getByRole('status').filter({ hasText: 'Finding location…' })).toBeVisible()
+  await expect(alice.getByRole('button', { name: 'Send', exact: true })).toHaveCount(0)
+  await alice.getByRole('button', { name: 'Record a voice note' }).click()
+  await expect(alice.getByLabel('Message', { exact: true })).toBeHidden()
+  await expect(alice.getByRole('button', { name: 'Add attachment' })).toBeHidden()
+  await expect(alice.getByRole('button', { name: 'Send voice note' })).toBeFocused()
+  await alice.evaluate('window.finishLocation()')
+  const preview = alice.getByRole('dialog', { name: 'Share this location?' })
+  await expect(preview).toBeVisible()
+  await preview.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await alice.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(alice.getByLabel('Message', { exact: true })).toBeFocused()
+  await expect(messages(alice)).toHaveCount(0)
   await alice.getByRole('button', { name: 'Record a voice note' }).click()
   await expect(alice.getByRole('status', { name: 'Recording a voice note' })).toContainText('0:01')
   await alice.getByRole('button', { name: 'Send voice note' }).click()
   const note = messages(alice).filter({ hasText: 'Voice note' })
   await expect(note.getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
+  await expect(alice.getByLabel('Message', { exact: true })).toBeFocused()
+  await expect(alice.getByRole('button', { name: 'Record a voice note' })).toBeVisible()
 
   // A two-second clip made in the page (this file is type-checked without DOM types).
   const clip = Buffer.from(

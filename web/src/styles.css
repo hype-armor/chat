@@ -60,8 +60,12 @@ body {
   position: absolute;
   width: 1px;
   height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
   overflow: hidden;
   clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 button {
@@ -85,7 +89,8 @@ button.link {
   padding: 0.25rem 0.5rem;
 }
 
-input {
+input,
+.composer textarea {
   font: inherit;
   width: 100%;
   padding: 0.5rem 0.75rem;
@@ -210,6 +215,7 @@ form {
 }
 
 .messages-viewport {
+  position: relative;
   min-height: 0;
   overflow-y: auto;
   flex: 1;
@@ -238,6 +244,7 @@ form {
 }
 
 .messages li {
+  position: relative;
   display: grid;
   gap: 0.125rem;
   max-width: min(80%, 36rem);
@@ -702,17 +709,18 @@ button.danger {
 }
 
 .share-location {
-  position: absolute;
-  bottom: 100%;
-  left: 1rem;
-  right: 1rem;
-  display: grid;
+  width: min(28rem, calc(100vw - 2rem));
   gap: 0.5rem;
   padding: 0.75rem;
   background: var(--bg, #fff);
+  color: var(--fg);
   border: 1px solid var(--border);
   border-radius: 0.75rem;
   box-shadow: 0 4px 16px rgb(0 0 0 / 0.15);
+}
+
+.share-location[open] {
+  display: grid;
 }
 
 .share-location .map {
@@ -961,11 +969,38 @@ button.conversation-title {
   align-items: center;
 }
 
-.composer input {
+.composer textarea {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.5;
+  max-height: calc(8.5rem + 2px);
+  resize: none;
+  overflow-y: auto;
   border-radius: 1.25rem;
 }
 
+.composer .menu-items {
+  top: auto;
+  bottom: calc(100% + 0.5rem);
+  left: 0;
+  right: auto;
+}
+
+.composer .recording {
+  flex: 1;
+  justify-content: space-between;
+}
+
+.location-progress {
+  position: absolute;
+  bottom: 100%;
+  left: 1rem;
+  padding: 0.5rem;
+  background: var(--surface);
+}
+
 .composer button[type='submit'] {
+  flex: none;
   border-radius: 1.25rem;
 }
 
@@ -1062,4 +1097,73 @@ button.conversation-title {
 }
 .call-button.decline {
   background: #da3633;
+}
+
+/* Group calls (ADR-0031) */
+.call-screen.group {
+  justify-content: flex-start;
+  gap: 1rem;
+}
+.call-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 0.5rem;
+  width: 100%;
+  flex: 1;
+  overflow-y: auto;
+  align-content: start;
+}
+.tile {
+  position: relative;
+  margin: 0;
+  aspect-ratio: 4 / 3;
+  border-radius: 0.75rem;
+  background: #161b22;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 2px solid transparent;
+}
+.tile.speaking {
+  border-color: #3fb950;
+}
+.tile video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.tile figcaption {
+  position: absolute;
+  left: 0.5rem;
+  bottom: 0.4rem;
+  font-size: 0.85rem;
+  text-shadow: 0 1px 3px #000;
+}
+.call-prompt {
+  position: fixed;
+  z-index: 40;
+  left: 50%;
+  top: 0.75rem;
+  transform: translateX(-50%);
+  width: min(calc(100% - 2rem), 34rem);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-radius: 0.75rem;
+  background: #0d1117;
+  color: #f0f6fc;
+  box-shadow: 0 4px 18px #0006;
+}
+.call-prompt .call-actions {
+  margin: 0;
+}
+.tile.screen {
+  grid-column: 1 / -1;
+  aspect-ratio: 16 / 9;
+}
+.tile.screen video {
+  object-fit: contain;
 }
