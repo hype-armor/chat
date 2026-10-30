@@ -54,8 +54,8 @@ for (const width of [1280, 390]) {
     const send = async (page: Page, text: string) => {
       await page.getByLabel('Message', { exact: true }).fill(text)
       await page.getByRole('button', { name: 'Send', exact: true }).click()
-      await expect(messages(page).last()).toContainText(text)
-      await expect(messages(page).last()).toContainText(/Sent|Delivered|Read/)
+      // By text, not last(): the peer's earlier messages may still arrive after it.
+      await expect(messages(page).filter({ has: page.getByText(text, { exact: true }) })).toContainText(/Sent|Delivered|Read/)
     }
     const expectBottom = async () => {
       await expect.poll(() => viewport.evaluate(
