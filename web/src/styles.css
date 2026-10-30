@@ -60,8 +60,12 @@ body {
   position: absolute;
   width: 1px;
   height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
   overflow: hidden;
   clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 button {
@@ -215,6 +219,7 @@ form {
 }
 
 .messages-viewport {
+  position: relative;
   min-height: 0;
   overflow-y: auto;
   flex: 1;
@@ -243,6 +248,7 @@ form {
 }
 
 .messages li {
+  position: relative;
   display: grid;
   gap: 0.125rem;
   max-width: min(80%, 36rem);
