@@ -256,6 +256,15 @@ export class CoreClient {
     expect(await this.call({ type: 'setReadReceipts', on }), 'ok')
   }
 
+  async setCallStats(on: boolean) {
+    expect(await this.call({ type: 'setCallStats', on }), 'ok')
+  }
+
+  /** Counts a call for the opt-in statistics; never throws. */
+  recordCall(kind: 'direct' | 'group', connected: boolean, setupMs?: number) {
+    void this.call({ type: 'recordCall', kind, connected, setupMs })
+  }
+
   async setRelayCalls(on: boolean) {
     expect(await this.call({ type: 'setRelayCalls', on }), 'ok')
   }

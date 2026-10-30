@@ -46,6 +46,8 @@ export type AppView =
       readReceipts: boolean
       /** Calls go only through the server's relay (FR-CALL-9). */
       relayCalls: boolean
+      /** Sharing anonymous call statistics (ADR-0032). */
+      callStats: boolean
       /** Encrypted backups are on (ADR-0022), with the last upload time. */
       backup?: { lastAt?: number }
       media: MediaSettings
@@ -254,6 +256,8 @@ export type CoreRequest =
   | { type: 'retryMessage'; conversationId: string; messageId: string }
   | { type: 'setReadReceipts'; on: boolean }
   | { type: 'setRelayCalls'; on: boolean }
+  | { type: 'setCallStats'; on: boolean }
+  | { type: 'recordCall'; kind: 'direct' | 'group'; connected: boolean; setupMs?: number }
   | { type: 'setMedia'; media: MediaSettings }
   | { type: 'block'; account: string }
   | { type: 'unblock'; account: string }

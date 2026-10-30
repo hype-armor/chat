@@ -42,12 +42,30 @@ function useRingtone(on: boolean) {
   }, [on])
 }
 
-function Video({ stream, muted, label }: { stream?: MediaStream; muted?: boolean; label: string }) {
-  const ref = useRef<HTMLVideoElement>(null)
+type SinkElement = HTMLVideoElement & { setSinkId?: (id: string) => Promise<void> }
+
+function Video({ stream, muted, label, sink }: { stream?: MediaStream; muted?: boolean; label: string; sink?: string }) {
+  const ref = useRef<SinkElement>(null)
   useEffect(() => {
     if (ref.current && ref.current.srcObject !== (stream ?? null)) ref.current.srcObject = stream ?? null
   })
+  useEffect(() => {
+    if (sink !== undefined) void ref.current?.setSinkId?.(sink).catch(() => undefined)
+  }, [sink])
   return <video ref={ref} autoPlay playsInline muted={muted} aria-label={label} />
+}
+
+/** Audio outputs to choose from, where the browser can switch (`setSinkId`). */
+function useSpeakers(active: boolean): MediaDeviceInfo[] {
+  const [speakers, setSpeakers] = useState<MediaDeviceInfo[]>([])
+  useEffect(() => {
+    if (!active || !('setSinkId' in HTMLMediaElement.prototype)) return
+    void navigator.mediaDevices
+      .enumerateDevices()
+      .then((d) => setSpeakers(d.filter((x) => x.kind === 'audiooutput' && x.deviceId)))
+      .catch(() => undefined)
+  }, [active])
+  return speakers
 }
 
 function Elapsed({ since }: { since: number }) {
@@ -70,6 +88,7 @@ const STATUS: Record<CallState['phase'], string> = {
 export function CallScreen({ calls }: { calls: CallController }) {
   const call = useCall(calls)
   useRingtone(call?.phase === 'incoming' || call?.phase === 'calling')
+  const speakers = useSpeakers(call?.phase === 'active')
   if (!call) return null
   const what = call.video ? 'video call' : 'voice call'
   const showVideo = call.video && call.phase !== 'incoming' && call.phase !== 'ended'
@@ -83,14 +102,14 @@ export function CallScreen({ calls }: { calls: CallController }) {
     >
       {showVideo && (
         <div className="call-videos">
-          <Video stream={call.remote} label={`${call.title}'s video`} />
-          {!call.cameraOff && <Video stream={call.local} muted label="Your video" />}
+          <Video stream={call.remote} label={`${call.title}'s video`} sink={call.speaker} />
+          {(!call.cameraOff || call.sharing) && <Video stream={call.local} muted label="Your video" />}
         </div>
       )}
       {/* Voice calls (and answers without video) still need the remote audio. */}
       {!showVideo && call.remote && (
         <div className="call-audio">
-          <Video stream={call.remote} label={`${call.title}'s audio`} />
+          <Video stream={call.remote} label={`${call.title}'s audio`} sink={call.speaker} />
         </div>
       )}
       <div className={`call-info ${showVideo && hasRemoteVideo ? 'over-video' : ''}`}>
@@ -104,6 +123,11 @@ export function CallScreen({ calls }: { calls: CallController }) {
           </span>
         )}
         <span className="small muted">End-to-end encrypted</span>
+        {call.phase === 'active' && call.quality === 'poor' && (
+          <span className="small" role="note">
+            Poor connection: sending less video
+          </span>
+        )}
       </div>
       <div className="call-actions">
         {call.phase === 'incoming' && (
@@ -136,6 +160,35 @@ export function CallScreen({ calls }: { calls: CallController }) {
                 {call.cameraOff ? 'Camera on' : 'Camera off'}
               </button>
             ) : null}
+            {call.video && 'getDisplayMedia' in (navigator.mediaDevices ?? {}) && (
+              <button
+                type="button"
+                className="call-button"
+                aria-pressed={!!call.sharing}
+                onClick={() => void calls.toggleScreenShare()}
+              >
+                {call.sharing ? 'Stop sharing' : 'Share screen'}
+              </button>
+            )}
+            {call.video && call.cameras > 1 && !call.cameraOff && !call.sharing && (
+              <button type="button" className="call-button" onClick={() => void calls.switchCamera()}>
+                Switch camera
+              </button>
+            )}
+            {speakers.length > 1 && (
+              <select
+                aria-label="Audio output"
+                value={call.speaker ?? ''}
+                onChange={(e) => calls.setSpeaker(e.target.value)}
+              >
+                <option value="">Default speaker</option>
+                {speakers.map((s) => (
+                  <option key={s.deviceId} value={s.deviceId}>
+                    {s.label || 'Speaker'}
+                  </option>
+                ))}
+              </select>
+            )}
             <button type="button" className="call-button decline" onClick={() => void calls.hangUp()}>
               Hang up
             </button>
