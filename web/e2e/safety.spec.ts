@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { messages, openChat, openSettings, randomUsername, signUp } from './support'
+import { conversationAction, messages, openChat, openSettings, randomUsername, signUp } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -16,7 +16,7 @@ test('reporting and blocking someone, then unblocking them (FR-ID-8)', async ({ 
   await expect(messages(bob)).toHaveText([/Buy cheap watches/])
 
   // Bob reports Alice with her messages and blocks her.
-  await bob.getByRole('button', { name: 'Report' }).click()
+  await conversationAction(bob, 'Report')
   await bob.getByLabel('Spam or scam').check()
   await expect(bob.getByLabel('Also block Alice')).toBeChecked()
   await bob.getByRole('button', { name: 'Send report' }).click()

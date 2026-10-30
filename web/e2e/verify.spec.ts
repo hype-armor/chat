@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { linkDevice, messages, openChat, randomUsername, signUp } from './support'
+import { conversationAction, linkDevice, messages, openChat, randomUsername, signUp } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -16,8 +16,8 @@ test('safety numbers match, and a new device of a verified contact is flagged (A
   await expect(messages(bob)).toHaveText([/Hi Bob/])
 
   // Both see the same 60 digits.
-  await alice.getByRole('button', { name: 'Verify', exact: true }).click()
-  await bob.getByRole('button', { name: 'Verify', exact: true }).click()
+  await conversationAction(alice, 'Verify safety number')
+  await conversationAction(bob, 'Verify safety number')
   const number = (await alice.getByTestId('safety-number').textContent())!.trim()
   expect(number).toMatch(/^(\d{5} ){11}\d{5}$/)
   await expect(bob.getByTestId('safety-number')).toHaveText(number)
@@ -31,7 +31,7 @@ test('safety numbers match, and a new device of a verified contact is flagged (A
   })
   await expect(alice.locator('.conversation header .badge')).toHaveText('Changed')
   await expect(alice.getByRole('note')).toContainText('safety number changed since you verified it')
-  await alice.getByRole('button', { name: 'Verify', exact: true }).click()
+  await conversationAction(alice, 'Verify safety number')
   await expect(alice.getByTestId('safety-number')).not.toHaveText(number)
 
   // Bob approved the laptop himself, so neither of his devices raises an alert.
