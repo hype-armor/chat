@@ -88,6 +88,7 @@ jobs:
       - uses: azure/setup-helm@v4
       - run: helm lint deploy/helm/chat
       - run: helm template chat deploy/helm/chat > /dev/null
+      - run: helm template chat deploy/helm/chat --set turn.enabled=true > /dev/null
       - run: helm template chat deploy/helm/chat -f deploy/helm/chat/values-k3s.yaml -f deploy/helm/chat/values-dev.yaml --set server.image.tag=sha-0000000 > /dev/null
       # Deployment scripts (shellcheck is preinstalled on GitHub runners).
       - run: shellcheck scripts/*.sh

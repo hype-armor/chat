@@ -224,6 +224,10 @@ export class CoreClient {
     expect(await this.call({ type: 'setReadReceipts', on }), 'ok')
   }
 
+  async setRelayCalls(on: boolean) {
+    expect(await this.call({ type: 'setRelayCalls', on }), 'ok')
+  }
+
   /** Turns backups on; returns the recovery key to show once (ADR-0022). */
   async setupBackup(): Promise<string> {
     return expect(await this.call({ type: 'setupBackup' }), 'recoveryKey').key

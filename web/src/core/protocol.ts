@@ -44,6 +44,8 @@ export type AppView =
       alerts: { id: string; text: string }[]
       /** Whether this user sends read receipts (FR-MSG-5). */
       readReceipts: boolean
+      /** Calls go only through the server's relay (FR-CALL-9). */
+      relayCalls: boolean
       /** Encrypted backups are on (ADR-0022), with the last upload time. */
       backup?: { lastAt?: number }
       media: MediaSettings
@@ -244,6 +246,7 @@ export type CoreRequest =
   | { type: 'markRead'; conversationId: string }
   | { type: 'retryMessage'; conversationId: string; messageId: string }
   | { type: 'setReadReceipts'; on: boolean }
+  | { type: 'setRelayCalls'; on: boolean }
   | { type: 'setMedia'; media: MediaSettings }
   | { type: 'block'; account: string }
   | { type: 'unblock'; account: string }

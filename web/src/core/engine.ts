@@ -218,6 +218,8 @@ type State = {
   blocked: string[]
   /** Whether to send read receipts (FR-MSG-5); delivery receipts always go. */
   readReceipts: boolean
+  /** Calls only through the TURN relay, hiding this device's IP address (FR-CALL-9). */
+  relayCalls?: boolean
   /** Encrypted backups (ADR-0022): on, and when the last one was uploaded. */
   backup?: { lastAt?: number }
   /** Auto-download and photo quality (ADR-0025). */
@@ -361,6 +363,7 @@ export class Engine {
       conversations,
       alerts: this.state.alerts,
       readReceipts: this.state.readReceipts,
+      relayCalls: this.state.relayCalls ?? false,
       backup: this.state.backup ? { lastAt: this.state.backup.lastAt } : undefined,
       media: this.state.media,
       liveSharing: this.state.live
@@ -923,6 +926,14 @@ export class Engine {
   async setReadReceipts(on: boolean) {
     await this.exclusive(async () => {
       this.state.readReceipts = on
+      await this.persist()
+    })
+    this.emitView()
+  }
+
+  async setRelayCalls(on: boolean) {
+    await this.exclusive(async () => {
+      this.state.relayCalls = on
       await this.persist()
     })
     this.emitView()

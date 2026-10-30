@@ -80,6 +80,18 @@ spec:
             {{- end }}
             {{- end }}
             {{- end }}
+            {{- if .Values.turn.enabled }}
+            {{- $h := .Values.turn.host }}
+            - name: CHAT_STUN_URLS
+              value: {{ printf "stun:%s:%v" $h .Values.turn.port | quote }}
+            - name: CHAT_TURN_URLS
+              value: {{ printf "turn:%s:%v?transport=udp,turn:%s:%v?transport=tcp%s" $h .Values.turn.port $h .Values.turn.port (ternary (printf ",turns:%s:%v?transport=tcp" $h .Values.turn.tls.port) "" (ne .Values.turn.tls.secretName "")) | quote }}
+            - name: CHAT_TURN_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.turn.existingSecret }}
+                  key: {{ .Values.turn.secretKey }}
+            {{- end }}
             {{- with .Values.server.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

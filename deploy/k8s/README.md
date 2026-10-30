@@ -8,8 +8,8 @@ Install these first; full walkthrough in
 |-----------|-----|------|
 | TLS certificates | cert-manager + Let's Encrypt | `cluster-issuer.yaml` |
 | PostgreSQL | CloudNativePG operator | `postgres-cluster.yaml` |
-| Group calls (SFU + TURN) | LiveKit Helm chart | `livekit-values.yaml` |
-| 1:1 call relay (TURN) | coturn | — (needed from Phase 3) |
+| Group calls (SFU) | LiveKit Helm chart | `livekit-values.yaml` |
+| Call relay (TURN) | coturn, in this chart (`turn.enabled`) | `deploy/k3s/README.md` |
 | Object storage | Managed S3 in a US region, or SeaweedFS | — (needed from Phase 2) |
 | Valkey | Not needed until presence/rate limiting land | — |
 

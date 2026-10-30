@@ -35,7 +35,7 @@ later lets LiveKit run on its own host-networked node.
 | Where the k3s host runs | Watch out for |
 |-------------------------|---------------|
 | Rented VM / dedicated server in a US data centre | Included traffic and overage price; UDP allowed; static IPv4 |
-| Own hardware (home or office) | ISP terms often forbid servers on residential plans; need a static IP or dynamic DNS; router port-forwarding for TCP 80/443/7881/5349 and UDP 3478 + 50000–60000; **upload bandwidth** (group calls send each participant's streams out: ~1.5 Mbps per receiving participant, so a 10-person call needs ~15 Mbps up); UPS for power cuts |
+| Own hardware (home or office) | ISP terms often forbid servers on residential plans; need a static IP or dynamic DNS; router port-forwarding for TCP 80/443/7881/3478/5349 and UDP 3478 + 49152–60000; **upload bandwidth** (group calls send each participant's streams out: ~1.5 Mbps per receiving participant, so a 10-person call needs ~15 Mbps up); UPS for power cuts |
 
 Either way: off-site backups (deploy/k3s/README.md §5) and a host
 firewall are mandatory.
@@ -93,7 +93,8 @@ namespace: chat
 ├── chat-web      Deployment (nginx, static PWA, strict CSP)      ─┐ Ingress or
 ├── chat-server   Deployment (Rust, WebSocket /v1/ws)              ─┘ Gateway API
 ├── chat-db       CloudNativePG Cluster (PostgreSQL 18)
-└── livekit       LiveKit SFU + TURN (host networking, UDP 50000-60000)
+├── chat-turn     coturn TURN relay (host networking, UDP/TCP 3478, TCP 5349, UDP 49152-49999)
+└── livekit       LiveKit SFU (host networking, UDP 50000-60000)
 cluster-wide: cert-manager, ingress/gateway controller, CloudNativePG operator
 ```
 
@@ -106,8 +107,9 @@ cluster-wide: cert-manager, ingress/gateway controller, CloudNativePG operator
 - **PostgreSQL:** CloudNativePG (`deploy/k8s/postgres-cluster.yaml`); its
   generated `chat-db-app` secret supplies `DATABASE_URL`. 1 instance at
   launch, 3 for high availability later; WAL archiving to object storage.
-- **Calls:** LiveKit's Helm chart (`deploy/k8s/livekit-values.yaml`), plus
-  coturn for 1:1 call relays from Phase 3.
+- **Calls:** coturn from this chart (`turn.enabled`, ADR-0029) relays
+  1:1 calls; LiveKit's Helm chart (`deploy/k8s/livekit-values.yaml`) runs
+  group calls, with its own TURN off so coturn holds the TURN ports.
 - **Object storage (Phase 2):** managed S3-compatible storage in a US
   region, or SeaweedFS in-cluster for full self-hosting.
 - **Valkey:** added when presence and rate limiting land.

@@ -35,6 +35,7 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
   const [settings, setSettings] = useState(false)
   const [calls] = useState(() => new CallController(core))
   useEffect(() => () => calls.dispose(), [calls])
+  calls.relayOnly = view.relayCalls
   const conversation = view.conversations.find((c) => c.id === selected)
   const select = (id: string) => {
     setSettings(false)
@@ -90,7 +91,7 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
               <Backup core={core} backup={view.backup} />
               <Invite core={core} />
               <Devices core={core} />
-              <Privacy core={core} readReceipts={view.readReceipts} />
+              <Privacy core={core} readReceipts={view.readReceipts} relayCalls={view.relayCalls} />
               <Media core={core} media={view.media} />
               <BlockedList core={core} />
               <DeleteAccount core={core} />
@@ -178,10 +179,12 @@ function ConversationList({
   )
 }
 
-function Privacy({ core, readReceipts }: { core: CoreClient; readReceipts: boolean }) {
-  // Local state so the box flips at once; the worker's view follows.
+function Privacy({ core, readReceipts, relayCalls }: { core: CoreClient; readReceipts: boolean; relayCalls: boolean }) {
+  // Local state so the boxes flip at once; the worker's view follows.
   const [on, setOn] = useState(readReceipts)
   useEffect(() => setOn(readReceipts), [readReceipts])
+  const [relay, setRelay] = useState(relayCalls)
+  useEffect(() => setRelay(relayCalls), [relayCalls])
   return (
     <details className="devices">
       <summary>Privacy</summary>
@@ -197,6 +200,21 @@ function Privacy({ core, readReceipts }: { core: CoreClient; readReceipts: boole
         Send read receipts
       </label>
       <p className="muted small">Others still see when your devices received their messages.</p>
+      <label className="choice">
+        <input
+          type="checkbox"
+          checked={relay}
+          onChange={(e) => {
+            setRelay(e.target.checked)
+            void core.setRelayCalls(e.target.checked)
+          }}
+        />
+        Always relay calls
+      </label>
+      <p className="muted small">
+        Calls go through this service's relay, so the people you call don't see your IP address. Calls may sound or
+        look a little worse.
+      </p>
     </details>
   )
 }
