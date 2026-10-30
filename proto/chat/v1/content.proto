@@ -15,6 +15,7 @@ message Content {
     Receipt receipt = 6;
     Attachment attachment = 7;
     Location location = 8;
+    LiveLocation live_location = 9;
   }
 }
 
@@ -86,4 +87,17 @@ message Location {
   float accuracy_m = 3;
   // Optional place name, chosen by the sender.
   string label = 4;
+}
+
+// Live location (FR-LOC-2/3, doc 06 §2). The first message of a session
+// starts it; later ones move the point; `stopped` ends it early. Receivers
+// keep only the latest point and discard it when the session ends.
+message LiveLocation {
+  // 16 random bytes naming the session.
+  bytes session_id = 1;
+  // When sharing ends on its own (sender's clock).
+  uint64 expires_at_ms = 2;
+  // Absent in a stop message.
+  Location location = 3;
+  bool stopped = 4;
 }

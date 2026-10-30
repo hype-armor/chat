@@ -683,3 +683,19 @@ button.danger {
 .share-location .map {
   width: 100%;
 }
+
+.live-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 1rem;
+  min-height: 2.75rem;
+  padding: 0.25rem 1rem;
+  background: #fff4d6;
+  color: #5c4400;
+  border-bottom: 1px solid #f0d58a;
+}
+
+.chat-layout.with-banner {
+  height: calc(100dvh - 2.5rem - 2.75rem);
+}

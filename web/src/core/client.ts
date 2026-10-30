@@ -163,6 +163,20 @@ export class CoreClient {
     expect(await this.call({ type: 'sendLocation', conversationId, location }), 'ok')
   }
 
+  /** Starts sharing a live location in one conversation (FR-LOC-2). */
+  async startLive(conversationId: string, durationMs: number, location: LocationInfo) {
+    expect(await this.call({ type: 'startLive', conversationId, durationMs, location }), 'ok')
+  }
+
+  /** A new position for every live session; the worker decides what to send. */
+  async liveUpdate(location: LocationInfo) {
+    expect(await this.call({ type: 'liveUpdate', location }), 'ok')
+  }
+
+  async stopLive(conversationId: string) {
+    expect(await this.call({ type: 'stopLive', conversationId }), 'ok')
+  }
+
   /** Whether the server has a basemap (ADR-0026). */
   async mapInfo(): Promise<MapInfo> {
     return expect(await this.call({ type: 'mapInfo' }), 'mapInfo').info

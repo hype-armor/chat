@@ -58,3 +58,32 @@ test('a location shared once arrives encrypted and maps without third parties (F
     [],
   )
 })
+
+test('live location follows the sender and is gone when they stop (FR-LOC-2/3/6)', async ({ browser }) => {
+  test.setTimeout(90_000)
+  const bobUsername = randomUsername()
+  const alice = await signUp(browser, 'Alice', randomUsername(), new Set(), [])
+  const bob = await signUp(browser, 'Bob', bobUsername, new Set(), [])
+  await alice.getByLabel("Contact's username").fill(bobUsername)
+  await alice.getByRole('button', { name: 'Start chat' }).click()
+
+  await alice.getByRole('button', { name: 'Share your location' }).click()
+  await alice.getByRole('dialog', { name: 'Share this location?' }).getByRole('button', { name: '15 min' }).click()
+  // The indicator stays up while sharing (FR-LOC-6).
+  const banner = alice.getByRole('status', { name: 'Sharing live location' })
+  await expect(banner).toContainText(/Sharing live location with .* · 15 min left/)
+
+  await openChat(bob, /Alice/)
+  const card = messages(bob).getByTestId('live-location')
+  await expect(card).toContainText('Live location · until')
+  await expect(card).toContainText('48.85840, 2.29450')
+
+  // About 600 m east: sent once the 10-second floor has passed.
+  await alice.context().setGeolocation({ latitude: 48.8584, longitude: 2.3027, accuracy: 8 })
+  await expect(card).toContainText('48.85840, 2.30270 · ±8 m', { timeout: 30_000 })
+
+  await banner.getByRole('button', { name: 'Stop' }).click()
+  await expect(banner).toBeHidden()
+  await expect(card).toHaveText('📍 Live location ended')
+  await expect(messages(alice).getByTestId('live-location')).toHaveText('📍 Live location ended')
+})

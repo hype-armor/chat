@@ -5,6 +5,7 @@
 import init, {
   AttachmentView,
   CoreClient,
+  type LiveLocationView,
   PendingClient,
   type ServerFrameView,
   decodeServerFrame,
@@ -82,6 +83,7 @@ import { isMp4, scrubMp4 } from './mp4'
 import { DEFAULT_MEDIA, autoDownloads, onMobileData } from './policy'
 import * as transfers from './transfers'
 import { safeLocation } from './maps'
+import { LIVE_DURATIONS_MS, plausibleExpiry, updateDue } from './live'
 import { acceptsGroupInfo, designatedCommitter, parseAdmins } from './roles'
 import { SecureStore } from './storage'
 
@@ -141,6 +143,17 @@ type Conversation = {
 
 /** A contact resolved through the key directory, with one key package per device. */
 type Invitee = { username: string; account: string; devices: string[]; keyPackages: Uint8Array[] }
+
+/** A live-location session this device sends. */
+type LiveSession = {
+  sessionId: string
+  conversationId: string
+  /** The message that started it, which shows the session. */
+  messageId: string
+  expiresAt: number
+  lastSentAt: number
+  last?: LocationInfo
+}
 
 /** An envelope waiting to be accepted by the server (FR-MSG-9). */
 type Outgoing = {
@@ -205,6 +218,10 @@ type State = {
   backup?: { lastAt?: number }
   /** Auto-download and photo quality (ADR-0025). */
   media: MediaSettings
+  /** Live-location sessions this device is sending (FR-LOC-2). */
+  live: LiveSession[]
+  /** Others' sessions shown here, to forget their points when they end. */
+  liveSeen: { conversationId: string; messageId: string; expiresAt: number }[]
   /** Attachment uploads and downloads to resume after a reload or reconnect. */
   transfers: { conversationId: string; messageId: string; kind: 'upload' | 'download' }[]
 }
@@ -235,6 +252,8 @@ const emptyState = (): State => ({
   blocked: [],
   readReceipts: true,
   media: DEFAULT_MEDIA,
+  live: [],
+  liveSeen: [],
   transfers: [],
 })
 
@@ -249,6 +268,9 @@ export class Engine {
   private connection: ConnectionState = 'offline'
   /** Uploads under way, by message id. */
   private inflight = new Set<string>()
+  private liveTimer?: ReturnType<typeof setInterval>
+  /** The page's latest position while this device shares. */
+  private liveFix?: LocationInfo
   /** Downloads under way, by message id. */
   private downloads = new Map<string, Promise<Blob>>()
   private nextRequestId = 1
@@ -296,6 +318,7 @@ export class Engine {
       this.core = CoreClient.restore(snapshot)
       this.state = { ...emptyState(), ...(await this.store.getJson<State>('app')) }
       this.recent = new RecentIds(this.state.seen)
+      if (this.state.live.length > 0 || this.state.liveSeen.length > 0) this.scheduleLiveSweep()
       this.connect()
     }
     this.emitView()
@@ -331,6 +354,13 @@ export class Engine {
       readReceipts: this.state.readReceipts,
       backup: this.state.backup ? { lastAt: this.state.backup.lastAt } : undefined,
       media: this.state.media,
+      liveSharing: this.state.live
+        .filter((l) => l.expiresAt > Date.now())
+        .map((l) => ({
+          conversationId: l.conversationId,
+          title: this.state.conversations[l.conversationId] ? this.title(this.state.conversations[l.conversationId]) : '',
+          expiresAt: l.expiresAt,
+        })),
     }
   }
 
@@ -1307,6 +1337,7 @@ export class Engine {
         recipients: this.recipients(conversationId),
       })
       conv.status = 'left'
+      this.state.live = this.state.live.filter((l) => l.conversationId !== conversationId)
       await this.persist()
     })
     this.emitView()
@@ -1325,8 +1356,11 @@ export class Engine {
 
   /** Messages for the UI: sender names resolved, attachment keys left out. */
   async messages(conversationId: string): Promise<ChatMessage[]> {
+    const now = Date.now()
     return (await this.stored(conversationId)).map(({ file, ...m }) => ({
       ...m,
+      // An ended session shows no point, even before the sweep forgets it.
+      live: m.live && (m.live.ended || m.live.expiresAt <= now ? { ...m.live, ended: true, latest: undefined } : m.live),
       fromName: m.from === 'me' || m.kind === 'notice' ? undefined : this.nameOf(m.from),
       file: file && {
         name: file.name,
@@ -1379,6 +1413,227 @@ export class Engine {
       await this.persist()
     })
     void this.flushOutbox()
+  }
+
+  // ---- live location (FR-LOC-2/3/6, doc 06 §2) --------------------------------
+
+  /** Starts sharing in one conversation for 15 min, 1 h or 8 h, from `location`. */
+  async startLive(conversationId: string, durationMs: number, location: LocationInfo) {
+    const { core } = this.ready()
+    this.checkCanSend(conversationId)
+    if (!(LIVE_DURATIONS_MS as readonly number[]).includes(durationMs)) throw new Error('Choose 15 minutes, 1 hour or 8 hours')
+    const point = safeLocation(location.latitude, location.longitude, location.accuracyM, '')
+    if (!point) throw new Error("That location doesn't look right")
+    await this.stopLive(conversationId)
+    await this.exclusive(async () => {
+      const now = Date.now()
+      const session: LiveSession = {
+        sessionId: toHex(randomId()),
+        conversationId,
+        messageId: toHex(randomId()),
+        expiresAt: now + durationMs,
+        lastSentAt: now,
+        last: point,
+      }
+      const message: StoredMessage = {
+        id: session.messageId,
+        from: 'me',
+        text: '',
+        sentAt: now,
+        status: 'sending',
+        live: { sessionId: session.sessionId, expiresAt: session.expiresAt, latest: { ...point, at: now }, ended: false },
+      }
+      this.state.outbox.push({
+        messageId: message.id,
+        conversationId,
+        envelope: toBase64(this.encode(core, conversationId, message)),
+        recipients: this.recipients(conversationId),
+      })
+      this.state.live.push(session)
+      await this.appendMessage(conversationId, message)
+      await this.persist()
+    })
+    this.scheduleLiveSweep()
+    void this.flushOutbox()
+  }
+
+  /**
+   * A new fix from the page. Each running session sends it if it moved
+   * enough or a heartbeat is due, and only while online: updates queued
+   * offline would arrive stale.
+   */
+  async liveUpdate(location: LocationInfo) {
+    const point = safeLocation(location.latitude, location.longitude, location.accuracyM, '')
+    if (!point) return
+    // Kept for the sweep: the page reports only changes, so a move held back
+    // by the rate floor, and the heartbeat, go out from there.
+    this.liveFix = point
+    if (this.connection !== 'online') return
+    await this.endExpiredLive()
+    let sent = false
+    await this.exclusive(async () => {
+      const { core } = this.ready()
+      const now = Date.now()
+      for (const session of this.state.live) {
+        if (this.state.conversations[session.conversationId]?.status) continue
+        if (!updateDue(now, session.lastSentAt, session.last, point)) continue
+        const messageId = randomId()
+        const envelope = core.sendLiveLocation(
+          fromHex(session.conversationId),
+          fromHex(session.sessionId),
+          session.expiresAt,
+          true,
+          point.latitude,
+          point.longitude,
+          point.accuracyM,
+          now,
+          messageId,
+        )
+        this.state.outbox.push({
+          messageId: toHex(messageId),
+          conversationId: session.conversationId,
+          envelope: toBase64(envelope),
+          recipients: this.recipients(session.conversationId),
+          // Moving a pin is nothing to wake a phone for.
+          silent: true,
+        })
+        session.lastSentAt = now
+        session.last = point
+        await this.setLivePoint(session.conversationId, session.messageId, { ...point, at: now })
+        sent = true
+      }
+      if (sent) await this.persist()
+    })
+    if (sent) void this.flushOutbox()
+  }
+
+  /** Stops sharing in a conversation now, telling the others. */
+  async stopLive(conversationId: string) {
+    const session = this.state.live.find((l) => l.conversationId === conversationId)
+    if (!session) return
+    await this.exclusive(async () => {
+      this.state.live = this.state.live.filter((l) => l !== session)
+      await this.endLiveMessage(conversationId, session.messageId)
+      const conv = this.state.conversations[conversationId]
+      if (this.core && conv && !conv.status && session.expiresAt > Date.now()) {
+        const messageId = randomId()
+        const envelope = this.core.sendLiveLocation(
+          fromHex(conversationId),
+          fromHex(session.sessionId),
+          session.expiresAt,
+          false,
+          0,
+          0,
+          0,
+          Date.now(),
+          messageId,
+        )
+        this.state.outbox.push({
+          messageId: toHex(messageId),
+          conversationId,
+          envelope: toBase64(envelope),
+          recipients: this.recipients(conversationId),
+          silent: true,
+        })
+      }
+      await this.persist()
+    })
+    this.emitView()
+    void this.flushOutbox()
+  }
+
+  /** Moves the point shown on a live message (under the lock). */
+  private async setLivePoint(conversationId: string, messageId: string, latest: LocationInfo & { at: number }) {
+    const list = await this.stored(conversationId)
+    const message = list.find((m) => m.id === messageId)
+    if (!message?.live || message.live.ended) return
+    message.live.latest = latest
+    await this.store.putJson(`messages:${conversationId}`, list)
+    this.emit({ type: 'messages', conversationId })
+  }
+
+  /** Ends a live message and forgets its point (doc 06: discard at the end). Under the lock. */
+  private async endLiveMessage(conversationId: string, messageId: string) {
+    const list = await this.stored(conversationId)
+    const message = list.find((m) => m.id === messageId)
+    if (!message?.live || message.live.ended) return
+    message.live.ended = true
+    message.live.latest = undefined
+    await this.store.putJson(`messages:${conversationId}`, list)
+    this.emit({ type: 'messages', conversationId })
+  }
+
+  /** Ends our sessions that ran out, and forgets the points of others' that did. */
+  private async endExpiredLive() {
+    const now = Date.now()
+    const due =
+      this.state.live.some((l) => l.expiresAt <= now) || this.state.liveSeen.some((l) => l.expiresAt <= now)
+    if (!due) return
+    await this.exclusive(async () => {
+      for (const l of [...this.state.live, ...this.state.liveSeen].filter((l) => l.expiresAt <= now)) {
+        await this.endLiveMessage(l.conversationId, l.messageId)
+      }
+      this.state.live = this.state.live.filter((l) => l.expiresAt > now)
+      this.state.liveSeen = this.state.liveSeen.filter((l) => l.expiresAt > now)
+      await this.persist()
+    })
+    this.emitView()
+  }
+
+  private scheduleLiveSweep() {
+    this.liveTimer ??= setInterval(() => {
+      if (this.liveFix && this.state.live.length > 0) void this.liveUpdate(this.liveFix)
+      else void this.endExpiredLive()
+      if (this.state.live.length === 0 && this.state.liveSeen.length === 0) {
+        clearInterval(this.liveTimer)
+        this.liveTimer = undefined
+      }
+    }, 15_000)
+  }
+
+  /** A received live-location start, update or stop (under the lock). */
+  private async applyLive(
+    conversationId: string,
+    from: string,
+    mine: boolean,
+    messageId: string,
+    sentAt: number,
+    view: LiveLocationView,
+  ) {
+    const sessionId = view.sessionId.length === 16 ? toHex(view.sessionId) : undefined
+    const place = view.location
+    const point = place && safeLocation(place.latitude, place.longitude, place.accuracyM, '')
+    place?.free()
+    if (!sessionId || !plausibleExpiry(view.expiresAtMs, sentAt)) return
+    const list = await this.stored(conversationId)
+    const sender = mine ? 'me' : from
+    // Only the session's own sender can move or stop it.
+    const shown = list.find((m) => m.live?.sessionId === sessionId && m.from === sender)
+    if (shown?.live) {
+      if (shown.live.ended) return
+      if (view.stopped) await this.endLiveMessage(conversationId, shown.id)
+      else if (point && sentAt > (shown.live.latest?.at ?? 0)) await this.setLivePoint(conversationId, shown.id, { ...point, at: sentAt })
+      return
+    }
+    if (view.stopped || !point) return
+    const ended = view.expiresAtMs <= Date.now()
+    const conv = this.state.conversations[conversationId]
+    if (!mine && conv) {
+      conv.unread = (conv.unread ?? 0) + 1
+      if (!conv.request) this.queueReceipt(conversationId, 'delivered', messageId)
+    }
+    await this.appendMessage(conversationId, {
+      id: messageId,
+      from: sender,
+      text: '',
+      sentAt,
+      status: mine ? 'sent' : 'received',
+      live: { sessionId, expiresAt: view.expiresAtMs, latest: ended ? undefined : { ...point, at: sentAt }, ended },
+    })
+    if (!ended) {
+      this.state.liveSeen.push({ conversationId, messageId, expiresAt: view.expiresAtMs })
+      this.scheduleLiveSweep()
+    }
   }
 
   async sendText(conversationId: string, text: string) {
@@ -1439,6 +1694,20 @@ export class Engine {
   /** Encrypts one of our messages for the group as it is now. */
   private encode(core: CoreClient, conversationId: string, m: StoredMessage): Uint8Array {
     const id = fromHex(m.id)
+    if (m.live) {
+      const p = m.live.latest
+      return core.sendLiveLocation(
+        fromHex(conversationId),
+        fromHex(m.live.sessionId),
+        m.live.expiresAt,
+        !!p,
+        p?.latitude ?? 0,
+        p?.longitude ?? 0,
+        p?.accuracyM ?? 0,
+        m.sentAt,
+        id,
+      )
+    }
     if (m.location) {
       const l = m.location
       return core.sendLocation(fromHex(conversationId), l.latitude, l.longitude, l.accuracyM, l.label ?? '', m.sentAt, id)
@@ -1887,6 +2156,14 @@ export class Engine {
         if (admins.length > 0) conv.admins = admins
         this.emitView()
       }
+      const live = event.live
+      if (live) {
+        if (!conv?.status && !this.state.blocked.includes(from)) {
+          await this.applyLive(conversationId, from, mine, messageId, event.sentAtMs, live)
+        }
+        live.free()
+        return
+      }
       const view = event.attachment
       const attachment = view && this.receivedFile(view)
       const place = event.location
@@ -2198,8 +2475,10 @@ export class Engine {
     await this.store.putJson(`messages:${conversationId}`, list)
     const conv = this.state.conversations[conversationId]
     if (conv && message.kind !== 'notice') {
-      conv.lastText = message.location
-        ? 'Location'
+      conv.lastText = message.live
+        ? 'Live location'
+        : message.location
+          ? 'Location'
         : message.file
         ? [attachmentLabel(message.file.mime, message.file.name, message.file.voiceNote), message.text].filter(Boolean).join(': ')
         : message.text
