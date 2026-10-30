@@ -293,5 +293,11 @@ export type CoreEvent =
   | { type: 'call'; signal: IncomingCallSignal }
 
 export type RequestEnvelope = { id: number; request: CoreRequest }
+/** Encoded media streams for SFrame (ADR-0030); no reply. */
+export type MediaEnvelope = {
+  media: import('./media').MediaTransformOptions
+  readable: ReadableStream
+  writable: WritableStream
+}
 /** `id` 0 carries an unsolicited event. */
 export type ResponseEnvelope = { id: number; body: CoreResponseBody } | { id: 0; event: CoreEvent }

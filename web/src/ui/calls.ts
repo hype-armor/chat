@@ -1,9 +1,10 @@
 // The call screen's engine (ADR-0028). RTCPeerConnection and the camera
 // exist only on the page, so media runs here; every signal goes through
 // the core worker, which encrypts it as an MLS message. Keys never come
-// here: DTLS-SRTP keys are negotiated by the browser, and the fingerprints
-// that pin them travel end-to-end encrypted inside the SDP.
-import type { CoreClient } from '../core/client'
+// here: DTLS-SRTP keys are negotiated by the browser, the fingerprints
+// that pin them travel end-to-end encrypted inside the SDP, and every
+// encoded frame also goes through the core worker for SFrame (ADR-0030).
+import { type CoreClient, canEncryptCalls, useEncodedStreams } from '../core/client'
 import type { IceServer, IncomingCallSignal } from '../core/protocol'
 import { RING_MS } from '../core/calls'
 
@@ -37,6 +38,19 @@ const GATHER_MS = 2_000
 
 function randomCallId(): string {
   return [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+const NO_FRAME_ENCRYPTION =
+  "This browser can't encrypt call media end to end, so calls are off. Use an up-to-date Chrome, Firefox or Safari."
+
+/** Video as VP8 only: SFrame leaves exactly its payload header readable (ADR-0030). */
+function preferVp8(pc: RTCPeerConnection) {
+  const codecs = RTCRtpReceiver.getCapabilities?.('video')?.codecs
+  if (!codecs) return
+  const vp8 = codecs.filter((c) => /^video\/(vp8|rtx|red|ulpfec|flexfec-03)$/i.test(c.mimeType))
+  for (const t of pc.getTransceivers()) {
+    if (t.receiver.track.kind === 'video' && t.setCodecPreferences) t.setCodecPreferences(vp8)
+  }
 }
 
 /** Resolves once ICE gathering completes, or after `ms`. */
@@ -112,11 +126,13 @@ export class CallController {
     this.reset()
     this.set({ callId, conversationId, title, video, outgoing: true, phase: 'calling', muted: false, cameraOff: false })
     try {
+      if (!canEncryptCalls()) throw new Error(NO_FRAME_ENCRYPTION)
       const servers = this.checkRelay(await this.core.iceServers())
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video })
       if (!this.still(callId)) return stopAll(stream)
       const pc = this.connect(servers, stream)
       this.set({ local: stream })
+      preferVp8(pc)
       await pc.setLocalDescription(await pc.createOffer())
       await gathered(pc, GATHER_MS)
       if (!this.still(callId)) return
@@ -138,6 +154,7 @@ export class CallController {
     const sendVideo = state.video && video
     this.set({ phase: 'connecting', cameraOff: !sendVideo })
     try {
+      if (!canEncryptCalls()) throw new Error(NO_FRAME_ENCRYPTION)
       const servers = this.checkRelay(await this.core.iceServers())
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: sendVideo })
       if (!this.still(callId)) return stopAll(stream)
@@ -145,6 +162,7 @@ export class CallController {
       this.set({ local: stream })
       await pc.setRemoteDescription({ type: 'offer', sdp: offer.sdp })
       await this.applyTheirCandidates()
+      preferVp8(pc)
       await pc.setLocalDescription(await pc.createAnswer())
       await gathered(pc, GATHER_MS)
       if (!this.still(callId)) return
@@ -273,12 +291,24 @@ export class CallController {
   }
 
   private connect(iceServers: RTCIceServer[], stream: MediaStream): RTCPeerConnection {
-    const pc = new RTCPeerConnection({ iceServers, iceTransportPolicy: this.relayOnly ? 'relay' : 'all' })
+    const { conversationId, callId } = this.state!
+    const config: RTCConfiguration & { encodedInsertableStreams?: boolean } = {
+      iceServers,
+      iceTransportPolicy: this.relayOnly ? 'relay' : 'all',
+    }
+    // Chromium without RTCRtpScriptTransform: encoded streams must be asked for up front.
+    if (useEncodedStreams()) config.encodedInsertableStreams = true
+    const pc = new RTCPeerConnection(config)
     this.pc = pc
     this.stream = stream
-    for (const track of stream.getTracks()) pc.addTrack(track, stream)
+    for (const track of stream.getTracks()) {
+      const sender = pc.addTrack(track, stream)
+      this.core.protectMedia(sender, { conversationId, callId, direction: 'send', kind: track.kind as 'audio' | 'video' })
+    }
     const remote = new MediaStream()
     pc.ontrack = (e) => {
+      const kind = e.track.kind as 'audio' | 'video'
+      this.core.protectMedia(e.receiver, { conversationId, callId, direction: 'receive', kind })
       remote.addTrack(e.track)
       this.set({ remote })
     }
