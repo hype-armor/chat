@@ -31,6 +31,12 @@ services:
       CHAT_STUN_URLS: stun:${CHAT_HOST:-localhost}:3478
       CHAT_TURN_URLS: turn:${CHAT_HOST:-localhost}:3478?transport=udp,turn:${CHAT_HOST:-localhost}:3478?transport=tcp
       CHAT_TURN_SECRET: dev-turn-secret
+      # Group calls (ADR-0031): LiveKit's --dev key pair. Browsers connect to
+      # CHAT_LIVEKIT_URL; with the https profile use wss://<CHAT_HOST>:8443.
+      CHAT_LIVEKIT_URL: ${CHAT_LIVEKIT_URL:-ws://localhost:7880}
+      CHAT_LIVEKIT_API_URL: http://livekit:7880
+      CHAT_LIVEKIT_API_KEY: devkey
+      CHAT_LIVEKIT_API_SECRET: secret
     ports: ["8080:8080"]
     depends_on:
       postgres:
@@ -43,7 +49,7 @@ services:
       context: ../..
       dockerfile: deploy/docker/web.Dockerfile
     environment:
-      CSP_CONNECT_EXTRA: "ws://localhost:7880"
+      CSP_CONNECT_EXTRA: ${CHAT_LIVEKIT_URL:-ws://localhost:7880}
     ports: ["8000:8080"]
     # Forwards /v1 to the server (Kubernetes does this at the ingress).
     volumes:
@@ -163,7 +169,8 @@ services:
   # SFU for group calls; --dev uses the well-known devkey/secret pair.
   livekit:
     image: livekit/livekit-server:v1.13
-    command: --dev --bind 0.0.0.0
+    # --node-ip: the address browsers send media to (CHAT_HOST for other devices).
+    command: --dev --bind 0.0.0.0 --node-ip ${CHAT_HOST:-127.0.0.1}
     ports:
       - "7880:7880"
       - "7881:7881"

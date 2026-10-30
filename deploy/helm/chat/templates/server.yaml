@@ -80,6 +80,20 @@ spec:
             {{- end }}
             {{- end }}
             {{- end }}
+            {{- with .Values.livekit }}
+            {{- if .url }}
+            - name: CHAT_LIVEKIT_URL
+              value: {{ .url | quote }}
+            {{- with .apiUrl }}
+            - name: CHAT_LIVEKIT_API_URL
+              value: {{ . | quote }}
+            {{- end }}
+            - name: CHAT_LIVEKIT_API_KEY
+              valueFrom: { secretKeyRef: { name: {{ .existingSecret }}, key: api-key } }
+            - name: CHAT_LIVEKIT_API_SECRET
+              valueFrom: { secretKeyRef: { name: {{ .existingSecret }}, key: api-secret } }
+            {{- end }}
+            {{- end }}
             {{- if .Values.turn.enabled }}
             {{- $h := .Values.turn.host }}
             - name: CHAT_STUN_URLS

@@ -4,5 +4,7 @@
 # `tls internal` uses Caddy's own certificate authority: browsers warn once.
 {$CHAT_HOST} {
 	tls internal
+	# LiveKit signalling for group calls (CHAT_LIVEKIT_URL=wss://<CHAT_HOST>:8443).
+	reverse_proxy /rtc* livekit:7880
 	reverse_proxy web:8080
 }
