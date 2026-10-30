@@ -70,3 +70,13 @@ whether a P2P call is end-to-end encrypted.
   specific push if missed calls show up in metrics (item 8).
 - The worker's call log is in memory: reloading the page mid-call loses
   that call's notice on this device.
+
+## Addendum (2026-10-30): ICE restart and quality (Phase 3 item 6)
+When the connection drops or the network changes, the **caller** restarts
+ICE: a new `OFFER` with the same call id, addressed (`to_device`) and sent
+silently to the callee's device only; the callee answers it like the
+first. Only the caller restarts, so the two never offer at once. A call
+that doesn't recover within 25 s ends. Every 3 s the page rates the
+connection from WebRTC stats (loss over 8 % or round trips over 600 ms is
+"poor"), caps video at 350 kbit/s while poor (1.5 Mbit/s otherwise) and
+says so on the call screen.

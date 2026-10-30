@@ -30,7 +30,7 @@ function TrackElement({ track, kind, label }: { track: MediaStreamTrack; kind: '
 
 function TileView({ tile }: { tile: Tile }) {
   return (
-    <figure className={`tile ${tile.speaking ? 'speaking' : ''}`} data-testid="call-tile">
+    <figure className={`tile ${tile.speaking ? 'speaking' : ''} ${tile.screen ? 'screen' : ''}`} data-testid={tile.screen ? 'screen-tile' : 'call-tile'}>
       {tile.video ? (
         <TrackElement track={tile.video} kind="video" label={`${tile.name}'s video`} />
       ) : (
@@ -76,9 +76,14 @@ export function GroupCallScreen({ calls }: { calls: GroupCallController }) {
             ? 'Joining…'
             : call.phase === 'ended'
               ? call.ended
-              : `${call.tiles.length} in the call`}
+              : `${call.tiles.filter((t) => !t.screen).length} in the call`}
         </span>
         <span className="small muted">End-to-end encrypted</span>
+        {call.phase === 'active' && call.quality === 'poor' && (
+          <span className="small" role="note">
+            Poor connection
+          </span>
+        )}
       </div>
       {call.phase === 'active' && (
         <div className="call-grid">
@@ -111,6 +116,21 @@ export function GroupCallScreen({ calls }: { calls: GroupCallController }) {
             >
               {call.cameraOff ? 'Camera on' : 'Camera off'}
             </button>
+            {'getDisplayMedia' in (navigator.mediaDevices ?? {}) && (
+              <button
+                type="button"
+                className="call-button"
+                aria-pressed={!!call.sharing}
+                onClick={() => void calls.toggleScreenShare()}
+              >
+                {call.sharing ? 'Stop sharing' : 'Share screen'}
+              </button>
+            )}
+            {!call.cameraOff && (
+              <button type="button" className="call-button" onClick={() => void calls.switchCamera()}>
+                Switch camera
+              </button>
+            )}
           </>
         )}
         {call.phase === 'ended' ? (

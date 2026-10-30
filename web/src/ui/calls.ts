@@ -7,6 +7,7 @@
 import { type CoreClient, canEncryptCalls, useEncodedStreams } from '../core/client'
 import type { IceServer, IncomingCallSignal } from '../core/protocol'
 import { RING_MS } from '../core/calls'
+import { type Quality, VIDEO_BITRATE, measure, rate } from './quality'
 
 export type CallPhase = 'incoming' | 'calling' | 'connecting' | 'active' | 'ended'
 
@@ -25,12 +26,23 @@ export type CallState = {
   cameraOff: boolean
   local?: MediaStream
   remote?: MediaStream
+  /** From WebRTC stats while active (FR-CALL-8). */
+  quality?: Quality
+  /** Cameras on this device; switching needs two. */
+  cameras: number
+  /** Chosen audio output (`setSinkId`), if any. */
+  speaker?: string
+  /** Showing the screen instead of the camera (FR-CALL-7). */
+  sharing?: boolean
 }
 
 /** Media needs a connection within this long once answered. */
 const CONNECT_MS = 30_000
-/** A dropped connection that doesn't come back ends the call. */
-const RECONNECT_MS = 10_000
+/** A dropped connection that doesn't come back (after ICE restarts) ends the call. */
+const RECONNECT_MS = 25_000
+/** A connection still "disconnected" after this gets an ICE restart. */
+const RESTART_AFTER_MS = 2_000
+const STATS_EVERY_MS = 3_000
 /** How long the closing screen stays. */
 const ENDED_MS = 2_500
 /** Candidates gathered by then go inside the offer or answer; later ones trickle. */
@@ -90,6 +102,12 @@ export class CallController {
   private described = false
   private timer?: ReturnType<typeof setTimeout>
   private dropTimer?: ReturnType<typeof setTimeout>
+  private restartTimer?: ReturnType<typeof setTimeout>
+  private statsTimer?: ReturnType<typeof setInterval>
+  /** An ICE restart offer is out (caller only). */
+  private restarting = false
+  /** When the call was answered (setup starts), for the opt-in statistics. */
+  private setupFrom?: number
   private unsubscribe: () => void
   /** A group call is running here. */
   otherBusy: () => boolean = () => false
@@ -100,6 +118,11 @@ export class CallController {
     this.unsubscribe = core.subscribe((e) => {
       if (e.type === 'call') void this.onSignal(e.signal).catch((err) => console.warn('call signal failed', err))
     })
+    // A new network (Wi-Fi to mobile data): find a new path at once.
+    const moved = () => this.state?.phase === 'active' && void this.restartIce()
+    globalThis.addEventListener?.('online', moved)
+    const connection = (navigator as Navigator & { connection?: EventTarget }).connection
+    connection?.addEventListener('change', moved)
   }
 
   dispose() {
@@ -126,7 +149,7 @@ export class CallController {
     if (this.busy || this.otherBusy()) throw new Error("You're already in a call")
     const callId = randomCallId()
     this.reset()
-    this.set({ callId, conversationId, title, video, outgoing: true, phase: 'calling', muted: false, cameraOff: false })
+    this.set({ callId, conversationId, title, video, outgoing: true, phase: 'calling', muted: false, cameraOff: false, cameras: 0 })
     try {
       if (!canEncryptCalls()) throw new Error(NO_FRAME_ENCRYPTION)
       const servers = this.checkRelay(await this.core.iceServers())
@@ -154,6 +177,7 @@ export class CallController {
     if (!offer || !state || state.phase !== 'incoming') return
     const { callId, conversationId } = state
     const sendVideo = state.video && video
+    this.setupFrom = Date.now()
     this.set({ phase: 'connecting', cameraOff: !sendVideo })
     try {
       if (!canEncryptCalls()) throw new Error(NO_FRAME_ENCRYPTION)
@@ -208,6 +232,58 @@ export class CallController {
     this.set({ cameraOff })
   }
 
+  /** Moves to the next camera (front/back on phones); the encrypted sender stays. */
+  async switchCamera() {
+    const sender = this.pc?.getSenders().find((s) => s.track?.kind === 'video')
+    const current = sender?.track
+    if (!sender || !current || !this.stream) return
+    const cameras = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput')
+    if (cameras.length < 2) return
+    const at = cameras.findIndex((d) => d.deviceId === current.getSettings().deviceId)
+    const next = cameras[(at + 1) % cameras.length]
+    const media = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: next.deviceId } } })
+    const track = media.getVideoTracks()[0]
+    track.enabled = !this.state?.cameraOff
+    await sender.replaceTrack(track)
+    this.stream.removeTrack(current)
+    current.stop()
+    this.stream.addTrack(track)
+    this.set({ local: new MediaStream(this.stream.getTracks()) })
+  }
+
+  /**
+   * Shows the screen instead of the camera (video calls): the shared
+   * screen goes out on the same sender, so it is SFrame-encrypted the same
+   * way and needs no renegotiation. Stopping (here or in the browser's
+   * own bar) brings the camera back.
+   */
+  async toggleScreenShare() {
+    const sender = this.pc?.getSenders().find((s) => s.track?.kind === 'video')
+    const camera = this.stream?.getVideoTracks()[0]
+    if (!sender || !camera) return
+    if (this.state?.sharing) {
+      sender.track?.stop()
+      await sender.replaceTrack(camera)
+      this.set({ sharing: false, local: new MediaStream(this.stream!.getTracks()) })
+      return
+    }
+    let screen: MediaStream
+    try {
+      screen = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false })
+    } catch {
+      return // cancelled
+    }
+    const track = screen.getVideoTracks()[0]
+    track.addEventListener('ended', () => this.state?.sharing && void this.toggleScreenShare())
+    await sender.replaceTrack(track)
+    this.set({ sharing: true, local: screen })
+  }
+
+  /** Plays the call on another audio output, where the browser allows it. */
+  setSpeaker(deviceId: string) {
+    this.set({ speaker: deviceId })
+  }
+
   /** Dismisses the closing screen. */
   close() {
     if (this.state?.phase === 'ended') this.set(undefined)
@@ -215,6 +291,16 @@ export class CallController {
 
   private async onSignal(s: IncomingCallSignal) {
     const state = this.state
+    if (s.kind === 'offer' && state && state.callId === s.callId && !state.outgoing && state.phase !== 'incoming') {
+      // The caller restarted ICE (a new network): answer the new offer.
+      if (!this.pc || !s.sdp || s.fromDevice !== this.peerDevice) return
+      await this.pc.setRemoteDescription({ type: 'offer', sdp: s.sdp })
+      await this.pc.setLocalDescription(await this.pc.createAnswer())
+      await gathered(this.pc, GATHER_MS)
+      const sdp = this.pc.localDescription!.sdp
+      await this.core.callSignal(state.conversationId, { callId: s.callId, kind: 'answer', sdp, toDevice: s.fromDevice })
+      return
+    }
     if (s.kind === 'offer') {
       if (s.elsewhere || !s.sdp || s.group) return
       if (this.otherBusy()) {
@@ -246,6 +332,7 @@ export class CallController {
         phase: 'incoming',
         muted: false,
         cameraOff: false,
+        cameras: 0,
       })
       // The caller gives up after RING_MS; this covers a lost hang-up.
       this.later(RING_MS + 15_000, () => this.finish('Missed call'))
@@ -260,8 +347,14 @@ export class CallController {
     }
     switch (s.kind) {
       case 'answer':
+        if (this.restarting && this.pc && s.sdp && s.fromDevice === this.peerDevice) {
+          this.restarting = false
+          await this.pc.setRemoteDescription({ type: 'answer', sdp: s.sdp })
+          return
+        }
         if (!state.outgoing || this.peerDevice || !this.pc || !s.sdp) return
         this.peerDevice = s.fromDevice
+        this.setupFrom = Date.now()
         await this.pc.setRemoteDescription({ type: 'answer', sdp: s.sdp })
         await this.applyTheirCandidates()
         for (const candidate of this.ownCandidates.splice(0)) await this.sendCandidate(candidate)
@@ -329,14 +422,24 @@ export class CallController {
       if (pc.connectionState === 'connected') {
         clearTimeout(this.timer)
         clearTimeout(this.dropTimer)
+        clearTimeout(this.restartTimer)
         this.dropTimer = undefined
-        if (this.state?.phase !== 'active') this.set({ phase: 'active', connectedAt: Date.now() })
+        this.restarting = false
+        if (this.state?.phase !== 'active') {
+          this.set({ phase: 'active', connectedAt: Date.now() })
+          this.watchQuality(pc)
+          void this.countCameras()
+        }
       } else if (pc.connectionState === 'failed' && pc.remoteDescription) {
         // Firefox reports failure early when it has nothing to pair yet;
-        // only a failure with the other side's candidates ends the call.
-        void this.hangUp('Connection lost')
+        // a failure with the other side's candidates gets an ICE restart,
+        // and ends the call if that doesn't bring it back.
+        this.dropTimer ??= setTimeout(() => void this.hangUp('Connection lost'), RECONNECT_MS)
+        void this.restartIce()
       } else if (pc.connectionState === 'disconnected') {
         this.dropTimer ??= setTimeout(() => void this.hangUp('Connection lost'), RECONNECT_MS)
+        clearTimeout(this.restartTimer)
+        this.restartTimer = setTimeout(() => void this.restartIce(), RESTART_AFTER_MS)
       }
     }
     return pc
@@ -347,6 +450,58 @@ export class CallController {
     if (this.relayOnly && !servers.some((s) => s.urls.some((u) => /^turns?:/.test(u))))
       throw new Error('This server has no call relay. Turn off "Always relay calls" in Settings to call.')
     return servers
+  }
+
+  /**
+   * ICE restart (FR-CALL-8): the caller offers again with new ICE
+   * credentials, through the same encrypted signalling; the callee answers.
+   * Only the caller restarts, so the two never offer at once.
+   */
+  private async restartIce() {
+    const state = this.state
+    const pc = this.pc
+    if (!state?.outgoing || !pc || !this.peerDevice || this.restarting || state.phase === 'ended') return
+    this.restarting = true
+    try {
+      pc.restartIce()
+      await pc.setLocalDescription(await pc.createOffer({ iceRestart: true }))
+      await gathered(pc, GATHER_MS)
+      const sdp = pc.localDescription!.sdp
+      await this.core.callSignal(state.conversationId, {
+        callId: state.callId,
+        kind: 'offer',
+        sdp,
+        video: state.video,
+        toDevice: this.peerDevice,
+      })
+    } catch (e) {
+      this.restarting = false
+      console.warn('ICE restart failed', e)
+    }
+  }
+
+  /** Rates the connection every few seconds and sends less video when it's poor. */
+  private watchQuality(pc: RTCPeerConnection) {
+    clearInterval(this.statsTimer)
+    this.statsTimer = setInterval(async () => {
+      if (this.pc !== pc) return clearInterval(this.statsTimer)
+      const { loss, rttMs } = measure(await pc.getStats())
+      const quality = rate(loss, rttMs)
+      if (quality === this.state?.quality) return
+      this.set({ quality })
+      for (const sender of pc.getSenders()) {
+        if (sender.track?.kind !== 'video') continue
+        const params = sender.getParameters()
+        if (!params.encodings?.length) continue
+        params.encodings[0].maxBitrate = VIDEO_BITRATE[quality]
+        await sender.setParameters(params).catch(() => undefined)
+      }
+    }, STATS_EVERY_MS)
+  }
+
+  private async countCameras() {
+    const devices = await navigator.mediaDevices.enumerateDevices().catch(() => [])
+    this.set({ cameras: devices.filter((d) => d.kind === 'videoinput').length })
   }
 
   private async sendCandidate(candidate: string) {
@@ -381,8 +536,12 @@ export class CallController {
 
   /** Releases the camera, microphone and connection. */
   private cleanUp() {
+    for (const s of this.pc?.getSenders() ?? []) if (s.track && !this.stream?.getTracks().includes(s.track)) s.track.stop()
     clearTimeout(this.timer)
     clearTimeout(this.dropTimer)
+    clearTimeout(this.restartTimer)
+    clearInterval(this.statsTimer)
+    this.restarting = false
     this.dropTimer = undefined
     if (this.stream) stopAll(this.stream)
     this.pc?.close()
@@ -392,6 +551,7 @@ export class CallController {
 
   private reset() {
     this.cleanUp()
+    this.setupFrom = undefined
     this.peerDevice = undefined
     this.offer = undefined
     this.ownCandidates = []
@@ -402,6 +562,13 @@ export class CallController {
   private finish(reason: string) {
     this.cleanUp()
     if (!this.state) return
+    if (this.setupFrom !== undefined) {
+      // Answered calls only: connected and not dropped, or failed (ADR-0032).
+      const at = this.state.connectedAt
+      const ok = at !== undefined && reason !== 'Connection lost'
+      this.core.recordCall('direct', ok, at !== undefined ? at - this.setupFrom : undefined)
+      this.setupFrom = undefined
+    }
     const callId = this.state.callId
     this.set({ phase: 'ended', ended: reason, local: undefined, remote: undefined })
     setTimeout(() => this.state?.callId === callId && this.state.phase === 'ended' && this.set(undefined), ENDED_MS)

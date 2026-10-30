@@ -222,6 +222,8 @@ type State = {
   readReceipts: boolean
   /** Calls only through the TURN relay, hiding this device's IP address (FR-CALL-9). */
   relayCalls?: boolean
+  /** Opt-in call statistics (ADR-0032): today's tallies, sent once a day. */
+  callStats?: { since: number; direct: CallTally; group: CallTally }
   /** Encrypted backups (ADR-0022): on, and when the last one was uploaded. */
   backup?: { lastAt?: number }
   /** Auto-download and photo quality (ADR-0025). */
@@ -235,6 +237,10 @@ type State = {
   /** Attachment uploads and downloads to resume after a reload or reconnect. */
   transfers: { conversationId: string; messageId: string; kind: 'upload' | 'download' }[]
 }
+
+type CallTally = { connected: number; failed: number; setup_seconds: number[] }
+const emptyTally = (): CallTally => ({ connected: 0, failed: 0, setup_seconds: [] })
+const STATS_EVERY_MS = 24 * 3600_000
 
 /** What a backup holds (ADR-0022): no MLS state, keys or tokens. */
 type BackupPayload = {
@@ -370,6 +376,7 @@ export class Engine {
       alerts: this.state.alerts,
       readReceipts: this.state.readReceipts,
       relayCalls: this.state.relayCalls ?? false,
+      callStats: !!this.state.callStats,
       backup: this.state.backup ? { lastAt: this.state.backup.lastAt } : undefined,
       media: this.state.media,
       liveSharing: this.state.live
@@ -935,6 +942,50 @@ export class Engine {
       await this.persist()
     })
     this.emitView()
+  }
+
+  /** Turns opt-in call statistics on or off (ADR-0032); off forgets what was counted. */
+  async setCallStats(on: boolean) {
+    await this.exclusive(async () => {
+      this.state.callStats = on ? { since: Date.now(), direct: emptyTally(), group: emptyTally() } : undefined
+      await this.persist()
+    })
+    this.emitView()
+  }
+
+  /** Counts a call that got as far as connecting (only with statistics on). */
+  async recordCall(kind: 'direct' | 'group', connected: boolean, setupMs?: number) {
+    const stats = this.state.callStats
+    if (!stats) return
+    await this.exclusive(async () => {
+      const tally = stats[kind]
+      if (connected) tally.connected++
+      else tally.failed++
+      if (connected && setupMs !== undefined && tally.setup_seconds.length < 100) {
+        tally.setup_seconds.push(Math.min(120, Math.max(0, Math.round(setupMs / 100) / 10)))
+      }
+      await this.persist()
+    })
+    void this.reportCallStats()
+  }
+
+  /** Sends yesterday's tallies, unauthenticated, at most once a day. */
+  private async reportCallStats() {
+    const stats = this.state.callStats
+    if (!stats || Date.now() - stats.since < STATS_EVERY_MS || this.connection !== 'online') return
+    const counted = (t: CallTally) => t.connected + t.failed > 0
+    if (counted(stats.direct) || counted(stats.group)) {
+      try {
+        await api.callStats({ direct: stats.direct, group: stats.group })
+      } catch (e) {
+        console.warn('sending call statistics failed', e)
+        return
+      }
+    }
+    await this.exclusive(async () => {
+      if (this.state.callStats) this.state.callStats = { since: Date.now(), direct: emptyTally(), group: emptyTally() }
+      await this.persist()
+    })
   }
 
   async setRelayCalls(on: boolean) {
@@ -1622,13 +1673,14 @@ export class Engine {
         now,
         messageId,
       )
-      const direct = signal.toDevice && (signal.kind === 'candidate' || signal.kind === 'busy')
+      // Offers with a device are ICE restarts in a call under way.
+      const direct = signal.toDevice && (signal.kind === 'candidate' || signal.kind === 'busy' || signal.kind === 'offer')
       this.state.outbox.push({
         messageId: toHex(messageId),
         conversationId,
         envelope: toBase64(envelope),
         recipients: direct ? [signal.toDevice!] : this.recipients(conversationId),
-        silent: signal.kind !== 'offer',
+        silent: signal.kind !== 'offer' || !!direct,
       })
       await this.trackCall(conversationId, signal, true, true, now)
       await this.persist()
@@ -1777,7 +1829,16 @@ export class Engine {
     const forThis = !signal.toDevice || signal.toDevice === thisDevice
     const known = this.calls.get(signal.callId)
     if (known && known.conversationId !== conv.id) return
-    if (signal.kind === 'offer' && known) return
+    if (signal.kind === 'offer' && known) {
+      // An ICE restart in a call under way (ADR-0028), for this device.
+      if (known.answeredAt !== undefined && !mine && signal.toDevice === thisDevice) {
+        this.emit({
+          type: 'call',
+          signal: { ...signal, conversationId: conv.id, title: this.title(conv), fromDevice: device },
+        })
+      }
+      return
+    }
     if (signal.kind !== 'offer' && !known) return
     if ((signal.kind === 'candidate' || signal.kind === 'busy') && !forThis) return
     const outgoing = known?.outgoing ?? mine
@@ -2875,6 +2936,7 @@ export class Engine {
   private setConnection(state: ConnectionState) {
     this.connection = state
     this.emitView()
+    if (state === 'online') void this.reportCallStats()
   }
 
   private emitView() {
