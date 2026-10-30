@@ -65,33 +65,44 @@ export function MapView({
 }) {
   const container = useRef<HTMLDivElement>(null)
   const [error, setError] = useState<string>()
+  const view = useRef<{ map: import('maplibre-gl').Map; marker: import('maplibre-gl').Marker }>(undefined)
+  // The latest point, for a map that finishes loading after it moved.
+  const point = useRef<[number, number]>([longitude, latitude])
+  point.current = [longitude, latitude]
 
   useEffect(() => {
-    let map: import('maplibre-gl').Map | undefined
     let cancelled = false
     void (async () => {
       try {
         const [maplibre, mapStyle] = await Promise.all([load(core), style(core)])
         if (cancelled || !container.current) return
-        map = new maplibre.Map({
+        const map = new maplibre.Map({
           container: container.current,
           style: mapStyle,
-          center: [longitude, latitude],
+          center: point.current,
           zoom: 15,
           interactive,
           attributionControl: { compact: true },
         })
-        new maplibre.Marker({ color: '#1f6feb' }).setLngLat([longitude, latitude]).addTo(map)
+        const marker = new maplibre.Marker({ color: '#1f6feb' }).setLngLat(point.current).addTo(map)
         map.on('error', (e) => console.warn('map error', e.error))
+        view.current = { map, marker }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e))
       }
     })()
     return () => {
       cancelled = true
-      map?.remove()
+      view.current?.map.remove()
+      view.current = undefined
     }
-  }, [core, latitude, longitude, interactive])
+  }, [core, interactive])
+
+  // A live location moves the pin rather than redrawing the map.
+  useEffect(() => {
+    view.current?.marker.setLngLat([longitude, latitude])
+    view.current?.map.easeTo({ center: [longitude, latitude] })
+  }, [latitude, longitude])
 
   if (error) return <p className="small muted">The map can't be shown in this browser.</p>
   return <div ref={container} className="map" data-testid="map" />

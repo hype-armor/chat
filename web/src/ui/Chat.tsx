@@ -9,6 +9,7 @@ import { Attachment } from './Attachment'
 import { Recorder } from './Recorder'
 import { Media } from './Media'
 import { LocationCard, ShareLocation } from './Location'
+import { LiveBanner, LiveCard } from './Live'
 import { probeClip } from './media'
 import type { MediaInfo } from '../core/protocol'
 import { BlockedList, DeleteAccount, ReportForm } from './Safety'
@@ -33,67 +34,72 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
   const accepted = view.conversations.filter((c) => !c.request)
 
   return (
-    <div className={`chat-layout ${conversation ? 'has-selection' : ''}`}>
-      <aside className="sidebar">
-        <header className="bar">
-          <div>
-            <strong>{view.me.displayName}</strong>
-            <div className="muted small">{view.me.username}</div>
-          </div>
-          <span className={`connection ${view.connection}`} role="status">
-            {view.connection}
-          </span>
-        </header>
-        <StorageBanner />
-        <InstallBanner />
-        {view.alerts.map((a) => (
-          <div key={a.id} className="alert" role="alert">
-            <p>{a.text}</p>
-            <button type="button" className="link small" onClick={() => void core.dismissAlert(a.id)}>
-              Dismiss
-            </button>
-          </div>
-        ))}
-        <NotificationToggle core={core} />
-        <Backup core={core} backup={view.backup} />
-        <Invite core={core} />
-        <Devices core={core} />
-        <Privacy core={core} readReceipts={view.readReceipts} />
-        <Media core={core} media={view.media} />
-        <BlockedList core={core} />
-        <DeleteAccount core={core} />
-        <NewChat core={core} onStarted={setSelected} />
-        <NewGroup core={core} onCreated={setSelected} />
-        {requests.length > 0 && (
-          <nav aria-label="Requests">
-            <h3 className="list-heading small">Message requests</h3>
-            <ConversationList conversations={requests} selected={selected} onSelect={setSelected} />
+    <>
+      <LiveBanner core={core} sharing={view.liveSharing} />
+      <div
+        className={`chat-layout ${conversation ? 'has-selection' : ''} ${view.liveSharing.length > 0 ? 'with-banner' : ''}`}
+      >
+        <aside className="sidebar">
+          <header className="bar">
+            <div>
+              <strong>{view.me.displayName}</strong>
+              <div className="muted small">{view.me.username}</div>
+            </div>
+            <span className={`connection ${view.connection}`} role="status">
+              {view.connection}
+            </span>
+          </header>
+          <StorageBanner />
+          <InstallBanner />
+          {view.alerts.map((a) => (
+            <div key={a.id} className="alert" role="alert">
+              <p>{a.text}</p>
+              <button type="button" className="link small" onClick={() => void core.dismissAlert(a.id)}>
+                Dismiss
+              </button>
+            </div>
+          ))}
+          <NotificationToggle core={core} />
+          <Backup core={core} backup={view.backup} />
+          <Invite core={core} />
+          <Devices core={core} />
+          <Privacy core={core} readReceipts={view.readReceipts} />
+          <Media core={core} media={view.media} />
+          <BlockedList core={core} />
+          <DeleteAccount core={core} />
+          <NewChat core={core} onStarted={setSelected} />
+          <NewGroup core={core} onCreated={setSelected} />
+          {requests.length > 0 && (
+            <nav aria-label="Requests">
+              <h3 className="list-heading small">Message requests</h3>
+              <ConversationList conversations={requests} selected={selected} onSelect={setSelected} />
+            </nav>
+          )}
+          <nav aria-label="Conversations">
+            <ConversationList conversations={accepted} selected={selected} onSelect={setSelected} />
+            {accepted.length === 0 && <p className="muted empty">No conversations yet.</p>}
           </nav>
+        </aside>
+        {conversation ? (
+          <Conversation
+            core={core}
+            id={conversation.id}
+            title={conversation.title}
+            isGroup={conversation.isGroup}
+            memberCount={conversation.memberCount}
+            amAdmin={conversation.amAdmin}
+            status={conversation.status}
+            peer={conversation.peer}
+            verification={conversation.verification}
+            blocked={conversation.blocked ?? false}
+            request={conversation.request}
+            onBack={() => setSelected(undefined)}
+          />
+        ) : (
+          <section className="placeholder muted">Select a conversation or start a new one.</section>
         )}
-        <nav aria-label="Conversations">
-          <ConversationList conversations={accepted} selected={selected} onSelect={setSelected} />
-          {accepted.length === 0 && <p className="muted empty">No conversations yet.</p>}
-        </nav>
-      </aside>
-      {conversation ? (
-        <Conversation
-          core={core}
-          id={conversation.id}
-          title={conversation.title}
-          isGroup={conversation.isGroup}
-          memberCount={conversation.memberCount}
-          amAdmin={conversation.amAdmin}
-          status={conversation.status}
-          peer={conversation.peer}
-          verification={conversation.verification}
-          blocked={conversation.blocked ?? false}
-          request={conversation.request}
-          onBack={() => setSelected(undefined)}
-        />
-      ) : (
-        <section className="placeholder muted">Select a conversation or start a new one.</section>
-      )}
-    </div>
+      </div>
+    </>
   )
 }
 
@@ -650,6 +656,7 @@ function Conversation({
                 />
               )}
               {m.location && <LocationCard core={core} location={m.location} />}
+              {m.live && <LiveCard core={core} conversationId={id} message={m} live={m.live} />}
               {m.text && <span className="text">{m.text}</span>}
               <span className="meta small">
                 {new Date(m.sentAt).toLocaleTimeString([], {

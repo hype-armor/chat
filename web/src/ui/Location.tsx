@@ -6,6 +6,12 @@ import type { CoreClient } from '../core/client'
 import type { LocationInfo } from '../core/protocol'
 import { MapView } from './MapView'
 
+const LIVE_CHOICES: [string, number][] = [
+  ['15 min', 15 * 60_000],
+  ['1 hour', 60 * 60_000],
+  ['8 hours', 8 * 60 * 60_000],
+]
+
 export function formatCoordinates(l: LocationInfo): string {
   return `${l.latitude.toFixed(5)}, ${l.longitude.toFixed(5)}`
 }
@@ -74,6 +80,15 @@ export function ShareLocation({
     }
   }
 
+  const live = async (location: LocationInfo, durationMs: number) => {
+    setState('idle')
+    try {
+      await core.startLive(conversationId, durationMs, location)
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   return (
     <>
       <button
@@ -95,6 +110,12 @@ export function ShareLocation({
             <button type="button" onClick={() => void send(state)}>
               Send location
             </button>
+            <span className="small">Share live for</span>
+            {LIVE_CHOICES.map(([label, ms]) => (
+              <button key={ms} type="button" className="secondary" onClick={() => void live(state, ms)}>
+                {label}
+              </button>
+            ))}
             <button type="button" className="link" onClick={() => setState('idle')}>
               Cancel
             </button>

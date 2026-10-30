@@ -13,17 +13,19 @@
 
 - A live session is started by an E2EE **control message**
   `{session_id, expires_at, update_interval}` in the conversation.
-- Updates are ordinary E2EE application messages, flagged *ephemeral* and
-  *non-persistent*: the server queues them with a short TTL (e.g., 2 min)
-  and replaces older updates from the same session (coalescing key is an
-  opaque `session_id`), so offline recipients don't receive a flood of stale
-  points on reconnect.
-- Clients keep only the latest point (plus optional short trail) and
+- Updates are ordinary E2EE application messages, delivered like any
+  other: **not** coalesced or dropped by the server (ADR-0027). Dropping
+  MLS messages leaves ratchet gaps that can stop a sender's later messages
+  decrypting. Updates are sent at most every 10 s (sooner only after 20 m
+  of movement, with a 60 s heartbeat), never while offline, and without
+  Web Push. A phone coming back online catches up and discards the stale
+  points.
+- Clients keep only the latest point (no trail) and
   discard data when the session ends.
 - Stop = control message `{session_id, stopped}`; also auto-stop at
   expiry, on leaving the group, or on removal from the group.
-- Update cadence adapts: motion-based (significant-change / fused provider)
-  with a floor/ceiling (e.g., 10 s – 2 min) to save battery.
+- Update cadence: 10 s floor, 20 m movement threshold, 60 s heartbeat
+  (ADR-0027).
 - **Web limitation:** browsers stop `watchPosition` when the tab/PWA is in
   the background or the screen is off. Live sharing from the web only
   updates while the app is open; the UI must say so ("Sharing pauses when

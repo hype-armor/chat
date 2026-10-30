@@ -2,8 +2,8 @@
 
 use chat_proto::v1::{
     Ack, Attachment, Authenticate, ClientFrame, Content, ContentType, DeviceSync, Envelope,
-    GroupInfo, Location, Ping, Profile, Receipt, SendEnvelope, ServerFrame, Text, client_frame,
-    content, receipt, server_frame,
+    GroupInfo, LiveLocation, Location, Ping, Profile, Receipt, SendEnvelope, ServerFrame, Text,
+    client_frame, content, receipt, server_frame,
 };
 use js_sys::{Array, Uint8Array};
 use prost::Message;
@@ -208,6 +208,32 @@ pub struct EventView {
     pub attachment: Option<AttachmentView>,
     #[wasm_bindgen(getter_with_clone)]
     pub location: Option<LocationView>,
+    #[wasm_bindgen(getter_with_clone)]
+    pub live: Option<LiveLocationView>,
+}
+
+impl From<Location> for LocationView {
+    fn from(l: Location) -> Self {
+        Self {
+            latitude: l.latitude,
+            longitude: l.longitude,
+            accuracy_m: l.accuracy_m,
+            label: l.label,
+        }
+    }
+}
+
+/// A `LiveLocation` message body; `location` is absent when stopping.
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct LiveLocationView {
+    #[wasm_bindgen(getter_with_clone, js_name = sessionId)]
+    pub session_id: Vec<u8>,
+    #[wasm_bindgen(js_name = expiresAtMs)]
+    pub expires_at_ms: f64,
+    #[wasm_bindgen(getter_with_clone)]
+    pub location: Option<LocationView>,
+    pub stopped: bool,
 }
 
 /// A `Location` message body.
@@ -238,6 +264,7 @@ impl EventView {
             receipt_ids: Vec::new(),
             attachment: None,
             location: None,
+            live: None,
         }
     }
 }
@@ -656,6 +683,41 @@ impl CoreClient {
         )
     }
 
+    /// A live-location start or update (`point` true) or stop. Returns the
+    /// encoded `Envelope`.
+    #[wasm_bindgen(js_name = sendLiveLocation)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn send_live_location(
+        &mut self,
+        conversation_id: &[u8],
+        session_id: Vec<u8>,
+        expires_at_ms: f64,
+        point: bool,
+        latitude: f64,
+        longitude: f64,
+        accuracy_m: f32,
+        sent_at_ms: f64,
+        message_id: Vec<u8>,
+    ) -> Result<Vec<u8>, JsError> {
+        let location = point.then(|| Location {
+            latitude,
+            longitude,
+            accuracy_m,
+            label: String::new(),
+        });
+        self.send(
+            conversation_id,
+            sent_at_ms,
+            content::Body::LiveLocation(LiveLocation {
+                session_id,
+                expires_at_ms: expires_at_ms as u64,
+                stopped: location.is_none(),
+                location,
+            }),
+            message_id,
+        )
+    }
+
     #[wasm_bindgen(js_name = sendProfile)]
     pub fn send_profile(
         &mut self,
@@ -736,12 +798,13 @@ impl CoreClient {
                     }
                     Some(content::Body::DeviceSync(d)) => view.device_sync = Some(d.state),
                     Some(content::Body::Attachment(a)) => view.attachment = Some(a.into()),
-                    Some(content::Body::Location(l)) => {
-                        view.location = Some(LocationView {
-                            latitude: l.latitude,
-                            longitude: l.longitude,
-                            accuracy_m: l.accuracy_m,
-                            label: l.label,
+                    Some(content::Body::Location(l)) => view.location = Some(l.into()),
+                    Some(content::Body::LiveLocation(l)) => {
+                        view.live = Some(LiveLocationView {
+                            session_id: l.session_id,
+                            expires_at_ms: l.expires_at_ms as f64,
+                            location: l.location.map(Into::into),
+                            stopped: l.stopped,
                         })
                     }
                     Some(content::Body::Receipt(r)) => {

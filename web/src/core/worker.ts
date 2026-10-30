@@ -52,6 +52,15 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
     case 'sendLocation':
       await engine.sendLocation(request.conversationId, request.location)
       return { type: 'ok' }
+    case 'startLive':
+      await engine.startLive(request.conversationId, request.durationMs, request.location)
+      return { type: 'ok' }
+    case 'liveUpdate':
+      await engine.liveUpdate(request.location)
+      return { type: 'ok' }
+    case 'stopLive':
+      await engine.stopLive(request.conversationId)
+      return { type: 'ok' }
     case 'mapInfo':
       return { type: 'mapInfo', info: await mapInfo() }
     case 'tile': {

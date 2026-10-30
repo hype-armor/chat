@@ -47,6 +47,8 @@ export type AppView =
       /** Encrypted backups are on (ADR-0022), with the last upload time. */
       backup?: { lastAt?: number }
       media: MediaSettings
+      /** This device's live-location sessions (FR-LOC-6 indicator). */
+      liveSharing: { conversationId: string; title: string; expiresAt: number }[]
     }
 
 /** When attachments download by themselves (FR-MED-6, ADR-0025). */
@@ -135,6 +137,15 @@ export type LocationInfo = {
   label?: string
 }
 
+/** A live location as the conversation shows it (FR-LOC-2/3). */
+export type LiveInfo = {
+  sessionId: string
+  expiresAt: number
+  /** Latest point; gone once the session ends. */
+  latest?: LocationInfo & { at: number }
+  ended: boolean
+}
+
 export type ChatMessage = {
   id: string
   /** 'me' or the sender's account id (hex); empty for notices. */
@@ -156,6 +167,7 @@ export type ChatMessage = {
   /** An image or file; `text` is then its caption. */
   file?: FileInfo
   location?: LocationInfo
+  live?: LiveInfo
 }
 
 export type CoreStatus = { version: string; selfTest: boolean }
@@ -178,6 +190,9 @@ export type CoreRequest =
   | { type: 'messages'; conversationId: string }
   | { type: 'sendText'; conversationId: string; text: string }
   | { type: 'sendLocation'; conversationId: string; location: LocationInfo }
+  | { type: 'startLive'; conversationId: string; durationMs: number; location: LocationInfo }
+  | { type: 'liveUpdate'; location: LocationInfo }
+  | { type: 'stopLive'; conversationId: string }
   | { type: 'mapInfo' }
   | { type: 'tile'; z: number; x: number; y: number }
   | { type: 'sendFile'; conversationId: string; file: File; caption: string; media?: MediaInfo }
