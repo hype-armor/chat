@@ -130,6 +130,7 @@ form {
   border-right: 1px solid var(--border);
   background: var(--surface);
   min-height: 0;
+  min-width: 0;
 }
 
 .bar {

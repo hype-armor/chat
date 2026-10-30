@@ -4,7 +4,7 @@ import { closeSettings, compose, createGroup, messages, randomUsername, signUp, 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
 for (const width of [1280, 640, 320]) {
-  test(`sidebar prioritizes chats and composes in panels (${width}px)`, async ({ browser }) => {
+  test(`sidebar prioritizes chats and composes in panels (${width}px)`, async ({ browser, browserName }) => {
     const username = randomUsername()
     const bobUsername = randomUsername()
     const alice = await signUp(browser, 'Alice with a very long display name', username)
@@ -46,6 +46,7 @@ for (const width of [1280, 640, 320]) {
 
     await compose(alice, 'New group')
     await expect(alice.getByLabel('Group name', { exact: true })).toBeFocused()
+    expect(await alice.evaluate('document.documentElement.scrollWidth')).toBe(width)
     await expect(alice.getByRole('navigation', { name: 'Conversations', exact: true })).toHaveCount(0)
     await alice.getByRole('button', { name: '← Back', exact: true }).click()
     await expect(trigger).toBeFocused()
@@ -69,12 +70,16 @@ for (const width of [1280, 640, 320]) {
     await createGroup(alice, 'Sidebar group', [bobUsername])
     await expect(alice.getByLabel('Message', { exact: true })).toBeVisible()
     if (width <= 640) await alice.getByRole('button', { name: 'Back to conversations' }).click()
-    await alice.context().setOffline(true)
-    await expect(status).toHaveText(/^(Offline|Connecting…)$/)
-    await expect(status).toHaveClass('connection')
-    await alice.context().setOffline(false)
-    await expect(status).toHaveText('Connected', { timeout: 30_000 })
-    await expect(status).toHaveClass('visually-hidden')
+    // WebKit cannot reload offline under Playwright.
+    if (browserName !== 'webkit') {
+      await alice.context().setOffline(true)
+      await alice.reload()
+      await expect(status).toHaveText(/^(Offline|Connecting…)$/)
+      await expect(status).toHaveClass('connection')
+      await alice.context().setOffline(false)
+      await expect(status).toHaveText('Connected', { timeout: 30_000 })
+      await expect(status).toHaveClass('visually-hidden')
+    }
     await alice.context().close()
     await bob.context().close()
   })

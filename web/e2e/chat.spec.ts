@@ -168,10 +168,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
         await page.setViewportSize({ width, height: 720 })
         await page.emulateMedia({ colorScheme })
       }
-      await alice.getByText('New group', { exact: true }).click()
-      await alice.getByLabel('Group name', { exact: true }).fill('Message polish')
-      await alice.getByLabel("Members' usernames").fill(bobUsername)
-      await alice.getByRole('button', { name: 'Create group' }).click()
+      await createGroup(alice, 'Message polish', [bobUsername])
       await openChat(bob, /Message polish/)
       for (const text of ['First in run', 'Last in run']) {
         await alice.getByLabel('Message', { exact: true }).fill(text)
