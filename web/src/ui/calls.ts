@@ -4,7 +4,7 @@
 // here: DTLS-SRTP keys are negotiated by the browser, and the fingerprints
 // that pin them travel end-to-end encrypted inside the SDP.
 import type { CoreClient } from '../core/client'
-import type { IncomingCallSignal } from '../core/protocol'
+import type { IceServer, IncomingCallSignal } from '../core/protocol'
 import { RING_MS } from '../core/calls'
 
 export type CallPhase = 'incoming' | 'calling' | 'connecting' | 'active' | 'ended'
@@ -77,6 +77,8 @@ export class CallController {
   private timer?: ReturnType<typeof setTimeout>
   private dropTimer?: ReturnType<typeof setTimeout>
   private unsubscribe: () => void
+  /** Only relayed candidates, so the other side never learns this device's address (FR-CALL-9). */
+  relayOnly = false
 
   constructor(private readonly core: CoreClient) {
     this.unsubscribe = core.subscribe((e) => {
@@ -110,7 +112,7 @@ export class CallController {
     this.reset()
     this.set({ callId, conversationId, title, video, outgoing: true, phase: 'calling', muted: false, cameraOff: false })
     try {
-      const servers = await this.core.iceServers()
+      const servers = this.checkRelay(await this.core.iceServers())
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video })
       if (!this.still(callId)) return stopAll(stream)
       const pc = this.connect(servers, stream)
@@ -136,7 +138,7 @@ export class CallController {
     const sendVideo = state.video && video
     this.set({ phase: 'connecting', cameraOff: !sendVideo })
     try {
-      const servers = await this.core.iceServers()
+      const servers = this.checkRelay(await this.core.iceServers())
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: sendVideo })
       if (!this.still(callId)) return stopAll(stream)
       const pc = this.connect(servers, stream)
@@ -271,7 +273,7 @@ export class CallController {
   }
 
   private connect(iceServers: RTCIceServer[], stream: MediaStream): RTCPeerConnection {
-    const pc = new RTCPeerConnection({ iceServers })
+    const pc = new RTCPeerConnection({ iceServers, iceTransportPolicy: this.relayOnly ? 'relay' : 'all' })
     this.pc = pc
     this.stream = stream
     for (const track of stream.getTracks()) pc.addTrack(track, stream)
@@ -302,6 +304,13 @@ export class CallController {
       }
     }
     return pc
+  }
+
+  /** With "always relay" on, a call without a TURN server would leak nothing but also never connect. */
+  private checkRelay(servers: IceServer[]): IceServer[] {
+    if (this.relayOnly && !servers.some((s) => s.urls.some((u) => /^turns?:/.test(u))))
+      throw new Error('This server has no call relay. Turn off "Always relay calls" in Settings to call.')
+    return servers
   }
 
   private async sendCandidate(candidate: string) {

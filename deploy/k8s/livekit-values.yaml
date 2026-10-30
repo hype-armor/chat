@@ -14,11 +14,11 @@ livekit:
   # API key/secret shared with the chat server for room tokens.
   # Supply via --set or a values file kept out of git.
   keys: {}
+  # TURN is coturn's job (deploy/helm, turn.*; ADR-0029): it holds UDP 3478
+  # and TCP 5349 on the node. Group calls get its credentials in Phase 3
+  # item 5.
   turn:
-    enabled: true
-    domain: turn.chat.example.com
-    tls_port: 5349
-    udp_port: 3478
+    enabled: false
 loadBalancer:
   type: disable
 resources:

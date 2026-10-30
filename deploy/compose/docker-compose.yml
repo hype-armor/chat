@@ -27,6 +27,10 @@ services:
       AWS_REGION: us-east-1
       AWS_ACCESS_KEY_ID: dev
       AWS_SECRET_ACCESS_KEY: dev
+      # Calls (ADR-0028/0029): the coturn service below.
+      CHAT_STUN_URLS: stun:${CHAT_HOST:-localhost}:3478
+      CHAT_TURN_URLS: turn:${CHAT_HOST:-localhost}:3478?transport=udp,turn:${CHAT_HOST:-localhost}:3478?transport=tcp
+      CHAT_TURN_SECRET: dev-turn-secret
     ports: ["8080:8080"]
     depends_on:
       postgres:
@@ -93,6 +97,32 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy:/data
     depends_on: [web]
+
+  # TURN relay for 1:1 calls. CHAT_HOST must be this machine's IP address
+  # as other devices reach it (coturn tells them to send media there).
+  # Development only: it may relay to private addresses, which production
+  # (deploy/helm, turn.deniedPeerIps) forbids.
+  coturn:
+    image: coturn/coturn:4.7.0
+    command:
+      - --realm=chat.local
+      - --use-auth-secret
+      - --static-auth-secret=dev-turn-secret
+      - --listening-port=3478
+      - --min-port=49160
+      - --max-port=49200
+      - --external-ip=${CHAT_HOST:-127.0.0.1}
+      - --no-tls
+      - --no-dtls
+      - --fingerprint
+      - --no-cli
+      - --no-multicast-peers
+      - --log-file=stdout
+      - --simple-log
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+      - "49160-49200:49160-49200/udp"
 
   postgres:
     image: postgres:18

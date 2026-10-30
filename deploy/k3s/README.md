@@ -60,8 +60,9 @@ procedure; run them on a fresh Linux host (Ubuntu 24.04 LTS or Debian 13,
 |------|----------|---------|
 | 80, 443 | TCP | Web app, API, WebSocket, ACME certificate challenge |
 | 7881 | TCP | LiveKit media fallback over TCP |
-| 3478 | UDP | TURN |
-| 5349 | TCP | TURN over TLS |
+| 3478 | UDP + TCP | TURN (coturn) |
+| 5349 | TCP | TURN over TLS (coturn) |
+| 49152–49999 | UDP | TURN relayed media (coturn) |
 | 50000–60000 | UDP | LiveKit WebRTC media |
 | 6443 | TCP | Kubernetes API — **do not expose publicly**; reach it over SSH or a VPN |
 
@@ -113,6 +114,25 @@ helm upgrade --install chat deploy/helm/chat -n chat \
 # printed link and sign up; invite everyone else from the app.
 kubectl -n chat exec deploy/chat-server -- chat-server create-invite https://chat.example.com
 ```
+
+### Call relay: coturn (ADR-0029)
+
+1:1 calls connect directly when they can; otherwise, and always for people
+who turn on "Always relay calls", media goes through coturn. It runs with
+host networking on the ports above. The server and coturn share one
+secret; clients get 12-hour credentials from `GET /v1/turn`.
+
+```sh
+kubectl -n chat create secret generic chat-turn \
+  --from-literal=static-auth-secret="$(openssl rand -hex 32)"
+helm upgrade chat deploy/helm/chat -n chat --reuse-values \
+  --set turn.enabled=true --set turn.host=turn.chat.example.com
+# Behind NAT (e.g. a cloud floating IP): --set turn.externalIp=<public IP>
+```
+
+cert-manager issues the TURN-over-TLS certificate (`turn.tls.issuer`).
+coturn keeps no logs by default, since they would name both callers' IP
+addresses; `--set turn.logs=true` while debugging.
 
 ### Attachments and backups: SeaweedFS (ADR-0005, ADR-0023)
 

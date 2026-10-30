@@ -70,6 +70,57 @@ web:
     requests: { cpu: 20m, memory: 32Mi }
     limits: { memory: 128Mi }
 
+# TURN relay for 1:1 calls (coturn, ADR-0029). Needs the node's UDP and
+# TCP `port`, TCP `tls.port` and UDP `relayPorts` open to the internet, and
+# DNS for `host` pointing at the node. The secret is shared with the server,
+# which hands out short-lived credentials (GET /v1/turn):
+#   kubectl -n chat create secret generic chat-turn \
+#     --from-literal=static-auth-secret="$(openssl rand -hex 32)"
+turn:
+  enabled: false
+  host: turn.chat.example.com
+  image:
+    repository: coturn/coturn
+    tag: "4.7.0"
+    pullPolicy: IfNotPresent
+  existingSecret: chat-turn
+  secretKey: static-auth-secret
+  port: 3478
+  # Below LiveKit's 50000-60000 so both fit on one node.
+  relayPorts: { min: 49152, max: 49999 }
+  # The node's public IP when it sits behind NAT (cloud VMs with a
+  # floating IP); empty when the public address is on the interface.
+  externalIp: ""
+  tls:
+    port: 5349
+    # Secret with tls.crt/tls.key; with `issuer`, cert-manager creates it.
+    secretName: chat-turn-tls
+    issuer: letsencrypt
+  # Concurrent relay allocations per credential and in total.
+  userQuota: 12
+  totalQuota: 1200
+  # Peers the relay must never reach (private, loopback, link-local,
+  # carrier-grade NAT and cluster ranges).
+  deniedPeerIps:
+    - 0.0.0.0-0.255.255.255
+    - 10.0.0.0-10.255.255.255
+    - 100.64.0.0-100.127.255.255
+    - 127.0.0.0-127.255.255.255
+    - 169.254.0.0-169.254.255.255
+    - 172.16.0.0-172.31.255.255
+    - 192.0.0.0-192.0.0.255
+    - 192.168.0.0-192.168.255.255
+    - 198.18.0.0-198.19.255.255
+    - "::1"
+    - fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+    - fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+  # Session logs name both sides' IP addresses; keep off except to debug.
+  logs: false
+  nodeSelector: {}
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 256Mi }
+
 # Classic Ingress. Long timeouts keep client WebSockets open.
 ingress:
   enabled: true

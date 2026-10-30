@@ -1,5 +1,5 @@
 import { type Browser, type Page, expect, test } from '@playwright/test'
-import { openChat, randomUsername } from './support'
+import { closeSettings, openChat, openSettings, randomUsername } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -81,5 +81,17 @@ test.describe('calls', () => {
     await expect(bob.getByRole('dialog', { name: 'Call with Alice' })).toContainText('Missed call')
     await expect(bob.getByRole('navigation', { name: 'Conversations' }).getByRole('button', { name: /Alice/ })).toContainText('📞 Missed voice call')
     await expect(alice.getByTestId('notice').filter({ hasText: '📞 Cancelled voice call' })).toBeVisible()
+  })
+
+  test('"always relay calls" refuses to call without a relay (FR-CALL-9)', async ({ browser, browserName }) => {
+    const { alice } = await pair(browser, browserName)
+    await openSettings(alice)
+    await alice.getByText('Privacy').click()
+    await alice.getByLabel('Always relay calls').check()
+    await closeSettings(alice)
+    await alice.getByRole('button', { name: /Bob/ }).click()
+    // The test server offers no TURN server: a direct call would reveal the IP address.
+    await alice.getByRole('button', { name: 'Voice call', exact: true }).click()
+    await expect(alice.getByRole('dialog', { name: 'Call with Bob' })).toContainText('This server has no call relay')
   })
 })

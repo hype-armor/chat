@@ -1,0 +1,141 @@
+{{- if .Values.turn.enabled }}
+{{- $component := dict "root" . "component" "turn" }}
+{{- $t := .Values.turn }}
+# coturn: TURN relay for 1:1 calls (ADR-0029). Host networking, because
+# relayed media arrives on a range of UDP ports at the node's address.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "chat.fullname" . }}-turn
+  labels:
+    {{- include "chat.labels" . | nindent 4 }}
+    app.kubernetes.io/component: turn
+spec:
+  replicas: 1
+  # Host ports: the old pod must free them before the new one starts.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "chat.selectorLabels" $component | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "chat.selectorLabels" $component | nindent 8 }}
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+        runAsUser: 65534
+        runAsGroup: 65534
+      {{- with $t.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: coturn
+          image: {{ printf "%s:%s" $t.image.repository $t.image.tag }}
+          imagePullPolicy: {{ $t.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          env:
+            - name: TURN_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "turn.existingSecret is required" $t.existingSecret }}
+                  key: {{ $t.secretKey }}
+          args:
+            - --realm={{ $t.host }}
+            - --use-auth-secret
+            # Expanded by Kubernetes; visible only inside this pod.
+            - --static-auth-secret=$(TURN_SECRET)
+            - --listening-port={{ $t.port }}
+            - --min-port={{ $t.relayPorts.min }}
+            - --max-port={{ $t.relayPorts.max }}
+            {{- with $t.externalIp }}
+            - --external-ip={{ . }}
+            {{- end }}
+            {{- if $t.tls.secretName }}
+            - --tls-listening-port={{ $t.tls.port }}
+            - --cert=/etc/coturn/tls/tls.crt
+            - --pkey=/etc/coturn/tls/tls.key
+            - --no-tlsv1
+            - --no-tlsv1_1
+            {{- else }}
+            - --no-tls
+            - --no-dtls
+            {{- end }}
+            - --fingerprint
+            - --no-cli
+            - --no-multicast-peers
+            - --no-software-attribute
+            - --stale-nonce=600
+            - --user-quota={{ $t.userQuota }}
+            - --total-quota={{ $t.totalQuota }}
+            - --pidfile=/tmp/turnserver.pid
+            # Relays only to public addresses: never into the cluster or
+            # the node's networks (SSRF through the relay).
+            {{- range $t.deniedPeerIps }}
+            - --denied-peer-ip={{ . }}
+            {{- end }}
+            {{- if $t.logs }}
+            - --log-file=stdout
+            - --simple-log
+            {{- else }}
+            # Session logs name both sides' IP addresses (NFR-OPS-1).
+            - --no-stdout-log
+            - --log-file=/dev/null
+            {{- end }}
+          ports:
+            - name: turn-udp
+              containerPort: {{ $t.port }}
+              protocol: UDP
+            - name: turn-tcp
+              containerPort: {{ $t.port }}
+              protocol: TCP
+            {{- if $t.tls.secretName }}
+            - name: turns
+              containerPort: {{ $t.tls.port }}
+              protocol: TCP
+            {{- end }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: run
+              mountPath: /var/run
+            {{- if $t.tls.secretName }}
+            - name: tls
+              mountPath: /etc/coturn/tls
+              readOnly: true
+            {{- end }}
+          resources:
+            {{- toYaml $t.resources | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: run
+          emptyDir: {}
+        {{- if $t.tls.secretName }}
+        - name: tls
+          secret:
+            secretName: {{ $t.tls.secretName }}
+        {{- end }}
+{{- with $t.tls.issuer }}
+---
+# The certificate for TURN over TLS, from cert-manager.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "chat.fullname" $ }}-turn
+  labels:
+    {{- include "chat.labels" $ | nindent 4 }}
+spec:
+  secretName: {{ required "turn.tls.secretName is required with turn.tls.issuer" $t.tls.secretName }}
+  dnsNames: [{{ $t.host | quote }}]
+  issuerRef:
+    kind: ClusterIssuer
+    name: {{ . }}
+{{- end }}
+{{- end }}

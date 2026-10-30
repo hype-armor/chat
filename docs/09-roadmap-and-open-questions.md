@@ -116,7 +116,7 @@ their PRs merge.
 1. [x] 1:1 voice and video calls, peer to peer: ringing, answer, decline,
    hang up, mute and camera, missed-call notices; signalling as MLS
    messages; STUN/TURN credentials from the server (FR-CALL-1/4/5).
-2. [ ] coturn in docker compose, k3s and Helm, and an "always relay calls"
+2. [x] coturn in docker compose, k3s and Helm, and an "always relay calls"
    setting to hide IP addresses (FR-CALL-9).
 3. [ ] SFrame on 1:1 calls, keyed from the MLS exporter (FR-CALL-3,
    ADR-0006); refuse to call without encoded transforms.
