@@ -293,7 +293,9 @@ export class CallController {
         clearTimeout(this.dropTimer)
         this.dropTimer = undefined
         if (this.state?.phase !== 'active') this.set({ phase: 'active', connectedAt: Date.now() })
-      } else if (pc.connectionState === 'failed') {
+      } else if (pc.connectionState === 'failed' && pc.remoteDescription) {
+        // Firefox reports failure early when it has nothing to pair yet;
+        // only a failure with the other side's candidates ends the call.
         void this.hangUp('Connection lost')
       } else if (pc.connectionState === 'disconnected') {
         this.dropTimer ??= setTimeout(() => void this.hangUp('Connection lost'), RECONNECT_MS)
