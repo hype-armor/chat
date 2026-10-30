@@ -699,3 +699,180 @@ button.danger {
 .chat-layout.with-banner {
   height: calc(100dvh - 2.5rem - 2.75rem);
 }
+
+/* ---- UI polish (2026-10-30) ---------------------------------------------- */
+
+.avatar {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  border-radius: 50%;
+  color: #fff;
+  font-weight: 600;
+  line-height: 1;
+  user-select: none;
+}
+
+.who {
+  flex: 1;
+  min-width: 0;
+}
+
+.who h2,
+.who strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Round icon buttons: settings and the composer's attach, location, voice. */
+button.icon {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--theirs);
+  color: var(--fg);
+  font-size: 1.1rem;
+}
+
+button.icon[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+/* Settings: their own screen in the sidebar. */
+.settings,
+.conversation-nav {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.5rem 0.5rem 0.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-head h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+/* Conversation list: avatar, name and time, then the preview. */
+.conversations button {
+  grid-template-columns: auto 1fr auto;
+  grid-template-areas:
+    'avatar title when'
+    'avatar preview preview';
+  column-gap: 0.75rem;
+  row-gap: 0.125rem;
+  align-items: center;
+}
+
+.conversations .avatar {
+  grid-area: avatar;
+}
+
+.conversations .title {
+  grid-area: title;
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversations .preview {
+  grid-area: preview;
+}
+
+.conversations .when {
+  grid-area: when;
+}
+
+/* Conversation header: who on one row, actions on the next (phones). */
+.conversation-bar {
+  flex-wrap: wrap;
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 12rem;
+}
+
+.header-actions {
+  display: flex;
+  gap: 0.125rem;
+  overflow-x: auto;
+  white-space: nowrap;
+  scrollbar-width: none;
+}
+
+@media (max-width: 40rem) {
+  .header-actions {
+    flex-basis: 100%;
+    margin: 0 -0.5rem -0.25rem;
+  }
+}
+
+/* Our own bubbles: secondary text and links stay readable on blue. */
+.messages .mine .muted,
+.messages .mine .meta {
+  color: inherit;
+  opacity: 0.85;
+}
+
+.messages .mine button.link,
+.messages .mine a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.messages .mine .error {
+  color: #ffd8d3;
+}
+
+/* An opened photo is shown as is, not dimmed like a disabled button. */
+.attachment .photo:disabled {
+  opacity: 1;
+}
+
+.messages .sender {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.messages li {
+  box-shadow: 0 1px 1px rgb(0 0 0 / 0.06);
+}
+
+.messages .mine {
+  border-bottom-right-radius: 0.25rem;
+}
+
+.messages .theirs {
+  border-bottom-left-radius: 0.25rem;
+}
+
+.composer {
+  align-items: center;
+}
+
+.composer input {
+  border-radius: 1.25rem;
+}
+
+.composer button[type='submit'] {
+  border-radius: 1.25rem;
+}

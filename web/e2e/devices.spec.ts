@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { linkDevice, messages, openChat, randomUsername, signUp } from './support'
+import { linkDevice, messages, openChat, openSettings, randomUsername, signUp } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -16,6 +16,8 @@ test('linking a second device by code, then removing it (ADR-0019)', async ({ br
 
   // The new device shows a code; the first device approves it.
   const laptop = await linkDevice(browser, alice)
+  await openSettings(alice)
+  await alice.getByText('Linked devices').click()
   await expect(alice.getByRole('list', { name: 'Devices' }).getByRole('listitem')).toHaveCount(2)
 
   // The laptop is signed in as Alice, in her conversation with Bob.

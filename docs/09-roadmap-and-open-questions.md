@@ -103,15 +103,10 @@ order; tick items as their PRs merge.
 
 **Exit:** feature-complete beta.
 
-**UI polish backlog** (noted 2026-10-30 from screenshots; owner: "leave the
-polish for later"):
-- Size and Save text on our own attachments is hard to read on the blue
-  bubble.
-- An opened full-size photo looks faded (disabled-button styling).
-- On phones, six settings sections sit above the conversation list; move
-  settings to their own screen.
-- The phone conversation header wraps ("Add people").
-- General visual pass: avatars, hierarchy, spacing.
+**UI polish** (2026-10-30, from screenshots): done. Settings moved to their own
+screen; avatars and times in the chat list; conversation actions on their own
+row on phones; readable text and links on our own bubbles; opened photos no
+longer dimmed; round icon buttons in the composer.
 
 **Phase 0 spikes still open** (block later phases, not Phase 1): (b)
 SQLite3MultipleCiphers on OPFS (deferred; IndexedDB snapshots suffice for
