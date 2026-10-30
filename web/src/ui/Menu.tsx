@@ -31,7 +31,7 @@ export function Menu({
     if (!open) return
     const buttons = menu.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')
     buttons?.[initialFocus.current === -1 ? buttons.length - 1 : 0]?.focus()
-    const outside = (event: PointerEvent) => {
+    const outside = (event: MouseEvent) => {
       if (event.target instanceof Node && !root.current?.contains(event.target)) close()
     }
     const escape = (event: globalThis.KeyboardEvent) => {
@@ -40,10 +40,10 @@ export function Menu({
         close()
       }
     }
-    document.addEventListener('pointerdown', outside)
+    document.addEventListener('click', outside)
     document.addEventListener('keydown', escape)
     return () => {
-      document.removeEventListener('pointerdown', outside)
+      document.removeEventListener('click', outside)
       document.removeEventListener('keydown', escape)
     }
   }, [open])

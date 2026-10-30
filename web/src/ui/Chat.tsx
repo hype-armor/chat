@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useRef, useState } from 'react'
+import { type FormEvent, useEffect, useId, useRef, useState } from 'react'
 import type { CoreClient } from '../core/client'
 import type { AppView, ChatMessage, ConversationSummary, MemberInfo } from '../core/protocol'
 import { InstallBanner, StorageBanner } from './Banners'
@@ -542,6 +542,7 @@ function Conversation({
   onBack: () => void
 }) {
   const [panel, setPanel] = useState<'add' | 'info' | 'verify' | 'report'>()
+  const detailsId = useId()
   const [reported, setReported] = useState(false)
   const active = status === 'active'
   const toggle = (p: 'add' | 'info' | 'verify' | 'report') => setPanel((current) => (current === p ? undefined : p))
@@ -623,10 +624,11 @@ function Conversation({
             type="button"
             className="conversation-title"
             aria-label={isGroup ? 'Group info' : 'Verify safety number'}
+            aria-describedby={detailsId}
             onClick={() => toggle(isGroup ? 'info' : 'verify')}
           >
             <Avatar name={title} id={peer ?? id} />
-            <span className="who">
+            <span className="who" id={detailsId}>
               <span className="conversation-name" role="heading" aria-level={2}>
                 {title}
               </span>
