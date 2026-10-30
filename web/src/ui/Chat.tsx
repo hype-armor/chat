@@ -566,7 +566,7 @@ function Conversation({
     }
   }, [])
 
-  const onScroll = () => {
+  const onScroll = useCallback(() => {
     const list = viewport.current
     if (!list) return
     // A queued event from our own scroll must not unpin newly grown content.
@@ -574,7 +574,7 @@ function Conversation({
     lastScrollTop.current = list.scrollTop
     atBottom.current = list.scrollHeight - list.scrollTop - list.clientHeight <= 80
     if (atBottom.current) setNewMessages(false)
-  }
+  }, [])
 
   useEffect(() => {
     let live = true
@@ -599,6 +599,7 @@ function Conversation({
   }, [core, id, messages, request])
 
   useLayoutEffect(() => {
+    onScroll()
     const previousIds = new Set(previousMessages.current.map((m) => m.id))
     const added = messages.filter((m) => !previousIds.has(m.id))
     previousMessages.current = messages
@@ -607,17 +608,18 @@ function Conversation({
     } else if (added.length > 0) {
       setNewMessages(true)
     }
-  }, [messages, scrollToBottom])
+  }, [messages, onScroll, scrollToBottom])
 
   useLayoutEffect(() => {
     const observer = new ResizeObserver(() => {
+      onScroll()
       if (atBottom.current) scrollToBottom()
     })
     // The list grows with loaded media; the viewport can shrink as panels open.
     observer.observe(content.current!)
     observer.observe(viewport.current!)
     return () => observer.disconnect()
-  }, [scrollToBottom])
+  }, [onScroll, scrollToBottom])
 
   const send = async (e: FormEvent) => {
     e.preventDefault()

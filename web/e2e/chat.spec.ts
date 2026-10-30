@@ -88,7 +88,12 @@ for (const width of [1280, 390]) {
     await messages(alice).last().evaluate((message) => { message.style.paddingBottom = '240px' })
     await expectBottom()
 
-    await scrollUp()
+    // A resize before the user's queued scroll event must not pull them back down.
+    await alice.evaluate(`(() => {
+      document.querySelector('.messages-viewport').scrollTop = 0
+      document.querySelector('.messages li:last-child').style.paddingBottom = '280px'
+    })()`)
+    await expect(messages(alice).first()).toBeInViewport()
     const position = await viewport.evaluate((list) => list.scrollTop)
     await send(bob, 'Arrived while reading history')
     await expect(pill).toBeVisible()
