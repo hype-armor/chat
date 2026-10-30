@@ -82,7 +82,14 @@ CHAT_HOST=192.168.1.20 docker compose -f deploy/compose/docker-compose.yml --pro
 from one device: text, photos, files, voice notes, locations (live location
 too: its pin mirrors yours), with read receipts. It is a real client
 (`crates/chat-echo`) with its own account and keys, so everything still goes
-end to end encrypted through the server. Calls join it in Phase 3.
+end to end encrypted through the server.
+
+Call it (voice or video) and it answers and sends your audio and video back:
+it decrypts each SFrame frame with your key and encrypts it again under its
+own, like any participant (ADR-0030). One call at a time (others hear
+"busy"), up to 10 minutes. Its media address is this machine's default
+route, or `ECHO_CALL_IP`; under docker compose, calls from other devices
+reach it through the coturn relay.
 
 ```sh
 docker compose -f deploy/compose/docker-compose.yml --profile echo up --build
@@ -93,7 +100,7 @@ Without compose: `ECHO_SERVER=http://localhost:8080 ECHO_INVITE=<code>
 cargo run -p chat-echo` (the invite is needed once, in invite-only mode). For
 development and testing only: it reads what it is sent and keeps its keys on
 the machine it runs on, so don't run it on a production server. The e2e
-tests start it too (`web/e2e/echo.spec.ts`).
+tests start it too (`web/e2e/echo.spec.ts`, and calls in `web/e2e/calls.spec.ts`).
 
 ## Deployment
 

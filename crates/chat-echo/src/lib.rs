@@ -7,12 +7,21 @@
 //! - text, attachments (the same blob and key: no re-upload) and shared
 //!   locations, as they arrived;
 //! - live location: a session of its own that mirrors the sender's point;
-//! - a read receipt for each echoed message.
+//! - a read receipt for each echoed message;
+//! - calls: it answers and sends your audio and video back (`media`), one
+//!   call at a time; others get "busy".
+
+pub mod media;
 
 use std::collections::HashMap;
 
-use chat_core::client::{Client, Event};
-use chat_proto::v1::{Content, Envelope, LiveLocation, Profile, Receipt, content, receipt};
+use chat_core::{
+    call::CallKeys,
+    client::{Client, Event},
+};
+use chat_proto::v1::{
+    Call, Content, Envelope, LiveLocation, Profile, Receipt, call, content, receipt,
+};
 
 pub const DISPLAY_NAME: &str = "Echo (test bot)";
 
@@ -26,11 +35,42 @@ pub struct Outgoing {
     pub silent: bool,
 }
 
+/// What the media side should do about a call.
+pub enum CallCommand {
+    /// Answer `offer` (SDP); frames are re-encrypted with `keys`.
+    Start {
+        call_id: Vec<u8>,
+        offer: String,
+        keys: CallKeys,
+    },
+    /// A trickled ICE candidate (`RTCIceCandidateInit` JSON).
+    Candidate {
+        call_id: Vec<u8>,
+        candidate: String,
+    },
+    Stop {
+        call_id: Vec<u8>,
+    },
+}
+
+/// The call being echoed.
+struct ActiveCall {
+    id: Vec<u8>,
+    conversation_id: Vec<u8>,
+    /// The caller's device (16 bytes).
+    peer_device: Vec<u8>,
+}
+
+/// Offers older than this (sender's clock) are not answered.
+const STALE_OFFER_MS: u64 = 120_000;
+
 pub struct Echo {
     client: Client,
     name: String,
     /// Sender identity ‖ their live session id → our mirroring session id.
     live: HashMap<Vec<u8>, Vec<u8>>,
+    call: Option<ActiveCall>,
+    commands: Vec<CallCommand>,
 }
 
 fn random_id() -> Vec<u8> {
@@ -43,6 +83,8 @@ impl Echo {
             client,
             name: name.into(),
             live: HashMap::new(),
+            call: None,
+            commands: Vec::new(),
         }
     }
 
@@ -52,6 +94,95 @@ impl Echo {
 
     pub fn client_mut(&mut self) -> &mut Client {
         &mut self.client
+    }
+
+    /// What the media side should do since the last call.
+    pub fn take_call_commands(&mut self) -> Vec<CallCommand> {
+        std::mem::take(&mut self.commands)
+    }
+
+    /// The answer for the call being echoed, once the media side has it.
+    pub fn answer(
+        &mut self,
+        call_id: &[u8],
+        sdp: String,
+        now_ms: u64,
+    ) -> chat_core::Result<Option<Outgoing>> {
+        let Some(active) = self.call.as_ref().filter(|c| c.id == call_id) else {
+            return Ok(None);
+        };
+        let (conversation_id, to_device) =
+            (active.conversation_id.clone(), active.peer_device.clone());
+        let body = call_body(call_id, call::Kind::Answer, sdp, to_device);
+        Ok(Some(self.send(&conversation_id, body, now_ms, true)?))
+    }
+
+    /// The media side ended the call (no media, or too long): hang up.
+    pub fn hang_up(&mut self, call_id: &[u8], now_ms: u64) -> chat_core::Result<Option<Outgoing>> {
+        let Some(active) = self.call.take_if(|c| c.id == call_id) else {
+            return Ok(None);
+        };
+        let body = call_body(call_id, call::Kind::Hangup, String::new(), Vec::new());
+        Ok(Some(self.send(
+            &active.conversation_id,
+            body,
+            now_ms,
+            true,
+        )?))
+    }
+
+    /// A call signal from someone (not ourselves).
+    fn on_call(
+        &mut self,
+        conversation_id: &[u8],
+        sender: &[u8],
+        sent_at_ms: u64,
+        c: Call,
+        now_ms: u64,
+    ) -> chat_core::Result<Vec<Outgoing>> {
+        let device = sender.get(16..32).unwrap_or_default().to_vec();
+        let for_us = c.to_device.is_empty() || c.to_device == self.client.identity()[16..];
+        let ours = |a: &Option<ActiveCall>| a.as_ref().is_some_and(|a| a.id == c.call_id);
+        match c.kind() {
+            call::Kind::Offer => {
+                if now_ms.saturating_sub(sent_at_ms) > STALE_OFFER_MS || c.sdp.is_empty() {
+                    return Ok(Vec::new());
+                }
+                if self.call.is_some() {
+                    // One call at a time; tell only the calling device.
+                    let body =
+                        call_body(&c.call_id, call::Kind::Busy, String::new(), device.clone());
+                    let mut out = self.send(conversation_id, body, now_ms, true)?;
+                    out.recipients = vec![device];
+                    return Ok(vec![out]);
+                }
+                let mut keys = CallKeys::new();
+                self.client
+                    .install_call_keys(conversation_id, &c.call_id, &mut keys)?;
+                self.call = Some(ActiveCall {
+                    id: c.call_id.clone(),
+                    conversation_id: conversation_id.to_vec(),
+                    peer_device: device,
+                });
+                self.commands.push(CallCommand::Start {
+                    call_id: c.call_id,
+                    offer: c.sdp,
+                    keys,
+                });
+            }
+            call::Kind::Candidate if for_us && ours(&self.call) => {
+                self.commands.push(CallCommand::Candidate {
+                    call_id: c.call_id,
+                    candidate: c.candidate,
+                })
+            }
+            call::Kind::Hangup if ours(&self.call) => {
+                self.call = None;
+                self.commands.push(CallCommand::Stop { call_id: c.call_id });
+            }
+            _ => {}
+        }
+        Ok(Vec::new())
     }
 
     /// Processes one delivered envelope; returns what to send in reply.
@@ -74,6 +205,9 @@ impl Echo {
                 let Some(body) = content.body else {
                     return Ok(Vec::new());
                 };
+                if let content::Body::Call(c) = body {
+                    return self.on_call(&conversation_id, &sender, content.sent_at_ms, c, now_ms);
+                }
                 let (reply, silent, receipt) = match body {
                     b @ (content::Body::Text(_)
                     | content::Body::Attachment(_)
@@ -117,7 +251,7 @@ impl Echo {
         }
     }
 
-    fn send(
+    pub fn send(
         &mut self,
         conversation_id: &[u8],
         body: content::Body,
@@ -144,6 +278,16 @@ impl Echo {
             silent,
         })
     }
+}
+
+fn call_body(call_id: &[u8], kind: call::Kind, sdp: String, to_device: Vec<u8>) -> content::Body {
+    content::Body::Call(Call {
+        call_id: call_id.to_vec(),
+        kind: kind.into(),
+        sdp,
+        to_device,
+        ..Call::default()
+    })
 }
 
 #[cfg(test)]
@@ -274,5 +418,63 @@ mod tests {
         });
         let env = say(&mut alice, &id, receipt);
         assert!(echo.handle(&env, 10).unwrap().is_empty());
+    }
+
+    fn signal(kind: call::Kind, id: u8, sdp: &str) -> content::Body {
+        content::Body::Call(Call {
+            call_id: vec![id; 16],
+            kind: kind.into(),
+            sdp: sdp.into(),
+            ..Call::default()
+        })
+    }
+
+    #[test]
+    fn answers_one_call_at_a_time_and_hangs_up() {
+        let (mut alice, mut echo, id) = setup();
+        // Sent "now" by Alice's clock (say() stamps 5 ms).
+        let offer = say(&mut alice, &id, signal(call::Kind::Offer, 1, "v=0 offer"));
+        assert!(echo.handle(&offer, 10).unwrap().is_empty());
+        let commands = echo.take_call_commands();
+        assert!(
+            matches!(&commands[..], [CallCommand::Start { offer, .. }] if offer == "v=0 offer")
+        );
+
+        // The media side's answer goes to Alice's calling device.
+        let answer = echo
+            .answer(&[1; 16], "v=0 answer".into(), 20)
+            .unwrap()
+            .unwrap();
+        let got = bodies(&mut alice, vec![answer]);
+        assert!(matches!(
+            &got[0],
+            content::Body::Call(c) if c.kind() == call::Kind::Answer && c.sdp == "v=0 answer" && c.to_device == vec![1u8; 16]
+        ));
+
+        // A second call while busy: "busy", to the caller's device only.
+        let second = say(&mut alice, &id, signal(call::Kind::Offer, 2, "v=0"));
+        let out = echo.handle(&second, 30).unwrap();
+        assert_eq!(out[0].recipients, vec![vec![1u8; 16]]);
+        assert!(
+            matches!(&bodies(&mut alice, out)[0], content::Body::Call(c) if c.kind() == call::Kind::Busy)
+        );
+
+        let hangup = say(&mut alice, &id, signal(call::Kind::Hangup, 1, ""));
+        echo.handle(&hangup, 40).unwrap();
+        assert!(matches!(
+            &echo.take_call_commands()[..],
+            [CallCommand::Stop { .. }]
+        ));
+        // Ended: nothing left to hang up or answer.
+        assert!(echo.hang_up(&[1; 16], 50).unwrap().is_none());
+        assert!(echo.answer(&[1; 16], "late".into(), 50).unwrap().is_none());
+    }
+
+    #[test]
+    fn stale_offers_are_not_answered() {
+        let (mut alice, mut echo, id) = setup();
+        let offer = say(&mut alice, &id, signal(call::Kind::Offer, 1, "v=0"));
+        echo.handle(&offer, 10 * 60_000).unwrap();
+        assert!(echo.take_call_commands().is_empty());
     }
 }
