@@ -73,7 +73,6 @@ test('composer leaves room for text and supports keyboard menus and multiline dr
   await expect(send).toBeEnabled()
   expect((await input.boundingBox())!.width).toBeGreaterThan(180)
   await input.press('Shift+Enter')
-  await input.press('End')
   await input.press('L')
   await expect(input).toHaveValue('First line\nL')
   expect((await input.boundingBox())!.height).toBeGreaterThan(initialHeight)
