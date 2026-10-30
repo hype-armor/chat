@@ -92,7 +92,8 @@ order; tick items as their PRs merge.
 4. [x] Images and files: encrypted on the device, EXIF stripped,
    thumbnails sent encrypted (FR-MED-1/2/4/8, ADR-0024).
 5. [x] Voice notes and audio/video clips (FR-MED-1, ADR-0024).
-6. [ ] Resumable transfers and an auto-download policy (FR-MED-5/6, should).
+6. [x] Resumable transfers and an auto-download policy (FR-MED-5/6, should;
+   ADR-0025).
 7. [ ] Share location once, with self-hosted map tiles (FR-LOC-1/4/5,
    ADR-0008).
 8. [ ] Live location for 15 min / 1 h / 8 h while the app is open, with a
@@ -100,6 +101,16 @@ order; tick items as their PRs merge.
 9. [ ] Move backups into blob storage (they start in PostgreSQL).
 
 **Exit:** feature-complete beta.
+
+**UI polish backlog** (noted 2026-10-30 from screenshots; owner: "leave the
+polish for later"):
+- Size and Save text on our own attachments is hard to read on the blue
+  bubble.
+- An opened full-size photo looks faded (disabled-button styling).
+- On phones, six settings sections sit above the conversation list; move
+  settings to their own screen.
+- The phone conversation header wraps ("Add people").
+- General visual pass: avatars, hierarchy, spacing.
 
 **Phase 0 spikes still open** (block later phases, not Phase 1): (b)
 SQLite3MultipleCiphers on OPFS (deferred; IndexedDB snapshots suffice for

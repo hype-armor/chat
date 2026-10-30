@@ -72,11 +72,14 @@ import type {
   DeviceInfo,
   InviteOffer,
   LinkOffer,
+  MediaSettings,
   MemberInfo,
   SafetyNumber,
 } from './protocol'
 import { type MediaInfo, isPhoto, isPlayable } from './protocol'
 import { isMp4, scrubMp4 } from './mp4'
+import { DEFAULT_MEDIA, autoDownloads, onMobileData } from './policy'
+import * as transfers from './transfers'
 import { acceptsGroupInfo, designatedCommitter, parseAdmins } from './roles'
 import { SecureStore } from './storage'
 
@@ -107,6 +110,8 @@ type StoredFile = Omit<FileInfo, 'thumbnail'> & {
   digest: string
   /** Base64 JPEG. */
   thumbnail?: string
+  /** A resumable upload in progress (ADR-0025). */
+  uploadId?: string
 }
 
 /** A message as stored; `messages()` hands the UI a `ChatMessage` without keys. */
@@ -196,6 +201,10 @@ type State = {
   readReceipts: boolean
   /** Encrypted backups (ADR-0022): on, and when the last one was uploaded. */
   backup?: { lastAt?: number }
+  /** Auto-download and photo quality (ADR-0025). */
+  media: MediaSettings
+  /** Attachment uploads and downloads to resume after a reload or reconnect. */
+  transfers: { conversationId: string; messageId: string; kind: 'upload' | 'download' }[]
 }
 
 /** What a backup holds (ADR-0022): no MLS state, keys or tokens. */
@@ -223,6 +232,8 @@ const emptyState = (): State => ({
   alerts: [],
   blocked: [],
   readReceipts: true,
+  media: DEFAULT_MEDIA,
+  transfers: [],
 })
 
 export class Engine {
@@ -234,6 +245,10 @@ export class Engine {
   private recent = new RecentIds()
   private ws?: WebSocket
   private connection: ConnectionState = 'offline'
+  /** Uploads under way, by message id. */
+  private inflight = new Set<string>()
+  /** Downloads under way, by message id. */
+  private downloads = new Map<string, Promise<Blob>>()
   private nextRequestId = 1
   private waiters = new Map<number, (frame: ServerFrameView | undefined) => void>()
   private reconnectMs = 1000
@@ -313,6 +328,7 @@ export class Engine {
       alerts: this.state.alerts,
       readReceipts: this.state.readReceipts,
       backup: this.state.backup ? { lastAt: this.state.backup.lastAt } : undefined,
+      media: this.state.media,
     }
   }
 
@@ -843,6 +859,14 @@ export class Engine {
     if (changed) this.emitView()
   }
 
+  async setMedia(media: MediaSettings) {
+    await this.exclusive(async () => {
+      this.state.media = { ...DEFAULT_MEDIA, ...media }
+      await this.persist()
+    })
+    this.emitView()
+  }
+
   async setReadReceipts(on: boolean) {
     await this.exclusive(async () => {
       this.state.readReceipts = on
@@ -1311,6 +1335,7 @@ export class Engine {
         thumbnail: file.thumbnail ? plain(fromBase64(file.thumbnail)) : undefined,
         durationMs: file.durationMs,
         voiceNote: file.voiceNote,
+        downloaded: file.downloaded,
       },
     }))
   }
@@ -1420,7 +1445,7 @@ export class Engine {
     this.checkCanSend(conversationId)
     if (file.size === 0) throw new Error('That file is empty')
     if (file.size > MAX_ATTACHMENT_BYTES) throw new Error('Files can be up to 100 MB')
-    const image = await prepareImage(file)
+    const image = await prepareImage(file, this.state.media.quality)
     // Clips: where they were filmed is blanked (ADR-0024).
     const data = image?.data ?? (isMp4(file.type) ? await scrubMp4(file) : file)
     if (data.size > MAX_ATTACHMENT_BYTES) throw new Error('Files can be up to 100 MB')
@@ -1448,6 +1473,7 @@ export class Engine {
           thumbnail: thumbnail?.length ? toBase64(thumbnail) : undefined,
           durationMs: safeDuration(clip?.durationMs),
           voiceNote: clip?.voiceNote && mime.startsWith('audio/') ? true : undefined,
+          downloaded: true,
           key: toBase64(key),
           digest: toBase64(sealed.digest),
         },
@@ -1456,16 +1482,55 @@ export class Engine {
     void this.uploadAndSend(conversationId, messageId)
   }
 
+  /** Remembers a transfer to resume, or forgets it (`add` false). */
+  private async trackTransfer(conversationId: string, messageId: string, kind: 'upload' | 'download', add: boolean) {
+    await this.exclusive(async () => {
+      const others = this.state.transfers.filter((t) => t.messageId !== messageId)
+      this.state.transfers = add ? [...others, { conversationId, messageId, kind }] : others
+      await this.persist()
+    })
+  }
+
+  /** Updates one stored attachment's details under the lock. */
+  private async updateFile(conversationId: string, messageId: string, change: Partial<StoredFile>) {
+    await this.exclusive(async () => {
+      const list = await this.stored(conversationId)
+      const message = list.find((m) => m.id === messageId)
+      if (!message?.file) return
+      Object.assign(message.file, change)
+      await this.store.putJson(`messages:${conversationId}`, list)
+    })
+  }
+
+  private progress(conversationId: string, messageId: string): transfers.Progress {
+    return (done, total) => this.emit({ type: 'progress', conversationId, messageId, done, total })
+  }
+
+  /** Picks up uploads and downloads cut short by a reload or lost connection. */
+  private resumeTransfers() {
+    for (const t of this.state.transfers) {
+      if (t.kind === 'upload') void this.uploadAndSend(t.conversationId, t.messageId)
+      else void this.fetchAttachment(t.conversationId, t.messageId).catch(() => undefined)
+    }
+  }
+
   private async uploadAndSend(conversationId: string, messageId: string) {
+    if (this.inflight.has(messageId)) return
+    this.inflight.add(messageId)
     try {
       const { account } = this.ready()
       const pending = (await this.stored(conversationId)).find((m) => m.id === messageId)
-      if (!pending?.file) return
+      if (!pending?.file || pending.status !== 'sending') return this.trackTransfer(conversationId, messageId, 'upload', false)
+      await this.trackTransfer(conversationId, messageId, 'upload', true)
       let blobId = pending.file.blobId
       if (!blobId) {
         const body = await this.store.getFile(messageId)
         if (!body) throw new Error('This file is no longer on this device')
-        blobId = uuidToHex((await api.uploadBlob(account.token, body)).blob_id)
+        const session = {
+          id: pending.file.uploadId,
+          save: (uploadId: string | undefined) => this.updateFile(conversationId, messageId, { uploadId }),
+        }
+        blobId = uuidToHex(await transfers.upload(account.token, body, session, this.progress(conversationId, messageId)))
       }
       await this.exclusive(async () => {
         const { core } = this.ready()
@@ -1482,12 +1547,59 @@ export class Engine {
           recipients: this.recipients(conversationId),
         })
         await this.store.putJson(`messages:${conversationId}`, list)
+        this.state.transfers = this.state.transfers.filter((t) => t.messageId !== messageId)
         await this.persist()
       })
       void this.flushOutbox()
     } catch (e) {
+      if (this.connection !== 'online' && !(e instanceof ApiError)) return // resumes after reconnecting
+      await this.trackTransfer(conversationId, messageId, 'upload', false)
       await this.exclusive(() => this.setStatus(conversationId, messageId, 'failed', describeError(e)))
+    } finally {
+      this.inflight.delete(messageId)
     }
+  }
+
+  /**
+   * Downloads a message's sealed file to this device (resuming an earlier
+   * attempt) unless it is already here.
+   */
+  private fetchAttachment(conversationId: string, messageId: string): Promise<Blob> {
+    const running = this.downloads.get(messageId)
+    if (running) return running
+    const run = (async () => {
+      const { account } = this.ready()
+      const f = (await this.stored(conversationId)).find((m) => m.id === messageId)?.file
+      if (!f) throw new Error('No such file')
+      const kept = await this.store.getFile(messageId)
+      if (kept) return kept
+      if (!f.blobId) throw new Error('This file was not uploaded')
+      const total = sealedLength(f.size)
+      await this.trackTransfer(conversationId, messageId, 'download', true)
+      try {
+        const body = await transfers.download(
+          account.token,
+          hexToUuid(f.blobId),
+          total,
+          this.store,
+          messageId,
+          this.progress(conversationId, messageId),
+        )
+        await this.updateFile(conversationId, messageId, { downloaded: true })
+        await this.trackTransfer(conversationId, messageId, 'download', false)
+        this.emit({ type: 'messages', conversationId })
+        return body
+      } catch (e) {
+        // Lost connection: kept to resume. Anything else (expired…): given up.
+        if (e instanceof ApiError || this.connection === 'online') {
+          await this.trackTransfer(conversationId, messageId, 'download', false)
+        }
+        throw e
+      }
+    })()
+    this.downloads.set(messageId, run)
+    void run.catch(() => undefined).finally(() => this.downloads.delete(messageId))
+    return run
   }
 
   /**
@@ -1495,23 +1607,17 @@ export class Engine {
    * opened here before, else downloaded (and kept sealed for next time).
    */
   async openAttachment(conversationId: string, messageId: string): Promise<Blob> {
-    const { account } = this.ready()
     const message = (await this.stored(conversationId)).find((m) => m.id === messageId)
     const f = message?.file
     if (!f) throw new Error('No such file')
-    let body = await this.store.getFile(messageId)
-    if (!body) {
-      if (!f.blobId) throw new Error('This file was not uploaded')
-      body = await api.downloadBlob(account.token, hexToUuid(f.blobId))
-      if (body.size !== sealedLength(f.size)) throw new Error("This file doesn't match its message")
-      await this.store.putFile(messageId, body)
-    }
+    const body = await this.fetchAttachment(conversationId, messageId)
     try {
       // Other types (SVG, HTML…) are never handed out as something a browser renders.
       const type = isPhoto(f.mime) || isPlayable(f.mime) ? f.mime : 'application/octet-stream'
       return await openFile(body, fromBase64(f.key), f.size, fromBase64(f.digest), type)
     } catch (e) {
       await this.store.putFile(messageId, undefined)
+      await this.updateFile(conversationId, messageId, { downloaded: undefined })
       throw new Error(`This file could not be opened: ${describeError(e)}`)
     }
   }
@@ -1562,6 +1668,7 @@ export class Engine {
         void this.exclusive(() => this.resolvePendingCommit()).then(() => {
           this.commitDepartures()
           this.scheduleSync()
+          this.resumeTransfers()
           return this.flushOutbox()
         })
         return
@@ -1775,6 +1882,10 @@ export class Engine {
           status: mine ? 'sent' : 'received',
           file: attachment,
         })
+        if (attachment && autoDownloads(this.state.media, attachment.mime, onMobileData())) {
+          // After this delivery is stored: the download takes the lock to record itself.
+          void this.fetchAttachment(conversationId, messageId).catch((e) => console.warn('download failed', e))
+        }
       }
     }
   }

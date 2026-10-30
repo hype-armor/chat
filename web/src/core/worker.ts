@@ -82,6 +82,9 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
     case 'markRead':
       await engine.markRead(request.conversationId)
       return { type: 'ok' }
+    case 'setMedia':
+      await engine.setMedia(request.media)
+      return { type: 'ok' }
     case 'setReadReceipts':
       await engine.setReadReceipts(request.on)
       return { type: 'ok' }

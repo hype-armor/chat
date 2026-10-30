@@ -44,7 +44,20 @@ export type AppView =
       readReceipts: boolean
       /** Encrypted backups are on (ADR-0022), with the last upload time. */
       backup?: { lastAt?: number }
+      media: MediaSettings
     }
+
+/** When attachments download by themselves (FR-MED-6, ADR-0025). */
+export type AutoDownload = 'always' | 'wifi' | 'never'
+
+export type MediaSettings = {
+  photos: AutoDownload
+  audio: AutoDownload
+  video: AutoDownload
+  files: AutoDownload
+  /** Photos: 'standard' fits 2560 px; 'high' fits 4096 px at higher quality (FR-MED-5). */
+  quality: 'standard' | 'high'
+}
 
 /** One of this account's devices (ADR-0019). */
 export type DeviceInfo = { id: string; addedOn: string; lastSeenOn?: string; current: boolean }
@@ -107,6 +120,8 @@ export type FileInfo = {
   /** Audio and video. */
   durationMs?: number
   voiceNote?: boolean
+  /** Kept on this device, so it opens without a download. */
+  downloaded?: boolean
 }
 
 export type ChatMessage = {
@@ -171,6 +186,7 @@ export type CoreRequest =
   | { type: 'markRead'; conversationId: string }
   | { type: 'retryMessage'; conversationId: string; messageId: string }
   | { type: 'setReadReceipts'; on: boolean }
+  | { type: 'setMedia'; media: MediaSettings }
   | { type: 'block'; account: string }
   | { type: 'unblock'; account: string }
   | { type: 'blocked' }
@@ -204,7 +220,11 @@ export type CoreResponseBody =
   | { type: 'error'; message: string }
 
 /** Pushed by the worker without a request. */
-export type CoreEvent = { type: 'view'; view: AppView } | { type: 'messages'; conversationId: string }
+export type CoreEvent =
+  | { type: 'view'; view: AppView }
+  | { type: 'messages'; conversationId: string }
+  /** An attachment upload or download moved on (ADR-0025). */
+  | { type: 'progress'; conversationId: string; messageId: string; done: number; total: number }
 
 export type RequestEnvelope = { id: number; request: CoreRequest }
 /** `id` 0 carries an unsolicited event. */

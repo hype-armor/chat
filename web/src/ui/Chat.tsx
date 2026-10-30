@@ -7,6 +7,7 @@ import { Invite } from './Invite'
 import { Backup } from './Backup'
 import { Attachment } from './Attachment'
 import { Recorder } from './Recorder'
+import { Media } from './Media'
 import { probeClip } from './media'
 import type { MediaInfo } from '../core/protocol'
 import { BlockedList, DeleteAccount, ReportForm } from './Safety'
@@ -57,6 +58,7 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
         <Invite core={core} />
         <Devices core={core} />
         <Privacy core={core} readReceipts={view.readReceipts} />
+        <Media core={core} media={view.media} />
         <BlockedList core={core} />
         <DeleteAccount core={core} />
         <NewChat core={core} onStarted={setSelected} />
@@ -637,7 +639,15 @@ function Conversation({
           ) : (
             <li key={m.id} className={m.from === 'me' ? 'mine' : 'theirs'} data-testid="message">
               {isGroup && m.from !== 'me' && <span className="sender small">{m.fromName}</span>}
-              {m.file && <Attachment core={core} conversationId={id} messageId={m.id} file={m.file} />}
+              {m.file && (
+                <Attachment
+                  core={core}
+                  conversationId={id}
+                  messageId={m.id}
+                  file={m.file}
+                  sending={m.status === 'sending'}
+                />
+              )}
               {m.text && <span className="text">{m.text}</span>}
               <span className="meta small">
                 {new Date(m.sentAt).toLocaleTimeString([], {

@@ -49,14 +49,29 @@ async function uploadBlob(token: string, body: Blob): Promise<{ blob_id: string;
   return json
 }
 
-async function downloadBlob(token: string, id: string): Promise<Blob> {
-  const res = await fetch(`/v1/blobs/${id}`, { headers: { authorization: `Bearer ${token}` } })
+/** One byte range of a blob (resumable downloads, ADR-0025). */
+async function downloadBlobRange(token: string, id: string, from: number, to: number): Promise<Blob> {
+  const res = await fetch(`/v1/blobs/${id}`, {
+    headers: { authorization: `Bearer ${token}`, range: `bytes=${from}-${to - 1}` },
+  })
   if (res.status === 404) throw new ApiError(404, 'This file has expired (files are kept 30 days)')
   if (!res.ok) {
     const json = await res.json().catch(() => undefined)
     throw new ApiError(res.status, json?.error ?? `download failed (${res.status})`)
   }
   return res.blob()
+}
+
+async function uploadPart(token: string, id: string, part: number, body: Blob): Promise<void> {
+  const res = await fetch(`/v1/blobs/uploads/${id}/${part}`, {
+    method: 'PUT',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' },
+    body,
+  })
+  if (!res.ok) {
+    const json = await res.json().catch(() => undefined)
+    throw new ApiError(res.status, json?.error ?? `upload failed (${res.status})`)
+  }
 }
 
 async function putJson(path: string, body: unknown, token: string): Promise<void> {
@@ -90,7 +105,14 @@ export const api = {
   uploadBackup: (token: string, sealed: Uint8Array) => bytes('PUT', '/v1/backup', token, sealed),
   downloadBackup: (token: string) => bytes('GET', '/v1/backup', token),
   uploadBlob,
-  downloadBlob,
+  downloadBlobRange,
+  uploadPart,
+  createUpload: (token: string, size: number) =>
+    post<{ upload_id: string; part_bytes: number; parts: number }>('/v1/blobs/uploads', { size }, token),
+  uploadStatus: (token: string, id: string) =>
+    get<{ parts: number; received: number[] }>(`/v1/blobs/uploads/${id}`, token),
+  completeUpload: (token: string, id: string) =>
+    post<{ blob_id: string; expires_in_days: number }>(`/v1/blobs/uploads/${id}/complete`, {}, token),
   deleteBackup: (token: string) => post<void>('/v1/backup/delete', {}, token),
   restore: (username: string, auth: string, identityKey: string) =>
     post<Registered>('/v1/backup/restore', { username, auth, identity_key: identityKey }),

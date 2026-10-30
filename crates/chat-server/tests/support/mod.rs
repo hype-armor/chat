@@ -81,19 +81,39 @@ impl TestServer {
         token: &str,
         body: Vec<u8>,
     ) -> (u16, Vec<u8>) {
-        let req = Request::builder()
+        self.raw_with_range(method, path, token, body, None).await.0
+    }
+
+    /// `raw`, with an optional `Range` header; also returns `Content-Range`.
+    #[allow(dead_code)]
+    pub async fn raw_with_range(
+        &self,
+        method: &str,
+        path: &str,
+        token: &str,
+        body: Vec<u8>,
+        range: Option<&str>,
+    ) -> ((u16, Vec<u8>), Option<String>) {
+        let mut req = Request::builder()
             .method(method)
             .uri(path)
             .header("authorization", format!("Bearer {token}"))
             .header("content-type", "application/octet-stream")
             .header("content-length", body.len());
+        if let Some(range) = range {
+            req = req.header("range", range);
+        }
         let res = router(self.state.clone())
             .oneshot(req.body(Body::from(body)).unwrap())
             .await
             .unwrap();
         let status = res.status().as_u16();
+        let content_range = res
+            .headers()
+            .get("content-range")
+            .map(|v| v.to_str().unwrap().to_owned());
         let bytes = res.into_body().collect().await.unwrap().to_bytes();
-        (status, bytes.to_vec())
+        ((status, bytes.to_vec()), content_range)
     }
 
     #[allow(dead_code)]

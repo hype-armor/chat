@@ -37,11 +37,14 @@ export function Attachment({
   conversationId,
   messageId,
   file,
+  sending,
 }: {
   core: CoreClient
   conversationId: string
   messageId: string
   file: FileInfo
+  /** Ours and still uploading. */
+  sending: boolean
 }) {
   const photo = isPhoto(file.mime)
   const playable = isPlayable(file.mime)
@@ -52,6 +55,16 @@ export function Attachment({
   const [error, setError] = useState<string>()
   const thumbUrl = useObjectUrl(thumb)
   const fullUrl = useObjectUrl(full)
+  const [progress, setProgress] = useState<number>()
+
+  useEffect(() => {
+    const unsubscribe = core.subscribe((e) => {
+      if (e.type === 'progress' && e.messageId === messageId) {
+        setProgress(e.done < e.total ? e.done / e.total : undefined)
+      }
+    })
+    return () => void unsubscribe()
+  }, [core, messageId])
 
   const open = async () => {
     if (full) return full
@@ -67,6 +80,11 @@ export function Attachment({
       setBusy(false)
     }
   }
+
+  // Photos already on this device show full size (ADR-0025).
+  useEffect(() => {
+    if (photo && file.downloaded && !full && !busy) void open()
+  }, [photo, file.downloaded])
 
   const download = async () => {
     const blob = await open()
@@ -115,6 +133,11 @@ export function Attachment({
         <span className="file-name">📎 {file.name}</span>
       )}
       <span className="small muted">
+        {progress !== undefined && (
+          <span data-testid="transfer-progress">
+            {sending ? 'Uploading' : 'Downloading'} {Math.floor(progress * 100)}% ·{' '}
+          </span>
+        )}
         {formatSize(file.size)}
         {video && thumbUrl && duration}
         {!file.voiceNote && (

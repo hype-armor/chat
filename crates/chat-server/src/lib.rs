@@ -119,6 +119,18 @@ pub fn router(state: AppState) -> Router {
             )),
         )
         .route("/v1/blobs/{id}", get(blobs::download))
+        .route("/v1/blobs/uploads", post(blobs::create_upload))
+        .route("/v1/blobs/uploads/{id}", get(blobs::upload_status))
+        .route(
+            "/v1/blobs/uploads/{id}/{part}",
+            put(blobs::put_part).layer(axum::extract::DefaultBodyLimit::max(
+                blobs::UPLOAD_PART_BYTES as usize,
+            )),
+        )
+        .route(
+            "/v1/blobs/uploads/{id}/complete",
+            post(blobs::complete_upload),
+        )
         .route("/v1/backup/key", put(backup::set_key))
         .route("/v1/backup/delete", post(backup::delete))
         .route("/v1/backup/restore", post(backup::restore))
