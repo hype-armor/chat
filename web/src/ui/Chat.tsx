@@ -1,7 +1,7 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react'
 import type { CoreClient } from '../core/client'
 import type { AppView, ChatMessage, ConversationSummary, MemberInfo } from '../core/protocol'
-import { InstallBanner, StorageBanner } from './Banners'
+import { SetupActions, SetupBanner, useSetup } from './Banners'
 import { Devices } from './Devices'
 import { Invite } from './Invite'
 import { Backup } from './Backup'
@@ -30,9 +30,10 @@ const STATUS_LABEL: Record<ChatMessage['status'], string> = {
   received: '',
 }
 
-export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
+export function Chat({ core, view, onDiagnostics }: { core: CoreClient; view: Ready; onDiagnostics: () => void }) {
   const [selected, setSelected] = useState<string>()
   const [settings, setSettings] = useState(false)
+  const setup = useSetup()
   const [calls] = useState(() => new CallController(core))
   useEffect(() => () => calls.dispose(), [calls])
   calls.relayOnly = view.relayCalls
@@ -95,11 +96,17 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
               <Media core={core} media={view.media} />
               <BlockedList core={core} />
               <DeleteAccount core={core} />
+              <SetupActions setup={setup} />
+              <section className="devices" aria-label="About / Diagnostics">
+                <h3>About / Diagnostics</h3>
+                <button type="button" className="link" onClick={onDiagnostics}>
+                  Diagnostics
+                </button>
+              </section>
             </nav>
           ) : (
             <>
-              <StorageBanner />
-              <InstallBanner />
+              <SetupBanner setup={setup} />
               <NewChat core={core} onStarted={select} />
               <NewGroup core={core} onCreated={select} />
               {requests.length > 0 && (

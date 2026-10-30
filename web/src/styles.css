@@ -116,7 +116,8 @@ form {
 .chat-layout {
   display: grid;
   grid-template-columns: minmax(16rem, 22rem) 1fr;
-  height: calc(100dvh - 2.5rem);
+  height: 100dvh;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 
 .sidebar {
@@ -252,13 +253,6 @@ form {
   gap: 0.5rem;
   padding: 0.75rem 1rem;
   border-top: 1px solid var(--border);
-}
-
-.footer {
-  height: 2.5rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 
 .diagnostics {
@@ -697,7 +691,7 @@ button.danger {
 }
 
 .chat-layout.with-banner {
-  height: calc(100dvh - 2.5rem - 2.75rem);
+  height: calc(100dvh - 2.75rem);
 }
 
 /* ---- UI polish (2026-10-30) ---------------------------------------------- */
