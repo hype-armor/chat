@@ -125,4 +125,7 @@ message Call {
   bool video = 5;
   // Answer and candidates: the device (16 bytes) they are meant for.
   bytes to_device = 6;
+  // Offer: a group call through the SFU (ADR-0031); no SDP, members join
+  // the call's LiveKit room instead.
+  bool group = 7;
 }

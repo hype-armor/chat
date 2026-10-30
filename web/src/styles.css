@@ -1098,3 +1098,65 @@ button.conversation-title {
 .call-button.decline {
   background: #da3633;
 }
+
+/* Group calls (ADR-0031) */
+.call-screen.group {
+  justify-content: flex-start;
+  gap: 1rem;
+}
+.call-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 0.5rem;
+  width: 100%;
+  flex: 1;
+  overflow-y: auto;
+  align-content: start;
+}
+.tile {
+  position: relative;
+  margin: 0;
+  aspect-ratio: 4 / 3;
+  border-radius: 0.75rem;
+  background: #161b22;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 2px solid transparent;
+}
+.tile.speaking {
+  border-color: #3fb950;
+}
+.tile video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.tile figcaption {
+  position: absolute;
+  left: 0.5rem;
+  bottom: 0.4rem;
+  font-size: 0.85rem;
+  text-shadow: 0 1px 3px #000;
+}
+.call-prompt {
+  position: fixed;
+  z-index: 40;
+  left: 50%;
+  top: 0.75rem;
+  transform: translateX(-50%);
+  width: min(calc(100% - 2rem), 34rem);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-radius: 0.75rem;
+  background: #0d1117;
+  color: #f0f6fc;
+  box-shadow: 0 4px 18px #0006;
+}
+.call-prompt .call-actions {
+  margin: 0;
+}

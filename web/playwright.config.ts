@@ -6,6 +6,9 @@ const all = !!process.env.PW_ALL_BROWSERS
 // E2E_SERVER=1 also starts chat-server (needs DATABASE_URL) for the
 // messaging tests; its log is where they read verification codes.
 const withServer = !!process.env.E2E_SERVER
+// E2E_LIVEKIT=ws://127.0.0.1:7880 (a `livekit-server --dev`) turns on the
+// group-call tests.
+const livekit = process.env.E2E_LIVEKIT
 
 export default defineConfig({
   testDir: 'e2e',
@@ -15,6 +18,7 @@ export default defineConfig({
   webServer: [
     {
       command: 'pnpm preview --host 127.0.0.1 --port 4173 --strictPort',
+      env: livekit ? { CSP_CONNECT_EXTRA: `${livekit} ${livekit.replace(/^ws/, 'http')}` } : {},
       url: 'http://127.0.0.1:4173/',
       reuseExistingServer: !process.env.CI,
     },
@@ -36,6 +40,14 @@ export default defineConfig({
               CHAT_LIMIT_INVITES_PER_DAY: '100000',
               CHAT_LIMIT_RESTORES_PER_IP_PER_HOUR: '100000',
               CHAT_LIMIT_LINKS_PER_IP_PER_HOUR: '100000',
+              ...(livekit
+                ? {
+                    CHAT_LIVEKIT_URL: livekit,
+                    CHAT_LIVEKIT_API_URL: livekit.replace(/^ws/, 'http'),
+                    CHAT_LIVEKIT_API_KEY: 'devkey',
+                    CHAT_LIVEKIT_API_SECRET: 'secret',
+                  }
+                : {}),
             },
           },
           {

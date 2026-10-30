@@ -91,6 +91,8 @@ export class CallController {
   private timer?: ReturnType<typeof setTimeout>
   private dropTimer?: ReturnType<typeof setTimeout>
   private unsubscribe: () => void
+  /** A group call is running here. */
+  otherBusy: () => boolean = () => false
   /** Only relayed candidates, so the other side never learns this device's address (FR-CALL-9). */
   relayOnly = false
 
@@ -121,7 +123,7 @@ export class CallController {
 
   /** Calls the other person in a 1:1 conversation. */
   async start(conversationId: string, title: string, video: boolean) {
-    if (this.busy) throw new Error("You're already in a call")
+    if (this.busy || this.otherBusy()) throw new Error("You're already in a call")
     const callId = randomCallId()
     this.reset()
     this.set({ callId, conversationId, title, video, outgoing: true, phase: 'calling', muted: false, cameraOff: false })
@@ -214,7 +216,11 @@ export class CallController {
   private async onSignal(s: IncomingCallSignal) {
     const state = this.state
     if (s.kind === 'offer') {
-      if (s.elsewhere || !s.sdp) return
+      if (s.elsewhere || !s.sdp || s.group) return
+      if (this.otherBusy()) {
+        await this.core.callSignal(s.conversationId, { callId: s.callId, kind: 'busy', toDevice: s.fromDevice })
+        return
+      }
       if (this.busy && state!.callId !== s.callId) {
         // Both called each other at once: the lower call id goes ahead.
         const glare = state!.outgoing && state!.phase === 'calling' && state!.conversationId === s.conversationId

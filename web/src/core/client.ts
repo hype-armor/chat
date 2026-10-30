@@ -20,6 +20,7 @@ import type {
   ReportReason,
   MediaEnvelope,
   CallSignal,
+  GroupCallStatus,
   IceServer,
 } from './protocol'
 import type { MapInfo } from './maps'
@@ -195,6 +196,19 @@ export class CoreClient {
 
   async callSignal(conversationId: string, signal: CallSignal) {
     expect(await this.call({ type: 'callSignal', conversationId, signal }), 'ok')
+  }
+
+  async groupCallJoin(conversationId: string, callId: string): Promise<{ url: string; token: string }> {
+    const { url, token } = expect(await this.call({ type: 'groupCallJoin', conversationId, callId }), 'groupCallJoin')
+    return { url, token }
+  }
+
+  async groupCallStatus(conversationId: string): Promise<GroupCallStatus | undefined> {
+    return expect(await this.call({ type: 'groupCallStatus', conversationId }), 'groupCallStatus').call
+  }
+
+  async deviceNames(conversationId: string): Promise<Record<string, string>> {
+    return expect(await this.call({ type: 'deviceNames', conversationId }), 'deviceNames').names
   }
 
   async liveUpdate(location: LocationInfo) {
