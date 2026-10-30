@@ -111,7 +111,7 @@ export function ShareLocation({
             {formatCoordinates(state)} · ±{state.accuracyM} m. Only the people in this conversation will see it.
           </p>
           <span className="actions">
-            <button type="button" autoFocus onClick={() => void send(state)}>
+            <button type="button" onClick={() => void send(state)}>
               Send location
             </button>
             <span className="small">Share live for</span>

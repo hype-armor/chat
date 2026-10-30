@@ -685,7 +685,6 @@ button.danger {
 
 .share-location {
   width: min(28rem, calc(100vw - 2rem));
-  display: grid;
   gap: 0.5rem;
   padding: 0.75rem;
   background: var(--bg, #fff);
@@ -693,6 +692,10 @@ button.danger {
   border: 1px solid var(--border);
   border-radius: 0.75rem;
   box-shadow: 0 4px 16px rgb(0 0 0 / 0.15);
+}
+
+.share-location[open] {
+  display: grid;
 }
 
 .share-location .map {
