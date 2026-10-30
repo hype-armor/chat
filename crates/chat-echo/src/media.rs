@@ -210,9 +210,15 @@ fn send_back(rtc: &mut Rtc, keys: &mut CallKeys, data: MediaData) {
     let Some(frame) = reflect(keys, kind, &data.data) else {
         return;
     };
-    if let Some(writer) = rtc.writer(data.mid)
-        && let Err(e) = writer.write(data.pt, data.network_time, data.time, frame)
-    {
+    let Some(mut writer) = rtc.writer(data.mid) else {
+        return;
+    };
+    // Phones send frames as captured plus a rotation tag (RTP video
+    // orientation); without it the echo would come back sideways.
+    if let Some(rotation) = data.ext_vals.video_orientation {
+        writer = writer.video_orientation(rotation);
+    }
+    if let Err(e) = writer.write(data.pt, data.network_time, data.time, frame) {
         tracing::debug!("echoing a frame failed: {e}");
     }
 }
