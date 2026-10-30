@@ -172,8 +172,9 @@ for (const width of [1280, 390]) {
     const bobUsername = randomUsername()
     const alice = await signUp(browser, 'Alice', randomUsername())
     const bob = await signUp(browser, 'Bob', bobUsername)
-    await alice.setViewportSize({ width, height: 720 })
-    await bob.setViewportSize({ width, height: 720 })
+    const height = width === 390 ? 740 : 800
+    await alice.setViewportSize({ width, height })
+    await bob.setViewportSize({ width, height })
     const viewport = alice.locator('.messages-viewport')
     const pill = alice.getByRole('button', { name: '↓ New messages' })
     const send = async (page: Page, text: string) => {
@@ -192,6 +193,17 @@ for (const width of [1280, 390]) {
       await expect(messages(alice).last()).toBeInViewport({ ratio: 1 })
       await expect(pill).toHaveCount(0)
     }
+    const expectPageFits = async () => {
+      await expect.poll(() => alice.locator('html').evaluate((root) => {
+        const scroller = root.ownerDocument.scrollingElement!
+        return {
+          height: scroller.scrollHeight,
+          width: scroller.scrollWidth,
+          top: scroller.scrollTop,
+          left: scroller.scrollLeft,
+        }
+      })).toEqual({ height, width, top: 0, left: 0 })
+    }
     const scrollUp = async () => {
       await viewport.evaluate((list) => { list.scrollTop = 0 })
       await alice.evaluate('new Promise(requestAnimationFrame)')
@@ -205,6 +217,22 @@ for (const width of [1280, 390]) {
     await expect.poll(() => viewport.evaluate(
       (list) => list.scrollHeight - list.clientHeight,
     )).toBeGreaterThan(300)
+    await expectBottom()
+    await expectPageFits()
+    for (const selector of ['.conversation-bar', '.composer']) {
+      await alice.locator(selector).hover()
+      await alice.mouse.wheel(0, 1000)
+      await alice.evaluate('new Promise(requestAnimationFrame)')
+      await alice.evaluate('new Promise(requestAnimationFrame)')
+      await expectPageFits()
+      await expectBottom()
+    }
+    const bottom = await viewport.evaluate((list) => list.scrollTop)
+    await viewport.hover()
+    await alice.mouse.wheel(0, -500)
+    await expect.poll(() => viewport.evaluate((list) => list.scrollTop)).toBeLessThan(bottom)
+    await expectPageFits()
+    await viewport.evaluate((list) => { list.scrollTop = list.scrollHeight })
     await expectBottom()
 
     await openChat(bob, /Alice/)
@@ -225,6 +253,7 @@ for (const width of [1280, 390]) {
     const position = await viewport.evaluate((list) => list.scrollTop)
     await send(bob, 'Arrived while reading history')
     await expect(pill).toBeVisible()
+    await expectPageFits()
     await expect.poll(() => viewport.evaluate((list) => list.scrollTop)).toBe(position)
     await expect(messages(alice).last()).not.toBeInViewport()
     await messages(alice).last().evaluate((message) => { message.style.paddingBottom = '240px' })
@@ -284,6 +313,12 @@ for (const width of [1280, 390]) {
     await openChat(alice, /Bob/)
     await expect(messages(alice).last()).toContainText('Unread before switching')
     await expectBottom()
+    await expectPageFits()
+    if (width <= 640) await alice.getByRole('button', { name: 'Back to conversations' }).click()
+    await expectPageFits()
+    await alice.getByRole('button', { name: 'Settings', exact: true }).click()
+    await expect(alice.getByRole('navigation', { name: 'Settings', exact: true })).toBeVisible()
+    await expectPageFits()
     await alice.context().close()
     await bob.context().close()
   })
