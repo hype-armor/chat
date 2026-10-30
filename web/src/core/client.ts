@@ -12,6 +12,7 @@ import type {
   InviteOffer,
   LinkOffer,
   MediaInfo,
+  MediaSettings,
   ResponseEnvelope,
   SafetyNumber,
   BlockedContact,
@@ -164,6 +165,10 @@ export class CoreClient {
   /** The decrypted file of a message. */
   async openAttachment(conversationId: string, messageId: string): Promise<Blob> {
     return expect(await this.call({ type: 'openAttachment', conversationId, messageId }), 'file').blob
+  }
+
+  async setMedia(media: MediaSettings) {
+    expect(await this.call({ type: 'setMedia', media }), 'ok')
   }
 
   async retryMessage(conversationId: string, messageId: string) {

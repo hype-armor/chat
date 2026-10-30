@@ -63,7 +63,7 @@ test('photos lose their metadata, and files arrive intact', async ({ browser }) 
   await expect(received.getByRole('img', { name: 'beach.jpg' })).toBeVisible()
 
   // The full photo: decrypted, without the EXIF block.
-  await received.getByRole('button', { name: 'Show photo beach.jpg' }).click()
+  // Photos download by themselves (ADR-0025) and show full size.
   await expect(received.locator('img[data-full="true"]')).toBeVisible()
   const [photoDownload] = await Promise.all([
     bob.waitForEvent('download'),

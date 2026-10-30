@@ -47,7 +47,11 @@ escape reports.
 | Method & path | Auth | Body → Response |
 |---------------|------|-----------------|
 | `PUT /v1/blobs` | ✓ | raw encrypted bytes, `Content-Length` required (≤ 100 MB + 1 MB overhead) → `{blob_id, expires_in_days: 30}` |
-| `GET /v1/blobs/{blob_id}` | ✓ | → the bytes, or `404` once expired |
+| `GET /v1/blobs/{blob_id}` | ✓ | → the bytes, or `404` once expired. A single `Range: bytes=a-b` gives `206` with `Content-Range` (`416` outside the blob) |
+| `POST /v1/blobs/uploads` | ✓ | `{size}` → `{upload_id, part_bytes: 8 MiB, parts, expires_in_hours: 24}`. Resumable upload (ADR-0025); the size counts against today's allowance now |
+| `PUT /v1/blobs/uploads/{id}/{n}` | ✓ | part `n` (exactly `part_bytes`, the last may be shorter; may be sent again) → `204`. Only the device that started the upload |
+| `GET /v1/blobs/uploads/{id}` | ✓ | → `{parts, received: [n, …]}`, to resume |
+| `POST /v1/blobs/uploads/{id}/complete` | ✓ | → `{blob_id, expires_in_days: 30}` (same id); `409` while parts are missing |
 
 The server only ever sees ciphertext. The key and hash travel inside the
 E2EE message that references the blob (an `Attachment` content body;

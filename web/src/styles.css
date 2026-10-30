@@ -641,3 +641,11 @@ button.danger {
   align-items: center;
   gap: 0.5rem;
 }
+
+.setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0.25rem 0;
+}

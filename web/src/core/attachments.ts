@@ -7,8 +7,8 @@ import { plain } from './ids'
 
 /** Largest file people can send (FR-MED-3). */
 export const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
-/** Photos are scaled down to fit this many pixels on the longer edge. */
-const MAX_EDGE = 2560
+/** Photos are scaled down to fit this many pixels on the longer edge, by quality setting. */
+const PHOTO = { standard: { edge: 2560, quality: 0.85 }, high: { edge: 4096, quality: 0.92 } }
 const THUMB_EDGE = 320
 const SMALL_THUMB_EDGE = 160
 /** Thumbnails travel inside the MLS message, so they stay small. */
@@ -107,7 +107,10 @@ async function thumbnailOf(bitmap: ImageBitmap): Promise<Uint8Array> {
  * Returns undefined for files this browser can't decode as images; those
  * are sent as plain files.
  */
-export async function prepareImage(file: Blob): Promise<PreparedImage | undefined> {
+export async function prepareImage(
+  file: Blob,
+  setting: keyof typeof PHOTO = 'standard',
+): Promise<PreparedImage | undefined> {
   const gif = file.type === 'image/gif'
   if (!gif && !REDRAWN.test(file.type)) return undefined
   if (typeof OffscreenCanvas === 'undefined' || typeof createImageBitmap === 'undefined') return undefined
@@ -124,8 +127,9 @@ export async function prepareImage(file: Blob): Promise<PreparedImage | undefine
       return { data: file, mime: 'image/gif', width: bitmap.width, height: bitmap.height, thumbnail }
     }
     const mime = file.type === 'image/png' ? 'image/png' : 'image/jpeg'
-    const size = fit(bitmap.width, bitmap.height, MAX_EDGE)
-    const data = await draw(bitmap, size.width, size.height, mime, 0.85)
+    const { edge, quality } = PHOTO[setting]
+    const size = fit(bitmap.width, bitmap.height, edge)
+    const data = await draw(bitmap, size.width, size.height, mime, quality)
     return { data, mime: data.type || mime, ...size, thumbnail }
   } finally {
     bitmap.close()

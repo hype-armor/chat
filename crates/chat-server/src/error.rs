@@ -13,6 +13,8 @@ pub enum ApiError {
     NotFound(&'static str),
     Conflict(&'static str),
     TooManyRequests(&'static str),
+    /// A `Range` outside a blob of this many bytes.
+    RangeNotSatisfiable(u64),
     /// No database configured or reachable.
     Unavailable,
     Internal(anyhow::Error),
@@ -27,6 +29,7 @@ impl ApiError {
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Conflict(_) => StatusCode::CONFLICT,
             Self::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
+            Self::RangeNotSatisfiable(_) => StatusCode::RANGE_NOT_SATISFIABLE,
             Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -40,6 +43,7 @@ impl ApiError {
             | Self::NotFound(m)
             | Self::Conflict(m)
             | Self::TooManyRequests(m) => m,
+            Self::RangeNotSatisfiable(_) => "range not satisfiable",
             Self::Unavailable => "service unavailable",
             Self::Internal(_) => "internal error",
         }
@@ -57,10 +61,17 @@ impl IntoResponse for ApiError {
         if let Self::Internal(e) = &self {
             tracing::error!(error = %e, "request failed");
         }
-        (
+        let mut response = (
             self.status(),
             Json(serde_json::json!({ "error": self.message() })),
         )
-            .into_response()
+            .into_response();
+        if let Self::RangeNotSatisfiable(size) = self {
+            response.headers_mut().insert(
+                axum::http::header::CONTENT_RANGE,
+                format!("bytes */{size}").parse().expect("ascii"),
+            );
+        }
+        response
     }
 }
