@@ -67,10 +67,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: e2e-server-log
-          path: target/e2e-server.log
+          path: |
+            target/e2e-server.log
+            target/e2e-echo.log
           if-no-files-found: ignore
-      - name: Build chat-server for messaging e2e tests
-        run: cargo build -p chat-server
+      - name: Build chat-server and the echo bot for messaging e2e tests
+        run: cargo build -p chat-server -p chat-echo
       - name: End-to-end tests (Chromium, Firefox, WebKit)
         run: pnpm --filter web e2e
         env:

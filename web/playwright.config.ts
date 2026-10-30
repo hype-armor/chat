@@ -32,6 +32,19 @@ export default defineConfig({
               CHAT_LIMIT_LINKS_PER_IP_PER_HOUR: '100000',
             },
           },
+          {
+            // The echo test bot (echo.00), a real client of that server.
+            command: 'cargo run -q -p chat-echo > target/e2e-echo.log 2>&1',
+            cwd: '..',
+            url: 'http://127.0.0.1:8090/',
+            timeout: 300_000,
+            reuseExistingServer: !process.env.CI,
+            env: {
+              ECHO_SERVER: 'http://127.0.0.1:8080',
+              ECHO_STATE_DIR: 'target/e2e-echo-state',
+              ECHO_HEALTH_BIND: '127.0.0.1:8090',
+            },
+          },
         ]
       : []),
   ],
