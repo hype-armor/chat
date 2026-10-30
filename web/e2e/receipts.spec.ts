@@ -28,6 +28,8 @@ test('sent, delivered and read, with read receipts that can be turned off (FR-MS
   await expect(bob.getByRole('status')).toHaveText('Connected')
   await send('Second')
   await expect(status('Second', 'Delivered')).toBeVisible()
+  await expect(status('First', 'Read')).toBeVisible()
+  await expect(messages(alice).filter({ hasText: 'First' }).locator('.message-status')).toHaveCount(0)
   await expect(bob.getByRole('button', { name: /Alice.*1 unread/ })).toBeVisible()
   await bob.getByRole('button', { name: /Alice/ }).click()
   await expect(status('Second', 'Read')).toBeVisible()
