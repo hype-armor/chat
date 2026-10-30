@@ -45,11 +45,21 @@ impl TestServer {
         push: Option<chat_server::push::PushSender>,
         limits: chat_server::limits::Limits,
     ) -> Self {
+        Self::start_with_livekit(pool, push, limits, Default::default()).await
+    }
+
+    pub async fn start_with_livekit(
+        pool: PgPool,
+        push: Option<chat_server::push::PushSender>,
+        limits: chat_server::limits::Limits,
+        livekit: chat_server::calls::LiveKitConfig,
+    ) -> Self {
         // Open sign-up unless a test turns invites on (tests/invites.rs).
         let mut state = AppState::new(Some(pool))
             .with_blobs(std::sync::Arc::new(object_store::memory::InMemory::new()))
             .with_open_registration(true)
-            .with_limits(limits);
+            .with_limits(limits)
+            .with_livekit(livekit);
         if let Some(push) = push {
             state = state.with_push(push);
         }
