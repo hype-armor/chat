@@ -52,12 +52,17 @@ test.describe('calls', () => {
       await expect.poll(() => video.evaluate((v) => (v as { videoWidth: number }).videoWidth), { timeout: 15_000 }).toBeGreaterThan(0)
     }
 
+    await alice.evaluate("location.hash = 'diagnostics'")
+    await expect(alice.getByTestId('self-test')).toHaveText('passed')
+    await expect(alice.getByRole('dialog', { name: 'Call with Bob' })).toBeVisible()
     const mute = alice.getByRole('button', { name: 'Mute' })
     await mute.click()
     await expect(alice.getByRole('button', { name: 'Unmute' })).toHaveAttribute('aria-pressed', 'true')
 
     await alice.getByRole('button', { name: 'Hang up' }).click()
     await expect(bob.getByRole('dialog', { name: 'Call with Alice' })).toContainText('Call ended')
+    await expect(alice.getByRole('dialog', { name: 'Call with Bob' })).toBeHidden()
+    await alice.getByRole('button', { name: '← Back', exact: true }).click()
     for (const page of [alice, bob]) {
       await expect(page.getByTestId('notice').filter({ hasText: /🎥 Video call · \d+:\d\d/ })).toBeVisible()
     }

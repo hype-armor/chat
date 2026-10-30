@@ -36,6 +36,12 @@ function Running() {
   const [failed, setFailed] = useState<string>()
 
   useEffect(() => {
+    const changed = () => setShowDiagnostics(location.hash === '#diagnostics')
+    window.addEventListener('hashchange', changed)
+    return () => window.removeEventListener('hashchange', changed)
+  }, [])
+
+  useEffect(() => {
     const unsubscribe = core.subscribe((e) => e.type === 'view' && setView(e.view))
     core
       .view()
@@ -47,20 +53,45 @@ function Running() {
   return (
     <>
       <UpdateBanner />
-      {failed && (
-        <p className="error center" role="alert">
-          The app couldn't start: {failed}
-        </p>
+      <div hidden={showDiagnostics}>
+        {failed && (
+          <p className="error center" role="alert">
+            The app couldn't start: {failed}
+          </p>
+        )}
+        {view.phase === 'loading' && !failed && <p className="muted center">Loading…</p>}
+        {view.phase === 'signed-out' && <Onboarding core={core} notice={view.notice} />}
+        {(view.phase !== 'ready' || failed) && (
+          <p className="center">
+            <button type="button" className="link small" onClick={() => setShowDiagnostics(true)}>
+              Diagnostics
+            </button>
+          </p>
+        )}
+      </div>
+      {view.phase === 'ready' && (
+        <Chat
+          core={core}
+          view={view}
+          showDiagnostics={showDiagnostics}
+          onDiagnostics={() => setShowDiagnostics(true)}
+        />
       )}
-      {view.phase === 'loading' && !failed && <p className="muted center">Loading…</p>}
-      {view.phase === 'signed-out' && <Onboarding core={core} notice={view.notice} />}
-      {view.phase === 'ready' && <Chat core={core} view={view} />}
-      <footer className="footer">
-        <button type="button" className="link small" onClick={() => setShowDiagnostics((v) => !v)}>
-          {showDiagnostics ? 'Hide diagnostics' : 'Diagnostics'}
-        </button>
-      </footer>
-      {showDiagnostics && <Diagnostics core={core} />}
+      {showDiagnostics && (
+        <main>
+          <button
+            type="button"
+            className="link"
+            onClick={() => {
+              if (location.hash === '#diagnostics') history.replaceState(null, '', location.pathname + location.search)
+              setShowDiagnostics(false)
+            }}
+          >
+            ← Back
+          </button>
+          <Diagnostics core={core} />
+        </main>
+      )}
     </>
   )
 }

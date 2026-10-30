@@ -25,7 +25,54 @@ export function storageAdvice(state: StorageState): 'ask' | 'warn' | undefined {
   return state === 'denied' ? 'warn' : undefined
 }
 
+export type SetupBanner = 'storage-warn' | 'storage-ask' | 'install'
+export type SetupDismissals = Partial<Record<SetupBanner, number>>
+export const SETUP_REMINDER_MS = 14 * 24 * 60 * 60 * 1000
+
+/** Storage must be checked before offering a lower-priority install banner. */
+export function setupBanner(o: {
+  storage?: StorageState
+  install: InstallHint
+  dismissed: SetupDismissals
+  now: number
+}): SetupBanner | undefined {
+  if (!o.storage) return undefined
+  const advice = storageAdvice(o.storage)
+  const candidates: SetupBanner[] = []
+  if (advice) candidates.push(advice === 'warn' ? 'storage-warn' : 'storage-ask')
+  if (o.install) candidates.push('install')
+  return candidates.find((banner) => {
+    const at = o.dismissed[banner]
+    return typeof at !== 'number' || !Number.isFinite(at) || at < 0 || at > o.now || o.now - at >= SETUP_REMINDER_MS
+  })
+}
+
 // ---- browser glue -------------------------------------------------------------
+
+const SETUP_DISMISSAL_KEY = 'chat.setup-dismissals'
+
+export function readSetupDismissals(): SetupDismissals {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(SETUP_DISMISSAL_KEY) ?? '{}')
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+    return Object.fromEntries(
+      (['storage-warn', 'storage-ask', 'install'] as const).flatMap((key) => {
+        const at = (value as SetupDismissals)[key]
+        return typeof at === 'number' && Number.isFinite(at) && at >= 0 ? [[key, at]] : []
+      }),
+    )
+  } catch {
+    return {}
+  }
+}
+
+export function saveSetupDismissals(dismissed: SetupDismissals): void {
+  try {
+    localStorage.setItem(SETUP_DISMISSAL_KEY, JSON.stringify(dismissed))
+  } catch {
+    // Dismissal still works for this session when browser storage is unavailable.
+  }
+}
 
 /** The deferred `beforeinstallprompt` event (Chromium only). */
 type InstallPromptEvent = Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> }
