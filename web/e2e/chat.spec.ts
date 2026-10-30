@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { type Page, expect, test } from '@playwright/test'
 import { messages, openChat, randomUsername, signUp } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
@@ -40,6 +40,126 @@ test('unknown usernames are reported', async ({ browser }) => {
   await page.getByRole('button', { name: 'Start chat' }).click()
   await expect(page.getByRole('alert')).toHaveText('no one has that username')
 })
+
+for (const width of [1280, 390]) {
+  test(`conversation scrolling stays pinned unless reading history (${width}px)`, async ({ browser }) => {
+    test.setTimeout(90_000)
+    const bobUsername = randomUsername()
+    const alice = await signUp(browser, 'Alice', randomUsername())
+    const bob = await signUp(browser, 'Bob', bobUsername)
+    await alice.setViewportSize({ width, height: 720 })
+    await bob.setViewportSize({ width, height: 720 })
+    const viewport = alice.locator('.messages-viewport')
+    const pill = alice.getByRole('button', { name: '↓ New messages' })
+    const send = async (page: Page, text: string) => {
+      await page.getByLabel('Message', { exact: true }).fill(text)
+      await page.getByRole('button', { name: 'Send', exact: true }).click()
+      await expect(messages(page).last()).toContainText(text)
+      await expect(messages(page).last()).toContainText(/Sent|Delivered|Read/)
+    }
+    const expectBottom = async () => {
+      await expect.poll(() => viewport.evaluate(
+        (list) => list.scrollHeight - list.scrollTop - list.clientHeight,
+      )).toBeLessThanOrEqual(1)
+      await expect(messages(alice).last()).toBeInViewport({ ratio: 1 })
+      await expect(pill).toHaveCount(0)
+    }
+    const scrollUp = async () => {
+      await viewport.evaluate((list) => { list.scrollTop = 0 })
+      await alice.evaluate('new Promise(requestAnimationFrame)')
+      await alice.evaluate('new Promise(requestAnimationFrame)')
+      await expect(messages(alice).first()).toBeInViewport()
+    }
+
+    await alice.getByLabel("Contact's username").fill(bobUsername)
+    await alice.getByRole('button', { name: 'Start chat' }).click()
+    for (let i = 0; i < 24; i++) await send(alice, `History ${i}`)
+    await expect.poll(() => viewport.evaluate(
+      (list) => list.scrollHeight - list.clientHeight,
+    )).toBeGreaterThan(300)
+    await expectBottom()
+
+    await openChat(bob, /Alice/)
+    await send(bob, 'Arrived at the bottom')
+    await expect(messages(alice).last()).toContainText('Arrived at the bottom')
+    await expectBottom()
+
+    // Delayed content growth must pin even without a new message or core event.
+    await messages(alice).last().evaluate((message) => { message.style.paddingBottom = '240px' })
+    await expectBottom()
+
+    // A resize before the user's queued scroll event must not pull them back down.
+    await alice.evaluate(`(() => {
+      document.querySelector('.messages-viewport').scrollTop = 0
+      document.querySelector('.messages li:last-child').style.paddingBottom = '280px'
+    })()`)
+    await expect(messages(alice).first()).toBeInViewport()
+    const position = await viewport.evaluate((list) => list.scrollTop)
+    await send(bob, 'Arrived while reading history')
+    await expect(pill).toBeVisible()
+    await expect.poll(() => viewport.evaluate((list) => list.scrollTop)).toBe(position)
+    await expect(messages(alice).last()).not.toBeInViewport()
+    await messages(alice).last().evaluate((message) => { message.style.paddingBottom = '240px' })
+    await alice.evaluate('new Promise(requestAnimationFrame)')
+    expect(await viewport.evaluate((list) => list.scrollTop)).toBe(position)
+    await pill.click()
+    await expectBottom()
+
+    await scrollUp()
+    await send(bob, 'Growth during a pending scroll')
+    await expect(pill).toBeVisible()
+    await alice.evaluate(`(() => {
+      document.querySelector('.new-messages button').click()
+      document.querySelector('.messages li:last-child').style.paddingBottom = '320px'
+    })()`)
+    await expectBottom()
+
+    await scrollUp()
+    await send(alice, 'Sending from history')
+    await expectBottom()
+    await scrollUp()
+    await alice.getByTestId('attach-input').setInputFiles({
+      name: 'scroll.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('Scroll on file send'),
+    })
+    await expect(messages(alice).last()).toContainText('scroll.txt')
+    await expectBottom()
+
+    // Being close to the bottom counts as pinned.
+    await viewport.evaluate((list) => {
+      list.scrollTop = list.scrollHeight - list.clientHeight - 60
+    })
+    await alice.evaluate('new Promise(requestAnimationFrame)')
+    await alice.evaluate('new Promise(requestAnimationFrame)')
+    await send(bob, 'Arrived near the bottom')
+    await expect(messages(alice).last()).toContainText('Arrived near the bottom')
+    await expectBottom()
+
+    await scrollUp()
+    await send(bob, 'Unread before switching')
+    await expect(pill).toBeVisible()
+    if (width <= 640) await alice.getByRole('button', { name: 'Back to conversations' }).click()
+    await alice.getByText('New group', { exact: true }).click()
+    await alice.getByLabel('Group name', { exact: true }).fill('Scroll reset')
+    await alice.getByLabel("Members' usernames").fill(bobUsername)
+    await alice.getByRole('button', { name: 'Create group' }).click()
+    await expect(alice.getByRole('heading', { name: 'Scroll reset' })).toBeVisible()
+    await expect(pill).toHaveCount(0)
+    if (width <= 640) await alice.getByRole('button', { name: 'Back to conversations' }).click()
+    await openChat(alice, /Bob/)
+    await expect(messages(alice).last()).toContainText('Unread before switching')
+    await expectBottom()
+
+    await alice.reload()
+    await expect(alice.getByRole('status')).toHaveText('online')
+    await openChat(alice, /Bob/)
+    await expect(messages(alice).last()).toContainText('Unread before switching')
+    await expectBottom()
+    await alice.context().close()
+    await bob.context().close()
+  })
+}
 
 test('groups: create, talk, and add someone later', async ({ browser }) => {
   const [annUsername, benUsername, catUsername, danUsername] = [randomUsername(), randomUsername(), randomUsername(), randomUsername()]
