@@ -389,6 +389,32 @@ impl From<AttachmentView> for Attachment {
     }
 }
 
+/// One call's SFrame keys and frame counter (ADR-0030). Keys are installed
+/// by `CoreClient.installCallKeys`; frames never leave the core worker
+/// unencrypted for long.
+#[wasm_bindgen]
+#[derive(Default)]
+pub struct CallMedia {
+    keys: crate::call::CallKeys,
+}
+
+#[wasm_bindgen]
+impl CallMedia {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> CallMedia {
+        Self::default()
+    }
+
+    /// `clear`: leading bytes left readable (and authenticated) for the packetizer.
+    pub fn encrypt(&mut self, frame: &[u8], clear: usize) -> Result<Vec<u8>, JsError> {
+        self.keys.encrypt(frame, clear).map_err(js_err)
+    }
+
+    pub fn decrypt(&self, frame: &[u8], clear: usize) -> Result<Vec<u8>, JsError> {
+        self.keys.decrypt(frame, clear).map_err(js_err)
+    }
+}
+
 /// Encrypts a file piece by piece for upload (ADR-0024).
 #[wasm_bindgen]
 pub struct AttachmentSealer {
@@ -497,6 +523,19 @@ impl CoreClient {
     #[wasm_bindgen(js_name = conversationIds)]
     pub fn conversation_ids(&self) -> Array {
         bytes_array(self.inner.conversation_ids())
+    }
+
+    /// Installs a call's SFrame keys for the current epoch (ADR-0030).
+    #[wasm_bindgen(js_name = installCallKeys)]
+    pub fn install_call_keys(
+        &self,
+        conversation_id: &[u8],
+        call_id: &[u8],
+        media: &mut CallMedia,
+    ) -> Result<(), JsError> {
+        self.inner
+            .install_call_keys(conversation_id, call_id, &mut media.keys)
+            .map_err(js_err)
     }
 
     pub fn members(&self, conversation_id: &[u8]) -> Result<Array, JsError> {

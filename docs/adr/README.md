@@ -36,3 +36,4 @@ revisited; do it with a new ADR that supersedes the old one.
 | [0027](0027-live-location.md) | Live location as ordinary messages; receivers keep only the latest point | Accepted |
 | [0028](0028-call-signalling.md) | 1:1 call signalling as MLS messages, media peer to peer | Accepted |
 | [0029](0029-turn-relay.md) | coturn as the one TURN relay; "always relay calls" setting | Accepted |
+| [0030](0030-sframe-call-media.md) | SFrame on call media, keyed from MLS, in the core worker | Accepted |
