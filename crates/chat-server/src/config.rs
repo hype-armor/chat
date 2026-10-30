@@ -31,6 +31,11 @@ pub struct Config {
     /// `CHAT_REGISTRATION`: `invite` (default) or `open` (development and
     /// tests): whether sign-up needs an invite (ADR-0021).
     pub open_registration: bool,
+    /// Calls (ADR-0028): `CHAT_STUN_URLS` and `CHAT_TURN_URLS`, comma
+    /// separated (`stun:host:3478`, `turn:host:3478?transport=udp`,
+    /// `turns:host:5349`), and `CHAT_TURN_SECRET`, coturn's
+    /// `static-auth-secret`. Without a secret no TURN servers are offered.
+    pub turn: crate::turn::TurnConfig,
 }
 
 impl Config {
@@ -58,6 +63,13 @@ impl Config {
                 Ok("open") => true,
                 Ok("invite") | Err(_) => false,
                 Ok(other) => anyhow::bail!("CHAT_REGISTRATION must be open or invite, not {other}"),
+            },
+            turn: crate::turn::TurnConfig {
+                stun_urls: list_var("CHAT_STUN_URLS"),
+                turn_urls: list_var("CHAT_TURN_URLS"),
+                secret: std::env::var("CHAT_TURN_SECRET")
+                    .ok()
+                    .filter(|s| !s.is_empty()),
             },
             vapid_subject: std::env::var("CHAT_VAPID_SUBJECT")
                 .unwrap_or_else(|_| "mailto:admin@localhost".to_owned()),
@@ -103,4 +115,14 @@ where
         Ok(v) => v.parse().map_err(|e| anyhow::anyhow!("{key}={v}: {e}")),
         Err(_) => Ok(default),
     }
+}
+
+fn list_var(name: &str) -> Vec<String> {
+    std::env::var(name)
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect()
 }

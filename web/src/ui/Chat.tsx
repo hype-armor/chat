@@ -11,6 +11,8 @@ import { Recorder } from './Recorder'
 import { Media } from './Media'
 import { LocationCard, ShareLocation } from './Location'
 import { LiveBanner, LiveCard } from './Live'
+import { CallScreen } from './Call'
+import { CallController } from './calls'
 import { probeClip } from './media'
 import type { MediaInfo } from '../core/protocol'
 import { BlockedList, DeleteAccount, ReportForm } from './Safety'
@@ -31,6 +33,8 @@ const STATUS_LABEL: Record<ChatMessage['status'], string> = {
 export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
   const [selected, setSelected] = useState<string>()
   const [settings, setSettings] = useState(false)
+  const [calls] = useState(() => new CallController(core))
+  useEffect(() => () => calls.dispose(), [calls])
   const conversation = view.conversations.find((c) => c.id === selected)
   const select = (id: string) => {
     setSettings(false)
@@ -42,6 +46,7 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
   return (
     <>
       <LiveBanner core={core} sharing={view.liveSharing} />
+      <CallScreen calls={calls} />
       <div
         className={`chat-layout ${conversation ? 'has-selection' : ''} ${view.liveSharing.length > 0 ? 'with-banner' : ''}`}
       >
@@ -112,6 +117,7 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
         {conversation ? (
           <Conversation
             core={core}
+            calls={calls}
             id={conversation.id}
             title={conversation.title}
             isGroup={conversation.isGroup}
@@ -489,6 +495,7 @@ function AddPeople({ core, id, onDone }: { core: CoreClient; id: string; onDone:
 
 function Conversation({
   core,
+  calls,
   id,
   title,
   isGroup,
@@ -502,6 +509,7 @@ function Conversation({
   onBack,
 }: {
   core: CoreClient
+  calls: CallController
   id: string
   title: string
   isGroup: boolean
@@ -593,6 +601,26 @@ function Conversation({
           <VerificationBadge status={verification} />
         </div>
         <div className="header-actions">
+          {peer && active && !blocked && !request && (
+            <>
+              <button
+                type="button"
+                className="icon"
+                aria-label="Voice call"
+                onClick={() => void calls.start(id, title, false).catch((e) => setAttachError(String(e.message ?? e)))}
+              >
+                📞
+              </button>
+              <button
+                type="button"
+                className="icon"
+                aria-label="Video call"
+                onClick={() => void calls.start(id, title, true).catch((e) => setAttachError(String(e.message ?? e)))}
+              >
+                🎥
+              </button>
+            </>
+          )}
           {peer && (
             <button type="button" className="link" onClick={() => toggle('verify')}>
               {panel === 'verify' ? 'Close' : 'Verify'}

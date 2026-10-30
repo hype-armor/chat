@@ -34,3 +34,4 @@ revisited; do it with a new ADR that supersedes the old one.
 | [0025](0025-resumable-transfers.md) | Resumable uploads in parts, ranged downloads, auto-download settings | Accepted |
 | [0026](0026-location-and-map-tiles.md) | One-shot locations; PMTiles served by the web pod, read through the core worker | Accepted |
 | [0027](0027-live-location.md) | Live location as ordinary messages; receivers keep only the latest point | Accepted |
+| [0028](0028-call-signalling.md) | 1:1 call signalling as MLS messages, media peer to peer | Accepted |

@@ -61,6 +61,11 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
     case 'stopLive':
       await engine.stopLive(request.conversationId)
       return { type: 'ok' }
+    case 'iceServers':
+      return { type: 'iceServers', servers: await engine.iceServers() }
+    case 'callSignal':
+      await engine.callSignal(request.conversationId, request.signal)
+      return { type: 'ok' }
     case 'mapInfo':
       return { type: 'mapInfo', info: await mapInfo() }
     case 'tile': {

@@ -213,6 +213,15 @@ default behind the ingress). Each limit can be changed with
 `crates/chat-server/src/config.rs`). The web client keeps a rate-limited message
 queued and re-sends it after 5 s, doubling to 2 minutes.
 
+## Calls (ADR-0028)
+
+| Method & path | Auth | Body → Response |
+|---------------|------|-----------------|
+| `GET /v1/turn` | ✓ | → `{ice_servers: [{urls, username?, credential?}], ttl}`: STUN servers (`CHAT_STUN_URLS`), and TURN servers (`CHAT_TURN_URLS`) with coturn REST-API credentials valid for `ttl` seconds when `CHAT_TURN_SECRET` is set |
+
+Offers, answers, candidates and hang-ups are end-to-end encrypted messages
+(`Call` content); the server only relays them.
+
 ## Retention
 
 An hourly job deletes queue entries older than 30 days (FR-MSG-9), expired

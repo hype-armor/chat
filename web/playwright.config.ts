@@ -9,9 +9,15 @@ const withServer = !!process.env.E2E_SERVER
 
 export default defineConfig({
   testDir: 'e2e',
-  use: { baseURL: 'http://localhost:4173' },
+  // The loopback address, not "localhost": Playwright's Firefox gathers no
+  // ICE candidates on pages from that name, and the preview binds IPv4 only.
+  use: { baseURL: 'http://127.0.0.1:4173' },
   webServer: [
-    { command: 'pnpm preview --port 4173 --strictPort', port: 4173, reuseExistingServer: !process.env.CI },
+    {
+      command: 'pnpm preview --host 127.0.0.1 --port 4173 --strictPort',
+      url: 'http://127.0.0.1:4173/',
+      reuseExistingServer: !process.env.CI,
+    },
     ...(withServer
       ? [
           {
@@ -49,10 +55,37 @@ export default defineConfig({
       : []),
   ],
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    {
+      name: 'chromium',
+      use: {
+        ...devices['Desktop Chrome'],
+        // Calls: a fake camera and microphone, and plain host candidates
+        // (not mDNS names) between two pages on one machine.
+        launchOptions: {
+          args: [
+            '--use-fake-device-for-media-stream',
+            '--use-fake-ui-for-media-stream',
+            '--disable-features=WebRtcHideLocalIpsWithMdns',
+          ],
+        },
+      },
+    },
     ...(all
       ? [
-          { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
+          {
+            name: 'firefox',
+            use: {
+              ...devices['Desktop Firefox'],
+              launchOptions: {
+                firefoxUserPrefs: {
+                  'media.navigator.streams.fake': true,
+                  'media.navigator.permission.disabled': true,
+                  'media.peerconnection.ice.obfuscate_host_addresses': false,
+                  'media.peerconnection.ice.loopback': true,
+                },
+              },
+            },
+          },
           { name: 'webkit', use: { ...devices['Desktop Safari'] } },
         ]
       : []),
