@@ -6,6 +6,7 @@ import { Devices } from './Devices'
 import { Invite } from './Invite'
 import { Backup } from './Backup'
 import { Avatar } from './Avatar'
+import { Menu, type MenuItem } from './Menu'
 import { Attachment } from './Attachment'
 import { Recorder } from './Recorder'
 import { Media } from './Media'
@@ -550,6 +551,13 @@ function Conversation({
   const [attachError, setAttachError] = useState<string>()
   const end = useRef<HTMLDivElement>(null)
   const picker = useRef<HTMLInputElement>(null)
+  const menuItems: MenuItem[] = [
+    ...(isGroup ? [{ label: 'Group info', onSelect: () => toggle('info') }] : []),
+    ...(peer ? [{ label: 'Verify safety number', onSelect: () => toggle('verify') }] : []),
+    ...(active ? [{ label: 'Add people', onSelect: () => toggle('add') }] : []),
+    ...(peer ? [{ label: 'Report', onSelect: () => toggle('report') }] : []),
+    ...(peer && !blocked ? [{ label: 'Block', onSelect: () => void core.block(peer), danger: true }] : []),
+  ]
 
   useEffect(() => {
     let live = true
@@ -611,12 +619,21 @@ function Conversation({
           <button type="button" className="link back" onClick={onBack} aria-label="Back to conversations">
             ←
           </button>
-          <Avatar name={title} id={peer ?? id} />
-          <div className="who">
-            <h2>{title}</h2>
-            {isGroup && <span className="muted small">{memberCount} people</span>}
-          </div>
-          <VerificationBadge status={verification} />
+          <button
+            type="button"
+            className="conversation-title"
+            aria-label={isGroup ? 'Group info' : 'Verify safety number'}
+            onClick={() => toggle(isGroup ? 'info' : 'verify')}
+          >
+            <Avatar name={title} id={peer ?? id} />
+            <span className="who">
+              <span className="conversation-name" role="heading" aria-level={2}>
+                {title}
+              </span>
+              {isGroup && <span className="muted small">{memberCount} people</span>}
+              <VerificationBadge status={verification} />
+            </span>
+          </button>
         </div>
         <div className="header-actions">
           {peer && active && !blocked && !request && (
@@ -639,31 +656,7 @@ function Conversation({
               </button>
             </>
           )}
-          {peer && (
-            <button type="button" className="link" onClick={() => toggle('verify')}>
-              {panel === 'verify' ? 'Close' : 'Verify'}
-            </button>
-          )}
-          {peer && (
-            <button type="button" className="link" onClick={() => toggle('report')}>
-              {panel === 'report' ? 'Cancel' : 'Report'}
-            </button>
-          )}
-          {peer && !blocked && (
-            <button type="button" className="link danger" onClick={() => void core.block(peer)}>
-              Block
-            </button>
-          )}
-          {active && (
-            <button type="button" className="link" onClick={() => toggle('add')}>
-              {panel === 'add' ? 'Cancel' : 'Add people'}
-            </button>
-          )}
-          {isGroup && (
-            <button type="button" className="link" onClick={() => toggle('info')}>
-              {panel === 'info' ? 'Close' : 'Group info'}
-            </button>
-          )}
+          <Menu key={id} triggerLabel="Conversation menu" triggerContent="⋮" items={menuItems} />
         </div>
       </header>
       {panel === 'add' && active && <AddPeople core={core} id={id} onDone={() => setPanel(undefined)} />}

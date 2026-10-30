@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { messages, openChat, randomUsername, signUp } from './support'
+import { conversationAction, messages, openChat, randomUsername, signUp } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -23,7 +23,7 @@ test("a removed member's late message reaches nobody", async ({ browser, browser
   await ben.getByLabel('Message', { exact: true }).fill('Am I still here?')
   await ben.getByRole('button', { name: 'Send' }).click()
   await expect(messages(ben).filter({ hasText: 'Am I still here?' })).toContainText('Sending')
-  await ann.getByRole('button', { name: 'Group info' }).click()
+  await conversationAction(ann, 'Group info')
   await ann.getByRole('button', { name: 'Remove Ben' }).click()
   await expect(ann.getByText('1 people')).toBeVisible()
 
