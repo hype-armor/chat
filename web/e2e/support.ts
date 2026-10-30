@@ -21,12 +21,25 @@ export async function signUp(browser: Browser, name: string, username: string, i
 
 export const messages = (page: Page) => page.getByTestId('message')
 
+/** Opens the Settings screen (backup, devices, privacy…). */
+export async function openSettings(page: Page) {
+  const button = page.getByRole('button', { name: 'Settings' })
+  if ((await button.getAttribute('aria-pressed')) !== 'true') await button.click()
+}
+
+/** Back from Settings to the conversation list. */
+export async function closeSettings(page: Page) {
+  const button = page.getByRole('button', { name: 'Settings' })
+  if ((await button.getAttribute('aria-pressed')) === 'true') await button.click()
+}
+
 /** Links a new browser to the account signed in on `page` by typed code. */
 export async function linkDevice(browser: Browser, page: Page): Promise<Page> {
   const laptop = await (await browser.newContext()).newPage()
   await laptop.goto('/')
   await laptop.getByRole('button', { name: /Link this one/ }).click()
   const code = (await laptop.getByTestId('link-code').textContent())!.trim()
+  await openSettings(page)
   await page.getByText('Linked devices').click()
   await page.getByRole('button', { name: 'Link a new device' }).click()
   await page.getByLabel('Or type the code shown on the new device').fill(code)
@@ -34,6 +47,7 @@ export async function linkDevice(browser: Browser, page: Page): Promise<Page> {
   await page.getByRole('button', { name: 'Link device' }).click()
   await expect(page.getByRole('button', { name: 'Link a new device' })).toBeVisible({ timeout: 30_000 })
   await expect(laptop.getByRole('status')).toHaveText('online')
+  await closeSettings(page)
   return laptop
 }
 

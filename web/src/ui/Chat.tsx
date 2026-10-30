@@ -5,6 +5,7 @@ import { InstallBanner, StorageBanner } from './Banners'
 import { Devices } from './Devices'
 import { Invite } from './Invite'
 import { Backup } from './Backup'
+import { Avatar } from './Avatar'
 import { Attachment } from './Attachment'
 import { Recorder } from './Recorder'
 import { Media } from './Media'
@@ -29,7 +30,12 @@ const STATUS_LABEL: Record<ChatMessage['status'], string> = {
 
 export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
   const [selected, setSelected] = useState<string>()
+  const [settings, setSettings] = useState(false)
   const conversation = view.conversations.find((c) => c.id === selected)
+  const select = (id: string) => {
+    setSettings(false)
+    setSelected(id)
+  }
   const requests = view.conversations.filter((c) => c.request)
   const accepted = view.conversations.filter((c) => !c.request)
 
@@ -40,17 +46,25 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
         className={`chat-layout ${conversation ? 'has-selection' : ''} ${view.liveSharing.length > 0 ? 'with-banner' : ''}`}
       >
         <aside className="sidebar">
-          <header className="bar">
-            <div>
+          <header className="bar me">
+            <Avatar name={view.me.displayName} id={view.me.username} />
+            <div className="who">
               <strong>{view.me.displayName}</strong>
               <div className="muted small">{view.me.username}</div>
             </div>
             <span className={`connection ${view.connection}`} role="status">
               {view.connection}
             </span>
+            <button
+              type="button"
+              className="icon"
+              aria-label="Settings"
+              aria-pressed={settings}
+              onClick={() => setSettings(!settings)}
+            >
+              ⚙
+            </button>
           </header>
-          <StorageBanner />
-          <InstallBanner />
           {view.alerts.map((a) => (
             <div key={a.id} className="alert" role="alert">
               <p>{a.text}</p>
@@ -59,26 +73,41 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
               </button>
             </div>
           ))}
-          <NotificationToggle core={core} />
-          <Backup core={core} backup={view.backup} />
-          <Invite core={core} />
-          <Devices core={core} />
-          <Privacy core={core} readReceipts={view.readReceipts} />
-          <Media core={core} media={view.media} />
-          <BlockedList core={core} />
-          <DeleteAccount core={core} />
-          <NewChat core={core} onStarted={setSelected} />
-          <NewGroup core={core} onCreated={setSelected} />
-          {requests.length > 0 && (
-            <nav aria-label="Requests">
-              <h3 className="list-heading small">Message requests</h3>
-              <ConversationList conversations={requests} selected={selected} onSelect={setSelected} />
+          {settings ? (
+            <nav className="settings" aria-label="Settings">
+              <div className="settings-head">
+                <button type="button" className="link" onClick={() => setSettings(false)}>
+                  ← Chats
+                </button>
+                <h2>Settings</h2>
+              </div>
+              <NotificationToggle core={core} />
+              <Backup core={core} backup={view.backup} />
+              <Invite core={core} />
+              <Devices core={core} />
+              <Privacy core={core} readReceipts={view.readReceipts} />
+              <Media core={core} media={view.media} />
+              <BlockedList core={core} />
+              <DeleteAccount core={core} />
             </nav>
+          ) : (
+            <>
+              <StorageBanner />
+              <InstallBanner />
+              <NewChat core={core} onStarted={select} />
+              <NewGroup core={core} onCreated={select} />
+              {requests.length > 0 && (
+                <nav aria-label="Requests">
+                  <h3 className="list-heading small">Message requests</h3>
+                  <ConversationList conversations={requests} selected={selected} onSelect={select} />
+                </nav>
+              )}
+              <nav aria-label="Conversations" className="conversation-nav">
+                <ConversationList conversations={accepted} selected={selected} onSelect={select} />
+                {accepted.length === 0 && <p className="muted empty">No conversations yet.</p>}
+              </nav>
+            </>
           )}
-          <nav aria-label="Conversations">
-            <ConversationList conversations={accepted} selected={selected} onSelect={setSelected} />
-            {accepted.length === 0 && <p className="muted empty">No conversations yet.</p>}
-          </nav>
         </aside>
         {conversation ? (
           <Conversation
@@ -103,6 +132,14 @@ export function Chat({ core, view }: { core: CoreClient; view: Ready }) {
   )
 }
 
+/** Today: the time; otherwise the date. */
+function formatWhen(at: number): string {
+  const d = new Date(at)
+  return d.toDateString() === new Date().toDateString()
+    ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+}
+
 function ConversationList({
   conversations,
   selected,
@@ -117,6 +154,7 @@ function ConversationList({
       {conversations.map((c) => (
         <li key={c.id}>
           <button type="button" className={c.id === selected ? 'active' : ''} onClick={() => onSelect(c.id)}>
+            <Avatar name={c.title} id={c.peer ?? c.id} />
             <span className="title">
               {c.title}
               {c.unread > 0 && (
@@ -126,6 +164,7 @@ function ConversationList({
               )}
             </span>
             <span className="muted small preview">{c.lastText ?? 'No messages yet'}</span>
+            <span className="muted small when">{formatWhen(c.lastAt)}</span>
           </button>
         </li>
       ))}
@@ -541,38 +580,45 @@ function Conversation({
 
   return (
     <section className="conversation" aria-label={`Conversation with ${title}`}>
-      <header className="bar">
-        <button type="button" className="link back" onClick={onBack} aria-label="Back to conversations">
-          ←
-        </button>
-        <h2>{title}</h2>
-        <VerificationBadge status={verification} />
-        {isGroup && <span className="muted small">{memberCount} people</span>}
-        {peer && (
-          <button type="button" className="link" onClick={() => toggle('verify')}>
-            {panel === 'verify' ? 'Close' : 'Verify'}
+      <header className="bar conversation-bar">
+        <div className="title-row">
+          <button type="button" className="link back" onClick={onBack} aria-label="Back to conversations">
+            ←
           </button>
-        )}
-        {peer && (
-          <button type="button" className="link" onClick={() => toggle('report')}>
-            {panel === 'report' ? 'Cancel' : 'Report'}
-          </button>
-        )}
-        {peer && !blocked && (
-          <button type="button" className="link danger" onClick={() => void core.block(peer)}>
-            Block
-          </button>
-        )}
-        {active && (
-          <button type="button" className="link" onClick={() => toggle('add')}>
-            {panel === 'add' ? 'Cancel' : 'Add people'}
-          </button>
-        )}
-        {isGroup && (
-          <button type="button" className="link" onClick={() => toggle('info')}>
-            {panel === 'info' ? 'Close' : 'Group info'}
-          </button>
-        )}
+          <Avatar name={title} id={peer ?? id} />
+          <div className="who">
+            <h2>{title}</h2>
+            {isGroup && <span className="muted small">{memberCount} people</span>}
+          </div>
+          <VerificationBadge status={verification} />
+        </div>
+        <div className="header-actions">
+          {peer && (
+            <button type="button" className="link" onClick={() => toggle('verify')}>
+              {panel === 'verify' ? 'Close' : 'Verify'}
+            </button>
+          )}
+          {peer && (
+            <button type="button" className="link" onClick={() => toggle('report')}>
+              {panel === 'report' ? 'Cancel' : 'Report'}
+            </button>
+          )}
+          {peer && !blocked && (
+            <button type="button" className="link danger" onClick={() => void core.block(peer)}>
+              Block
+            </button>
+          )}
+          {active && (
+            <button type="button" className="link" onClick={() => toggle('add')}>
+              {panel === 'add' ? 'Cancel' : 'Add people'}
+            </button>
+          )}
+          {isGroup && (
+            <button type="button" className="link" onClick={() => toggle('info')}>
+              {panel === 'info' ? 'Close' : 'Group info'}
+            </button>
+          )}
+        </div>
       </header>
       {panel === 'add' && active && <AddPeople core={core} id={id} onDone={() => setPanel(undefined)} />}
       {verification === 'changed' && panel !== 'verify' && (
@@ -700,7 +746,7 @@ function Conversation({
         />
         <button
           type="button"
-          className="secondary"
+          className="icon"
           onClick={() => picker.current?.click()}
           disabled={attaching}
           aria-label="Attach a photo or file"

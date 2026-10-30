@@ -93,7 +93,7 @@ export function ShareLocation({
     <>
       <button
         type="button"
-        className="secondary"
+        className="icon"
         onClick={locate}
         disabled={disabled || state !== 'idle'}
         aria-label="Share your location"

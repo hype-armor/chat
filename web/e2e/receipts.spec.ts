@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { messages, randomUsername, signUp } from './support'
+import { closeSettings, messages, openSettings, randomUsername, signUp } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -37,10 +37,12 @@ test('sent, delivered and read, with read receipts that can be turned off (FR-MS
   // With read receipts off, Alice only sees delivery.
   await bob.reload()
   await expect(bob.getByRole('status')).toHaveText('online')
+  await openSettings(bob)
   await bob.getByText('Privacy').click()
   await bob.getByLabel('Send read receipts').uncheck()
   await send('Third')
   await expect(status('Third')).toContainText('Delivered')
+  await closeSettings(bob)
   await bob.getByRole('button', { name: /Alice/ }).click()
   await expect(messages(bob)).toHaveText([/First/, /Second/, /Third/])
   await bob.waitForTimeout(1000)

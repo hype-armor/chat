@@ -74,7 +74,7 @@ export function Recorder({
     return (
       <button
         type="button"
-        className="secondary"
+        className="icon"
         onClick={() => void start()}
         disabled={disabled}
         aria-label="Record a voice note"

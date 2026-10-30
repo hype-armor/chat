@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { messages, openChat, randomUsername, signUp } from './support'
+import { messages, openChat, openSettings, randomUsername, signUp } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -19,6 +19,7 @@ test('restoring a backup on a wiped browser; contacts add the device back (ADR-0
   await expect(messages(alice)).toHaveText([/Before the backup/, /Got it/])
 
   // Alice turns on backup and notes her recovery key.
+  await openSettings(alice)
   await alice.getByText('Backup', { exact: true }).click()
   await alice.getByRole('button', { name: 'Turn on backup' }).click()
   const recoveryKey = (await alice.getByTestId('recovery-key').textContent())!.trim()

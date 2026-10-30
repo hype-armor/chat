@@ -1,0 +1,82 @@
+# SeaweedFS for encrypted attachments and backups (ADR-0005, ADR-0015,
+# ADR-0023): one `weed server` (master, volume, filer and S3 gateway) on a
+# persistent volume, reachable only inside the cluster. Same image as
+# deploy/compose. Apply into the chat namespace after creating the
+# `seaweedfs-s3` Secret (deploy/k3s/README.md §3).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: seaweedfs
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: seaweedfs
+  labels: { app.kubernetes.io/name: seaweedfs }
+spec:
+  replicas: 1
+  # One writer for the volume: stop the old pod before starting a new one.
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app.kubernetes.io/name: seaweedfs }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: seaweedfs }
+    spec:
+      containers:
+        - name: seaweedfs
+          image: chrislusf/seaweedfs:4.50
+          args:
+            - server
+            - -dir=/data
+            - -s3
+            - -s3.config=/etc/seaweedfs/s3.json
+            # Small volumes, as many as the disk holds.
+            - -master.volumeSizeLimitMB=1024
+            - -volume.max=0
+          ports:
+            - { name: s3, containerPort: 8333 }
+          readinessProbe:
+            tcpSocket: { port: s3 }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: s3-config, mountPath: /etc/seaweedfs, readOnly: true }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 1Gi }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: seaweedfs }
+        - name: s3-config
+          secret: { secretName: seaweedfs-s3 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: seaweedfs
+  labels: { app.kubernetes.io/name: seaweedfs }
+spec:
+  selector: { app.kubernetes.io/name: seaweedfs }
+  ports:
+    - { name: s3, port: 8333, targetPort: s3 }
+---
+# Only the chat server may use the S3 gateway.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: seaweedfs
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: seaweedfs }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/component: server }
+      ports:
+        - port: 8333

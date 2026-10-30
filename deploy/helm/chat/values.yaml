@@ -39,13 +39,13 @@ server:
     existingSecret: ""
     secretKey: private-key
     subject: "mailto:ops@example.com"
-  # Encrypted attachments (ADR-0023): an S3-compatible bucket, e.g. MinIO on
-  # k3s or Linode Object Storage. Credentials come from a Secret with
+  # Encrypted attachments and backups (ADR-0023): an S3-compatible bucket,
+  # e.g. SeaweedFS on k3s (deploy/k8s/seaweedfs.yaml) or Linode Object Storage. Credentials come from a Secret with
   # AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY. Without a bucket, the
   # server keeps attachments in memory (lost on restart).
   blobs:
     bucket: ""
-    endpoint: ""          # e.g. http://minio.minio.svc:9000 for in-cluster MinIO
+    endpoint: ""          # e.g. http://seaweedfs.chat.svc:8333 for in-cluster SeaweedFS
     region: us-east-1
     existingSecret: ""
   extraEnv: []
