@@ -47,7 +47,7 @@ test('a location shared once arrives encrypted and maps without third parties (F
   await add.click()
   await alice.getByRole('menuitem', { name: 'Location', exact: true }).click()
   await preview.getByRole('button', { name: 'Send location' }).click()
-  await expect(add).toBeFocused()
+  await expect(alice.getByLabel('Message', { exact: true })).toBeFocused()
   await expect(messages(alice).filter({ hasText: 'Location' }).getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
 
   await expect(bob.getByRole('button', { name: /Alice/ })).toContainText('Location')
@@ -80,6 +80,7 @@ test('live location follows the sender and is gone when they stop (FR-LOC-2/3/6)
   await alice.getByRole('button', { name: 'Add attachment' }).click()
   await alice.getByRole('menuitem', { name: 'Location', exact: true }).click()
   await alice.getByRole('dialog', { name: 'Share this location?' }).getByRole('button', { name: '15 min' }).click()
+  await expect(alice.getByLabel('Message', { exact: true })).toBeFocused()
   // The indicator stays up while sharing (FR-LOC-6).
   const banner = alice.getByRole('status', { name: 'Sharing live location' })
   await expect(banner).toContainText(/Sharing live location with .* · 15 min left/)

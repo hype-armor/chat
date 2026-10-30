@@ -45,11 +45,13 @@ export function ShareLocation({
   conversationId,
   trigger,
   onError,
+  onSend,
 }: {
   core: CoreClient
   conversationId: string
   trigger: (locate: () => void) => ReactNode
   onError: (message: string) => void
+  onSend: () => void
 }) {
   const [state, setState] = useState<'idle' | 'locating' | LocationInfo>('idle')
   const dialog = useRef<HTMLDialogElement>(null)
@@ -84,6 +86,7 @@ export function ShareLocation({
 
   const send = async (location: LocationInfo) => {
     close()
+    onSend()
     try {
       await core.sendLocation(conversationId, location)
     } catch (e) {
@@ -93,6 +96,7 @@ export function ShareLocation({
 
   const live = async (location: LocationInfo, durationMs: number) => {
     close()
+    onSend()
     try {
       await core.startLive(conversationId, durationMs, location)
     } catch (e) {
