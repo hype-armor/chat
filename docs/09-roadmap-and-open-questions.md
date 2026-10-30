@@ -121,21 +121,26 @@ their PRs merge.
 3. [x] SFrame on 1:1 calls, keyed from the MLS exporter (FR-CALL-3,
    ADR-0006); refuse to call without encoded transforms.
 4. [x] Echo bot call mode: it answers and sends your audio and video back.
-5. [ ] Group calls through LiveKit with SFrame: server-issued room tokens,
+5. [x] Group calls through LiveKit with SFrame: server-issued room tokens,
    join and leave an ongoing call, up to 16 video tiles (FR-CALL-2/3/6).
-6. [ ] Call quality: switching camera and audio output, ICE restart on
+6. [x] Call quality: switching camera and audio output, ICE restart on
    network change, adaptive quality (FR-CALL-4/8).
-7. [ ] Screen sharing (FR-CALL-7, could).
-8. [ ] Call metrics for the exit criterion (success rate, setup time),
+7. [x] Screen sharing (FR-CALL-7, could).
+8. [x] Call metrics for the exit criterion (success rate, setup time),
    and the Phase 0 spike (d): an SFrame 3-party call across all three
    browsers.
 
-**Exit:** call success ≥ 99%.
+**Exit:** call success ≥ 99%, measured with opt-in call statistics
+(ADR-0032, `chat_calls_total` on the metrics port) once testers use calls.
+Spike (d) runs in CI for Chromium and Firefox (1:1 and a three-party group
+call mixing both); Safari remains a manual check until Playwright's WebKit
+has fake media on Linux.
 
 **Phase 0 spikes still open** (block later phases, not Phase 1): (b)
 SQLite3MultipleCiphers on OPFS (deferred; IndexedDB snapshots suffice for
 now); (c) phone-hotspot QR WebRTC test (needs two physical phones); (d)
-SFrame 3-party call through LiveKit; (a) record benchmark timings in
+SFrame 3-party call through LiveKit (done for Chromium and Firefox in
+CI; Safari by hand); (a) record benchmark timings in
 Firefox and WebKit.
 
 ## 3. Top risks

@@ -20,6 +20,7 @@ import type {
   ReportReason,
   MediaEnvelope,
   CallSignal,
+  GroupCallStatus,
   IceServer,
 } from './protocol'
 import type { MapInfo } from './maps'
@@ -197,6 +198,19 @@ export class CoreClient {
     expect(await this.call({ type: 'callSignal', conversationId, signal }), 'ok')
   }
 
+  async groupCallJoin(conversationId: string, callId: string): Promise<{ url: string; token: string }> {
+    const { url, token } = expect(await this.call({ type: 'groupCallJoin', conversationId, callId }), 'groupCallJoin')
+    return { url, token }
+  }
+
+  async groupCallStatus(conversationId: string): Promise<GroupCallStatus | undefined> {
+    return expect(await this.call({ type: 'groupCallStatus', conversationId }), 'groupCallStatus').call
+  }
+
+  async deviceNames(conversationId: string): Promise<Record<string, string>> {
+    return expect(await this.call({ type: 'deviceNames', conversationId }), 'deviceNames').names
+  }
+
   async liveUpdate(location: LocationInfo) {
     expect(await this.call({ type: 'liveUpdate', location }), 'ok')
   }
@@ -240,6 +254,15 @@ export class CoreClient {
 
   async setReadReceipts(on: boolean) {
     expect(await this.call({ type: 'setReadReceipts', on }), 'ok')
+  }
+
+  async setCallStats(on: boolean) {
+    expect(await this.call({ type: 'setCallStats', on }), 'ok')
+  }
+
+  /** Counts a call for the opt-in statistics; never throws. */
+  recordCall(kind: 'direct' | 'group', connected: boolean, setupMs?: number) {
+    void this.call({ type: 'recordCall', kind, connected, setupMs })
   }
 
   async setRelayCalls(on: boolean) {

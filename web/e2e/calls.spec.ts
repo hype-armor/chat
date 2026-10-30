@@ -55,6 +55,25 @@ test.describe('calls', () => {
     await alice.evaluate("location.hash = 'diagnostics'")
     await expect(alice.getByTestId('self-test')).toHaveText('passed')
     await expect(alice.getByRole('dialog', { name: 'Call with Bob' })).toBeVisible()
+    // A network change on the caller's side: ICE restarts over the encrypted
+    // signalling, and media keeps coming (FR-CALL-8).
+    const playedTo = () => bob.getByLabel("Alice's video").evaluate((v) => (v as { currentTime: number }).currentTime)
+    await alice.evaluate("dispatchEvent(new Event('online'))")
+    await alice.waitForTimeout(3_000)
+    const before = await playedTo()
+    await expect.poll(playedTo, { timeout: 10_000 }).toBeGreaterThan(before + 2)
+    await expect(alice.locator('.call-status')).toHaveText(/^\d+:\d\d$/)
+
+    // Screen sharing (FR-CALL-7): the same encrypted sender carries the screen.
+    if (browserName === 'chromium') {
+      await alice.getByRole('button', { name: 'Share screen' }).click()
+      await expect(alice.getByRole('button', { name: 'Stop sharing' })).toHaveAttribute('aria-pressed', 'true')
+      const at = await playedTo()
+      await expect.poll(playedTo, { timeout: 10_000 }).toBeGreaterThan(at + 2)
+      await alice.getByRole('button', { name: 'Stop sharing' }).click()
+      await expect(alice.getByRole('button', { name: 'Share screen' })).toHaveAttribute('aria-pressed', 'false')
+    }
+
     const mute = alice.getByRole('button', { name: 'Mute' })
     await mute.click()
     await expect(alice.getByRole('button', { name: 'Unmute' })).toHaveAttribute('aria-pressed', 'true')

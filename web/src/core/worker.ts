@@ -67,6 +67,12 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
     case 'callSignal':
       await engine.callSignal(request.conversationId, request.signal)
       return { type: 'ok' }
+    case 'groupCallJoin':
+      return { type: 'groupCallJoin', ...(await engine.groupCallJoin(request.conversationId, request.callId)) }
+    case 'groupCallStatus':
+      return { type: 'groupCallStatus', call: await engine.groupCallStatus(request.conversationId) }
+    case 'deviceNames':
+      return { type: 'deviceNames', names: engine.deviceNames(request.conversationId) }
     case 'mapInfo':
       return { type: 'mapInfo', info: await mapInfo() }
     case 'tile': {
@@ -112,6 +118,12 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
       return { type: 'ok' }
     case 'setReadReceipts':
       await engine.setReadReceipts(request.on)
+      return { type: 'ok' }
+    case 'setCallStats':
+      await engine.setCallStats(request.on)
+      return { type: 'ok' }
+    case 'recordCall':
+      await engine.recordCall(request.kind, request.connected, request.setupMs)
       return { type: 'ok' }
     case 'setRelayCalls':
       await engine.setRelayCalls(request.on)

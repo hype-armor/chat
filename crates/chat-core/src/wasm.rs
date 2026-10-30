@@ -229,6 +229,7 @@ pub struct CallView {
     pub video: bool,
     #[wasm_bindgen(getter_with_clone, js_name = toDevice)]
     pub to_device: Vec<u8>,
+    pub group: bool,
 }
 
 impl From<Location> for LocationView {
@@ -789,6 +790,7 @@ impl CoreClient {
         candidate: String,
         video: bool,
         to_device: Vec<u8>,
+        group: bool,
         sent_at_ms: f64,
         message_id: Vec<u8>,
     ) -> Result<Vec<u8>, JsError> {
@@ -802,6 +804,7 @@ impl CoreClient {
                 candidate,
                 video,
                 to_device,
+                group,
             }),
             message_id,
         )
@@ -896,6 +899,7 @@ impl CoreClient {
                             candidate: c.candidate,
                             video: c.video,
                             to_device: c.to_device,
+                            group: c.group,
                         })
                     }
                     Some(content::Body::LiveLocation(l)) => {

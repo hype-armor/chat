@@ -38,3 +38,4 @@ revisited; do it with a new ADR that supersedes the old one.
 | [0029](0029-turn-relay.md) | coturn as the one TURN relay; "always relay calls" setting | Accepted |
 | [0030](0030-sframe-call-media.md) | SFrame on call media, keyed from MLS, in the core worker | Accepted |
 | [0031](0031-group-calls-livekit.md) | Group calls: LiveKit rooms per call, tokens for members only | Accepted |
+| [0032](0032-call-statistics.md) | Opt-in, anonymous daily call statistics | Accepted |

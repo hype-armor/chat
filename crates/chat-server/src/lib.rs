@@ -18,6 +18,7 @@ pub mod limits;
 pub mod metrics;
 pub mod push;
 mod reports;
+mod stats;
 pub mod turn;
 mod ws;
 
@@ -164,6 +165,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/push/subscription", post(push::subscribe))
         .route("/v1/push/unsubscribe", post(push::unsubscribe))
         .route("/v1/turn", get(turn::credentials))
+        .route("/v1/stats/calls", post(stats::calls))
         .route("/v1/calls/join", post(calls::join))
         .route("/v1/calls/status", post(calls::status))
         .route("/v1/ws", get(ws::upgrade))

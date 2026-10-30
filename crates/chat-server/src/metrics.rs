@@ -18,6 +18,8 @@ use prometheus_client::{
 
 use crate::AppState;
 
+type Labels = Vec<(&'static str, &'static str)>;
+
 pub struct Metrics {
     registry: Registry,
     /// Time to handle a WebSocket send: checks, queueing, wake-ups.
@@ -27,6 +29,11 @@ pub struct Metrics {
     /// Refused WebSocket sends by status code (400, 403, 429, ...).
     pub send_errors: Family<Vec<(&'static str, String)>, Counter>,
     pub connections: Gauge,
+    /// Call outcomes from clients that opted in (ADR-0032), by `kind`
+    /// (direct, group) and `outcome` (connected, failed).
+    pub calls: Family<Labels, Counter>,
+    /// Time from starting or answering a call to media flowing.
+    pub call_setup_seconds: Family<Labels, Histogram, fn() -> Histogram>,
 }
 
 impl Default for Metrics {
@@ -37,6 +44,12 @@ impl Default for Metrics {
         let delivery_seconds = Histogram::new(buckets());
         let send_errors = Family::default();
         let connections = Gauge::default();
+        let calls = Family::default();
+        // 0.25 s to ~64 s.
+        fn setup_histogram() -> Histogram {
+            Histogram::new(exponential_buckets(0.25, 2.0, 9))
+        }
+        let call_setup_seconds = Family::new_with_constructor(setup_histogram as fn() -> Histogram);
         let mut registry = Registry::with_prefix("chat");
         registry.register(
             "send_seconds",
@@ -58,7 +71,19 @@ impl Default for Metrics {
             "Authenticated WebSocket connections",
             connections.clone(),
         );
+        registry.register(
+            "calls",
+            "Call outcomes reported by clients (opt-in, daily totals)",
+            calls.clone(),
+        );
+        registry.register(
+            "call_setup_seconds",
+            "Time to media flowing, reported by clients (opt-in)",
+            call_setup_seconds.clone(),
+        );
         Self {
+            calls,
+            call_setup_seconds,
             registry,
             send_seconds,
             delivery_seconds,
