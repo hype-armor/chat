@@ -16,6 +16,7 @@ message Content {
     Attachment attachment = 7;
     Location location = 8;
     LiveLocation live_location = 9;
+    Call call = 10;
   }
 }
 
@@ -100,4 +101,28 @@ message LiveLocation {
   // Absent in a stop message.
   Location location = 3;
   bool stopped = 4;
+}
+
+// Call signalling (FR-CALL-1, ADR-0028), end-to-end encrypted like any
+// message so the server can't read or alter SDP and DTLS fingerprints.
+message Call {
+  enum Kind {
+    OFFER = 0;
+    ANSWER = 1;
+    CANDIDATE = 2;
+    HANGUP = 3;
+    DECLINE = 4;
+    BUSY = 5;
+  }
+  // 16 random bytes naming the call.
+  bytes call_id = 1;
+  Kind kind = 2;
+  // Offer and answer.
+  string sdp = 3;
+  // An ICE candidate as JSON (RTCIceCandidateInit).
+  string candidate = 4;
+  // Offer: a video call.
+  bool video = 5;
+  // Answer and candidates: the device (16 bytes) they are meant for.
+  bytes to_device = 6;
 }

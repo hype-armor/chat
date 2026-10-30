@@ -1,7 +1,7 @@
 //! JavaScript bindings used by the web client's core worker.
 
 use chat_proto::v1::{
-    Ack, Attachment, Authenticate, ClientFrame, Content, ContentType, DeviceSync, Envelope,
+    Ack, Attachment, Authenticate, Call, ClientFrame, Content, ContentType, DeviceSync, Envelope,
     GroupInfo, LiveLocation, Location, Ping, Profile, Receipt, SendEnvelope, ServerFrame, Text,
     client_frame, content, receipt, server_frame,
 };
@@ -210,6 +210,25 @@ pub struct EventView {
     pub location: Option<LocationView>,
     #[wasm_bindgen(getter_with_clone)]
     pub live: Option<LiveLocationView>,
+    #[wasm_bindgen(getter_with_clone)]
+    pub call: Option<CallView>,
+}
+
+/// A `Call` signalling message (ADR-0028). `kind`: 0 offer, 1 answer,
+/// 2 candidate, 3 hang up, 4 decline, 5 busy.
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct CallView {
+    #[wasm_bindgen(getter_with_clone, js_name = callId)]
+    pub call_id: Vec<u8>,
+    pub kind: i32,
+    #[wasm_bindgen(getter_with_clone)]
+    pub sdp: String,
+    #[wasm_bindgen(getter_with_clone)]
+    pub candidate: String,
+    pub video: bool,
+    #[wasm_bindgen(getter_with_clone, js_name = toDevice)]
+    pub to_device: Vec<u8>,
 }
 
 impl From<Location> for LocationView {
@@ -265,6 +284,7 @@ impl EventView {
             attachment: None,
             location: None,
             live: None,
+            call: None,
         }
     }
 }
@@ -718,6 +738,36 @@ impl CoreClient {
         )
     }
 
+    /// A call signalling message (ADR-0028). Returns the encoded `Envelope`.
+    #[wasm_bindgen(js_name = sendCall)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn send_call(
+        &mut self,
+        conversation_id: &[u8],
+        call_id: Vec<u8>,
+        kind: i32,
+        sdp: String,
+        candidate: String,
+        video: bool,
+        to_device: Vec<u8>,
+        sent_at_ms: f64,
+        message_id: Vec<u8>,
+    ) -> Result<Vec<u8>, JsError> {
+        self.send(
+            conversation_id,
+            sent_at_ms,
+            content::Body::Call(Call {
+                call_id,
+                kind,
+                sdp,
+                candidate,
+                video,
+                to_device,
+            }),
+            message_id,
+        )
+    }
+
     #[wasm_bindgen(js_name = sendProfile)]
     pub fn send_profile(
         &mut self,
@@ -799,6 +849,16 @@ impl CoreClient {
                     Some(content::Body::DeviceSync(d)) => view.device_sync = Some(d.state),
                     Some(content::Body::Attachment(a)) => view.attachment = Some(a.into()),
                     Some(content::Body::Location(l)) => view.location = Some(l.into()),
+                    Some(content::Body::Call(c)) => {
+                        view.call = Some(CallView {
+                            call_id: c.call_id,
+                            kind: c.kind,
+                            sdp: c.sdp,
+                            candidate: c.candidate,
+                            video: c.video,
+                            to_device: c.to_device,
+                        })
+                    }
                     Some(content::Body::LiveLocation(l)) => {
                         view.live = Some(LiveLocationView {
                             session_id: l.session_id,

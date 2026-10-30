@@ -17,6 +17,7 @@ pub mod limits;
 pub mod metrics;
 pub mod push;
 mod reports;
+pub mod turn;
 mod ws;
 
 use std::{sync::Arc, time::Duration};
@@ -43,6 +44,8 @@ pub struct AppState {
     pub open_registration: bool,
     /// Encrypted attachments (ADR-0023); `None` turns them off.
     pub blobs: Option<Arc<dyn object_store::ObjectStore>>,
+    /// STUN/TURN servers handed to calling clients (ADR-0028).
+    pub turn: Arc<turn::TurnConfig>,
 }
 
 impl AppState {
@@ -51,6 +54,7 @@ impl AppState {
             db,
             open_registration: false,
             blobs: None,
+            turn: Arc::default(),
             hub: hub::Hub::default(),
             push: None,
             limits: limits::Limits::default(),
@@ -61,6 +65,11 @@ impl AppState {
 
     pub fn with_blobs(mut self, store: Arc<dyn object_store::ObjectStore>) -> Self {
         self.blobs = Some(store);
+        self
+    }
+
+    pub fn with_turn(mut self, turn: turn::TurnConfig) -> Self {
+        self.turn = Arc::new(turn);
         self
     }
 
@@ -139,6 +148,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/push/key", get(push::public_key))
         .route("/v1/push/subscription", post(push::subscribe))
         .route("/v1/push/unsubscribe", post(push::unsubscribe))
+        .route("/v1/turn", get(turn::credentials))
         .route("/v1/ws", get(ws::upgrade))
         .with_state(state)
 }

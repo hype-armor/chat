@@ -127,6 +127,8 @@ export const api = {
   unsubscribePush: (token: string) => post<void>('/v1/push/unsubscribe', {}, token),
   groupEpoch: (token: string, groupId: string) =>
     post<{ epoch: number; last_commit_hash: string }>('/v1/groups/epoch', { group_id: groupId }, token),
+  iceServers: (token: string) =>
+    get<{ ice_servers: { urls: string[]; username?: string; credential?: string }[] }>('/v1/turn', token),
   devices: (token: string) => get<{ devices: ServerDevice[] }>('/v1/devices', token),
   devicesOf: (token: string, accountIds: string[]) =>
     post<{ devices: Record<string, string[]> }>('/v1/devices/of', { account_ids: accountIds }, token),

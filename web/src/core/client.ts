@@ -18,6 +18,8 @@ import type {
   SafetyNumber,
   BlockedContact,
   ReportReason,
+  CallSignal,
+  IceServer,
 } from './protocol'
 import type { MapInfo } from './maps'
 import workerUrl from './worker.ts?worker&url'
@@ -169,6 +171,14 @@ export class CoreClient {
   }
 
   /** A new position for every live session; the worker decides what to send. */
+  async iceServers(): Promise<IceServer[]> {
+    return expect(await this.call({ type: 'iceServers' }), 'iceServers').servers
+  }
+
+  async callSignal(conversationId: string, signal: CallSignal) {
+    expect(await this.call({ type: 'callSignal', conversationId, signal }), 'ok')
+  }
+
   async liveUpdate(location: LocationInfo) {
     expect(await this.call({ type: 'liveUpdate', location }), 'ok')
   }

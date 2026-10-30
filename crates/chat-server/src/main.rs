@@ -107,6 +107,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState::new(db)
         .with_blobs(blobs)
         .with_open_registration(config.open_registration)
+        .with_turn(config.turn.clone())
         .with_push(push)
         .with_limits(config.limits.clone());
     if let Some(addr) = config.metrics_bind {

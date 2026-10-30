@@ -108,6 +108,30 @@ screen; avatars and times in the chat list; conversation actions on their own
 row on phones; readable text and links on our own bubbles; opened photos no
 longer dimmed; round icon buttons in the composer.
 
+## 2.3 Phase 3 checklist (2026-10-30)
+
+Calling; exit: call success ≥ 99%. Worked in this order; tick items as
+their PRs merge.
+
+1. [x] 1:1 voice and video calls, peer to peer: ringing, answer, decline,
+   hang up, mute and camera, missed-call notices; signalling as MLS
+   messages; STUN/TURN credentials from the server (FR-CALL-1/4/5).
+2. [ ] coturn in docker compose, k3s and Helm, and an "always relay calls"
+   setting to hide IP addresses (FR-CALL-9).
+3. [ ] SFrame on 1:1 calls, keyed from the MLS exporter (FR-CALL-3,
+   ADR-0006); refuse to call without encoded transforms.
+4. [ ] Echo bot call mode: it answers and sends your audio and video back.
+5. [ ] Group calls through LiveKit with SFrame: server-issued room tokens,
+   join and leave an ongoing call, up to 16 video tiles (FR-CALL-2/3/6).
+6. [ ] Call quality: switching camera and audio output, ICE restart on
+   network change, adaptive quality (FR-CALL-4/8).
+7. [ ] Screen sharing (FR-CALL-7, could).
+8. [ ] Call metrics for the exit criterion (success rate, setup time),
+   and the Phase 0 spike (d): an SFrame 3-party call across all three
+   browsers.
+
+**Exit:** call success ≥ 99%.
+
 **Phase 0 spikes still open** (block later phases, not Phase 1): (b)
 SQLite3MultipleCiphers on OPFS (deferred; IndexedDB snapshots suffice for
 now); (c) phone-hotspot QR WebRTC test (needs two physical phones); (d)

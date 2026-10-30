@@ -49,10 +49,36 @@ export default defineConfig({
       : []),
   ],
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    {
+      name: 'chromium',
+      use: {
+        ...devices['Desktop Chrome'],
+        // Calls: a fake camera and microphone, and plain host candidates
+        // (not mDNS names) between two pages on one machine.
+        launchOptions: {
+          args: [
+            '--use-fake-device-for-media-stream',
+            '--use-fake-ui-for-media-stream',
+            '--disable-features=WebRtcHideLocalIpsWithMdns',
+          ],
+        },
+      },
+    },
     ...(all
       ? [
-          { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
+          {
+            name: 'firefox',
+            use: {
+              ...devices['Desktop Firefox'],
+              launchOptions: {
+                firefoxUserPrefs: {
+                  'media.navigator.streams.fake': true,
+                  'media.navigator.permission.disabled': true,
+                  'media.peerconnection.ice.obfuscate_host_addresses': false,
+                },
+              },
+            },
+          },
           { name: 'webkit', use: { ...devices['Desktop Safari'] } },
         ]
       : []),

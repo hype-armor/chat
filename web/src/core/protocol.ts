@@ -170,6 +170,32 @@ export type ChatMessage = {
   live?: LiveInfo
 }
 
+/** Call signalling (ADR-0028); `candidate` is an RTCIceCandidateInit as JSON. */
+export type CallKind = 'offer' | 'answer' | 'candidate' | 'hangup' | 'decline' | 'busy'
+
+export type CallSignal = {
+  callId: string
+  kind: CallKind
+  sdp?: string
+  candidate?: string
+  /** Offers: a video call. */
+  video?: boolean
+  /** Answers and candidates: the device (hex) they are for. */
+  toDevice?: string
+}
+
+/** A signal for the call screen, from the other person or another of our devices. */
+export type IncomingCallSignal = CallSignal & {
+  conversationId: string
+  title: string
+  /** The sender's device (hex), to address answers and candidates to. */
+  fromDevice: string
+  /** Sent from another of this user's devices: answered or declined there. */
+  elsewhere?: boolean
+}
+
+export type IceServer = { urls: string[]; username?: string; credential?: string }
+
 export type CoreStatus = { version: string; selfTest: boolean }
 export type BenchResult = { members: number; setupMs: number; commitMs: number; commitBytes: number }
 
@@ -193,6 +219,8 @@ export type CoreRequest =
   | { type: 'startLive'; conversationId: string; durationMs: number; location: LocationInfo }
   | { type: 'liveUpdate'; location: LocationInfo }
   | { type: 'stopLive'; conversationId: string }
+  | { type: 'iceServers' }
+  | { type: 'callSignal'; conversationId: string; signal: CallSignal }
   | { type: 'mapInfo' }
   | { type: 'tile'; z: number; x: number; y: number }
   | { type: 'sendFile'; conversationId: string; file: File; caption: string; media?: MediaInfo }
@@ -236,6 +264,7 @@ export type CoreResponseBody =
   | { type: 'conversation'; conversationId: string }
   | { type: 'messages'; messages: ChatMessage[] }
   | { type: 'file'; blob: Blob }
+  | { type: 'iceServers'; servers: IceServer[] }
   | { type: 'mapInfo'; info: MapInfo }
   | { type: 'tile'; data?: Uint8Array<ArrayBuffer> }
   | { type: 'members'; members: MemberInfo[] }
@@ -257,6 +286,8 @@ export type CoreEvent =
   | { type: 'messages'; conversationId: string }
   /** An attachment upload or download moved on (ADR-0025). */
   | { type: 'progress'; conversationId: string; messageId: string; done: number; total: number }
+  /** Call signalling for the call screen (ADR-0028). */
+  | { type: 'call'; signal: IncomingCallSignal }
 
 export type RequestEnvelope = { id: number; request: CoreRequest }
 /** `id` 0 carries an unsolicited event. */

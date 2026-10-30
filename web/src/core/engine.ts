@@ -4,6 +4,7 @@
 
 import init, {
   AttachmentView,
+  type CallView,
   CoreClient,
   type LiveLocationView,
   PendingClient,
@@ -66,7 +67,9 @@ import {
 } from './keys'
 import type {
   AppView,
+  CallSignal,
   ChatMessage,
+  IceServer,
   ConnectionState,
   CoreEvent,
   FileInfo,
@@ -84,6 +87,7 @@ import { DEFAULT_MEDIA, autoDownloads, onMobileData } from './policy'
 import * as transfers from './transfers'
 import { safeLocation } from './maps'
 import { LIVE_DURATIONS_MS, plausibleExpiry, updateDue } from './live'
+import { CALL_KINDS, type CallEnd, type CallRecord, GIVE_UP_MS, STALE_OFFER_MS, callNotice, safeSignalText } from './calls'
 import { acceptsGroupInfo, designatedCommitter, parseAdmins } from './roles'
 import { SecureStore } from './storage'
 
@@ -273,6 +277,9 @@ export class Engine {
   private liveTimer?: ReturnType<typeof setInterval>
   /** The page's latest position while this device shares. */
   private liveFix?: LocationInfo
+  /** Calls ringing or running, by call id (ADR-0028); not kept across restarts. */
+  private calls = new Map<string, CallRecord>()
+  private callTimer?: ReturnType<typeof setInterval>
   /** Downloads under way, by message id. */
   private downloads = new Map<string, Promise<Blob>>()
   private nextRequestId = 1
@@ -1560,6 +1567,145 @@ export class Engine {
     void this.flushOutbox()
   }
 
+  // ---- calls (ADR-0028) ----------------------------------------------------
+
+  /** STUN and TURN servers for a call, with fresh TURN credentials. */
+  async iceServers(): Promise<IceServer[]> {
+    const { ice_servers } = await api.iceServers(this.ready().account.token)
+    return ice_servers
+  }
+
+  /**
+   * Sends a signal from the call screen. Offers wake the other person's
+   * devices; everything else is silent. Candidates and busy go only to the
+   * device they are for; the rest reach every device in the conversation,
+   * so this user's other devices stop ringing once one of them answers.
+   */
+  async callSignal(conversationId: string, signal: CallSignal) {
+    const conv = this.group(conversationId)
+    if (conv.status || conv.self || conv.peers.length !== 1) throw new Error('Calls work in one-to-one chats')
+    if (this.state.blocked.includes(conv.peers[0])) throw new Error('Unblock this contact to call them')
+    if (this.connection !== 'online') throw new Error("You're offline")
+    const kind = CALL_KINDS.indexOf(signal.kind)
+    if (kind < 0) throw new Error('Unknown call signal')
+    await this.exclusive(async () => {
+      const { core } = this.ready()
+      const messageId = randomId()
+      const now = Date.now()
+      const envelope = core.sendCall(
+        fromHex(conversationId),
+        fromHex(signal.callId),
+        kind,
+        signal.sdp ?? '',
+        signal.candidate ?? '',
+        signal.video ?? false,
+        signal.toDevice ? fromHex(signal.toDevice) : new Uint8Array(),
+        now,
+        messageId,
+      )
+      const direct = signal.toDevice && (signal.kind === 'candidate' || signal.kind === 'busy')
+      this.state.outbox.push({
+        messageId: toHex(messageId),
+        conversationId,
+        envelope: toBase64(envelope),
+        recipients: direct ? [signal.toDevice!] : this.recipients(conversationId),
+        silent: signal.kind !== 'offer',
+      })
+      await this.trackCall(conversationId, signal, true, true, now)
+      await this.persist()
+    })
+    void this.flushOutbox()
+  }
+
+  /** A signal from the other person or another of our devices (under the lock). */
+  private async applyCall(conv: Conversation, mine: boolean, device: string, sentAt: number, signal: CallSignal) {
+    const now = Date.now()
+    const thisDevice = deviceHex(this.ready().account.deviceId)
+    const forThis = !signal.toDevice || signal.toDevice === thisDevice
+    const known = this.calls.get(signal.callId)
+    if (known && known.conversationId !== conv.id) return
+    if (signal.kind === 'offer' && known) return
+    if (signal.kind !== 'offer' && !known) return
+    if ((signal.kind === 'candidate' || signal.kind === 'busy') && !forThis) return
+    const outgoing = known?.outgoing ?? mine
+    await this.trackCall(conv.id, signal, mine, false, now)
+    if (signal.kind === 'offer' && !mine && (now - sentAt > STALE_OFFER_MS || conv.request)) {
+      // Delivered too late to ring, or from someone not accepted yet.
+      await this.endCall(signal.callId, 'timeout', false)
+      return
+    }
+    // Calls placed on another of our devices are that device's business;
+    // for calls to us, our other devices' answers stop the ringing here.
+    if (outgoing && mine) return
+    if (!mine && !forThis) return
+    this.emit({
+      type: 'call',
+      signal: { ...signal, conversationId: conv.id, title: this.title(conv), fromDevice: device, elsewhere: mine },
+    })
+  }
+
+  /** Keeps the call log up to date with a signal sent or received (under the lock). */
+  private async trackCall(conversationId: string, signal: CallSignal, mine: boolean, here: boolean, now: number) {
+    const call = this.calls.get(signal.callId)
+    if (signal.kind === 'offer') {
+      if (call) return
+      this.calls.set(signal.callId, { conversationId, outgoing: mine, video: !!signal.video, startedAt: now })
+      this.callTimer ??= setInterval(() => void this.sweepCalls(), 15_000)
+      return
+    }
+    if (!call) return
+    if (signal.kind === 'answer') {
+      call.answeredAt ??= now
+      if (mine && !here && !call.outgoing) call.elsewhere = 'answered'
+    } else if (signal.kind === 'decline') {
+      if (mine && !here && !call.outgoing) call.elsewhere = 'declined'
+      await this.endCall(signal.callId, 'decline', mine)
+    } else if (signal.kind === 'hangup' || signal.kind === 'busy') {
+      await this.endCall(signal.callId, signal.kind, mine)
+    }
+  }
+
+  /** Leaves a notice for a call that ended (under the lock). */
+  private async endCall(callId: string, end: CallEnd, byMe: boolean) {
+    const call = this.calls.get(callId)
+    if (!call) return
+    this.calls.delete(callId)
+    const conv = this.state.conversations[call.conversationId]
+    if (!conv) return
+    const now = Date.now()
+    const { text, missed } = callNotice(call, end, byMe, now)
+    await this.appendMessage(call.conversationId, {
+      id: toHex(randomId()),
+      from: '',
+      kind: 'notice',
+      text,
+      sentAt: now,
+      status: 'received',
+    })
+    if (missed) {
+      conv.unread = (conv.unread ?? 0) + 1
+      conv.lastText = text
+      conv.lastAt = Math.max(conv.lastAt, now)
+      this.emitView()
+    }
+  }
+
+  /** Unanswered calls nobody hung up end as missed. */
+  private async sweepCalls() {
+    const now = Date.now()
+    const due = [...this.calls].filter(([, c]) => c.answeredAt === undefined && now - c.startedAt > GIVE_UP_MS)
+    if (due.length > 0) {
+      await this.exclusive(async () => {
+        for (const [id] of due) await this.endCall(id, 'timeout', false)
+        await this.persist()
+      })
+    }
+    if (this.calls.size === 0) {
+      clearInterval(this.callTimer)
+      this.callTimer = undefined
+    }
+  }
+
   /** Moves the point shown on a live message (under the lock). */
   private async setLivePoint(conversationId: string, messageId: string, latest: LocationInfo & { at: number }) {
     const list = await this.stored(conversationId)
@@ -2174,6 +2320,17 @@ export class Engine {
         if (admins.length > 0) conv.admins = admins
         this.emitView()
       }
+      const callView = event.call
+      if (callView) {
+        const signal = parseCall(callView)
+        callView.free()
+        const oneToOne = conv && !conv.status && !conv.self && conv.peers.length === 1
+        if (signal && oneToOne && !this.state.blocked.includes(from)) {
+          const device = toHex(splitIdentity(event.sender).device)
+          await this.applyCall(conv, mine, device, event.sentAtMs, signal)
+        }
+        return
+      }
       const live = event.live
       if (live) {
         if (!conv?.status && !this.state.blocked.includes(from)) {
@@ -2548,6 +2705,24 @@ export class Engine {
   private emitView() {
     this.emit({ type: 'view', view: this.view() })
   }
+}
+
+/** A call signal from a message, if well formed. */
+function parseCall(view: CallView): CallSignal | undefined {
+  const kind = CALL_KINDS[view.kind]
+  if (!kind || view.callId.length !== 16) return undefined
+  const signal: CallSignal = { callId: toHex(view.callId), kind }
+  if (kind === 'offer' || kind === 'answer') {
+    signal.sdp = safeSignalText(view.sdp, 64 * 1024)
+    if (!signal.sdp) return undefined
+  }
+  if (kind === 'candidate') {
+    signal.candidate = safeSignalText(view.candidate, 4 * 1024)
+    if (!signal.candidate) return undefined
+  }
+  if (kind === 'offer') signal.video = view.video
+  if (view.toDevice.length === 16) signal.toDevice = toHex(view.toDevice)
+  return signal
 }
 
 export function describeError(e: unknown): string {
