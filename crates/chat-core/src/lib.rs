@@ -4,6 +4,7 @@
 //! browser worker (`--features wasm`). See docs/03-architecture.md §3.
 
 pub mod attachment;
+pub mod call;
 pub mod client;
 pub mod envelope;
 pub mod mls;

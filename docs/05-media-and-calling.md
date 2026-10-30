@@ -71,8 +71,10 @@ DTLS). So we add an **inner frame-level encryption layer**:
   in Safari/Firefox, encoded insertable streams in Chromium; feature-detect
   and refuse to join a group call unencrypted).
 - **Keys**: derived from the conversation's MLS group via the MLS *exporter*
-  (`MLS-Exporter("call", call_id, 32)`); each sender gets its own key ID.
-  When membership changes, the MLS epoch advances and call keys rotate.
+  (`MLS-Exporter("chat call sframe", call_id, 32)`); each sender gets its
+  own key ID (RFC 9605 §5.2). When membership changes, the MLS epoch
+  advances and call keys rotate. Frames are encrypted in the core worker,
+  never on the page; details in ADR-0030.
 - The SFU sees only RTP headers + minimal metadata needed for routing
   (and SFrame headers), never media content.
 

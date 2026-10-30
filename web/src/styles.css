@@ -208,6 +208,12 @@ form {
   display: none;
 }
 
+.messages-viewport {
+  min-height: 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
 .messages {
   list-style: none;
   margin: 0;
@@ -215,8 +221,19 @@ form {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  overflow-y: auto;
-  flex: 1;
+}
+
+.new-messages {
+  position: relative;
+}
+
+.new-messages button {
+  position: absolute;
+  bottom: 0.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  border-radius: 2rem;
+  white-space: nowrap;
 }
 
 .messages li {

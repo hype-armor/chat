@@ -18,15 +18,33 @@ import type {
   SafetyNumber,
   BlockedContact,
   ReportReason,
+  MediaEnvelope,
   CallSignal,
   IceServer,
 } from './protocol'
 import type { MapInfo } from './maps'
+import type { MediaTransformOptions } from './media'
+
+/** Chromium's encoded insertable streams (before RTCRtpScriptTransform). */
+type EncodedStreamsTarget = { createEncodedStreams(): { readable: ReadableStream; writable: WritableStream } }
+
+/** Chromium's older API, used wherever it exists. */
+export function useEncodedStreams(): boolean {
+  return typeof RTCRtpSender !== 'undefined' && 'createEncodedStreams' in RTCRtpSender.prototype
+}
+
+/** Whether this browser can put call media through SFrame (ADR-0030). */
+export function canEncryptCalls(): boolean {
+  return (
+    typeof RTCRtpScriptTransform !== 'undefined' ||
+    (typeof RTCRtpSender !== 'undefined' && 'createEncodedStreams' in RTCRtpSender.prototype)
+  )
+}
 import workerUrl from './worker.ts?worker&url'
 
 /** The subset of `Worker` the client uses, so tests can substitute a fake. */
 export interface WorkerLike {
-  postMessage(message: unknown): void
+  postMessage(message: unknown, transfer?: Transferable[]): void
   addEventListener(type: 'message', listener: (event: MessageEvent<ResponseEnvelope>) => void): void
 }
 
@@ -282,6 +300,20 @@ export class CoreClient {
 
   async bench(members: number): Promise<BenchResult> {
     return expect(await this.call({ type: 'bench', members }), 'bench').result
+  }
+
+  /**
+   * Routes an RTP sender's or receiver's encoded frames through the core
+   * worker, which SFrame-encrypts or decrypts them (ADR-0030).
+   */
+  protectMedia(target: RTCRtpSender | RTCRtpReceiver, options: MediaTransformOptions) {
+    if (!useEncodedStreams()) {
+      target.transform = new RTCRtpScriptTransform(this.worker as Worker, options)
+      return
+    }
+    const streams = (target as unknown as EncodedStreamsTarget).createEncodedStreams()
+    const message: MediaEnvelope = { media: options, readable: streams.readable, writable: streams.writable }
+    this.worker.postMessage(message, [streams.readable, streams.writable] as unknown as Transferable[])
   }
 
   private call(request: CoreRequest): Promise<CoreResponseBody> {
