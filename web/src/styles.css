@@ -301,6 +301,161 @@ form {
   min-width: 0;
 }
 
+.conversation-shell {
+  display: flex;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  container-type: inline-size;
+}
+
+.conversation-shell > .conversation {
+  flex: 1;
+}
+
+.conversation-details {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 min(22rem, 50%);
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.details-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.details-head h2 {
+  margin: 0;
+  font-size: 1rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.details-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+
+.details-content > .group-info {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 auto;
+}
+
+.details-identity {
+  display: grid;
+  justify-items: center;
+  gap: 0.75rem;
+  padding: 1rem;
+  text-align: center;
+}
+
+.details-name,
+.conversation-details .actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.conversation-details h3 {
+  margin: 0;
+}
+
+.conversation-details .member-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  flex: 1 1 4rem;
+  min-width: 0;
+}
+
+.conversation-details .member-name > span:first-child {
+  flex-basis: 100%;
+}
+
+.conversation-details .member-name .badge {
+  margin-left: 0;
+  white-space: nowrap;
+}
+
+.details-members {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.conversation-details .members li {
+  padding-block: 0.375rem;
+  flex-wrap: wrap;
+}
+
+.conversation-details .add-member {
+  text-align: left;
+}
+
+.details-danger {
+  display: grid;
+  justify-items: start;
+  gap: 0.75rem;
+  padding: 1rem;
+  border-top: 1px solid var(--border);
+  margin-top: auto;
+}
+
+.conversation-details .qr {
+  max-width: 100%;
+}
+
+.conversation-details .verify,
+.conversation-details .report,
+.conversation-details .rename,
+.conversation-details .add-people {
+  min-width: 0;
+}
+
+@container (max-width: 40rem) {
+  .details-open .conversation-bar,
+  .details-open .header-actions,
+  .details-open .composer {
+    flex-wrap: wrap;
+  }
+
+  .details-open .title-row {
+    flex-basis: 100%;
+  }
+
+  .details-open .composer textarea {
+    flex-basis: 100%;
+    order: -1;
+  }
+}
+
+@media (max-width: 40rem) {
+  .details-open > .conversation {
+    visibility: hidden;
+  }
+
+  .conversation-details {
+    position: absolute;
+    inset: 0;
+    border-left: 0;
+  }
+}
+
 .back {
   display: none;
 }
