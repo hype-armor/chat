@@ -1044,6 +1044,8 @@ button.link.danger {
 @container (max-width: 40rem) {
   .details-open .file-card {
     grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 0.5rem;
+    padding: 0.5rem;
   }
 
   .details-open .file-download {

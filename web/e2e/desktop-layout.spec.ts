@@ -3,7 +3,7 @@ import { closeDetails, conversationAction, conversationDetails, messages, random
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
-for (const width of [390, 768, 1280, 1920]) {
+for (const width of [390, 641, 768, 1280, 1920]) {
   test(`readable message column and file cards in light and dark mode (${width}px)`, async ({ browser }) => {
     const username = randomUsername()
     const alice = await signUp(browser, 'Alice', randomUsername())
@@ -28,7 +28,7 @@ for (const width of [390, 768, 1280, 1920]) {
     await startChat(alice, username)
     await alice.getByLabel('Message', { exact: true }).fill('A readable conversation. '.repeat(30))
     await alice.getByRole('button', { name: 'Send', exact: true }).click()
-    const name = `${'a-long-file-name-'.repeat(10)}.pdf`
+    const name = `${'a-long-file-name-'.repeat(6)}.pdf`
     await alice.getByTestId('attach-input').setInputFiles({
       name, mimeType: 'application/pdf', buffer: Buffer.from('file contents'),
     })

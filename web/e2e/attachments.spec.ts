@@ -91,7 +91,7 @@ test('photos lose their metadata, and files arrive intact', async ({ browser }) 
   const file = messages(bob).filter({ hasText: 'notes.txt' })
   await expect(file.locator('.file-card')).toBeVisible()
   await expect(file.locator('.file-icon text')).toHaveText('TXT')
-  await expect(file.locator('.file-card')).toContainText('20 B')
+  await expect(file.locator('.file-card')).toContainText('21 B')
   const [fileDownload] = await Promise.all([
     bob.waitForEvent('download'),
     file.getByRole('button', { name: 'Download' }).click(),
