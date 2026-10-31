@@ -1206,11 +1206,6 @@ button.icon[aria-pressed='true'] {
   color: var(--muted);
 }
 
-.conversation-search.subtle:not(:focus-within) {
-  border-color: transparent;
-  background: transparent;
-}
-
 .conversation-search input {
   min-width: 0;
   padding: 0.375rem 0;

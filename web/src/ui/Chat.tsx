@@ -340,7 +340,9 @@ function ConversationBrowser({
   onNewChat: () => void
   onInvite: () => void
 }) {
-  const [query, setQuery] = useState('')
+  const [search, setQuery] = useState('')
+  const showSearch = conversations.length >= 6
+  const query = showSearch ? search : ''
   const input = useRef<HTMLInputElement>(null)
   const nav = useRef<HTMLElement>(null)
   const { busy, error, run } = useAction()
@@ -353,6 +355,10 @@ function ConversationBrowser({
     setQuery('')
     input.current?.focus()
   }
+
+  useEffect(() => {
+    if (!showSearch) setQuery('')
+  }, [showSearch])
 
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
@@ -398,7 +404,7 @@ function ConversationBrowser({
         }
       }}
     >
-      <div className={`conversation-search ${conversations.length < 6 ? 'subtle' : ''}`}>
+      {showSearch && <div className="conversation-search">
         <span aria-hidden="true">🔍</span>
         <input
           ref={input}
@@ -412,7 +418,7 @@ function ConversationBrowser({
           spellCheck={false}
         />
         {query && <button type="button" className="icon" aria-label="Clear search" onClick={clear}>×</button>}
-      </div>
+      </div>}
       {requests.length > 0 && (
         <details key={filtering ? 'filtered' : 'all'} className="message-requests" open={filtering ? true : undefined}>
           <summary>Message requests ({requests.length})</summary>
