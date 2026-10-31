@@ -117,6 +117,88 @@ form {
   padding: 2rem 1rem;
 }
 
+.onboarding-card {
+  width: calc(100% - 2rem);
+  margin: clamp(1rem, 6vh, 4rem) auto 0;
+  padding: 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--surface);
+}
+
+.onboarding-brand {
+  margin-bottom: 1.5rem;
+  text-align: center;
+}
+
+.onboarding-brand h1 {
+  margin: 0.5rem 0;
+  font-size: 1.75rem;
+}
+
+.onboarding-brand p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.onboarding-card form {
+  gap: 1rem;
+}
+
+.onboarding-field {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.onboarding-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 0.5rem;
+}
+
+.onboarding-field p,
+.onboarding-card .error {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.onboarding-card input[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+
+.onboarding-card button,
+.onboarding-card input {
+  min-height: 2.75rem;
+}
+
+.onboarding-alternatives {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+}
+
+.onboarding-alternatives h2 {
+  margin: 0 0 0.25rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 500;
+  text-align: center;
+}
+
+.onboarding-alternatives button {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.onboarding-card + .center button.link {
+  color: var(--muted);
+}
+
 /* Chat layout: two panes on wide screens, one at a time on phones. */
 .chat-layout {
   display: grid;
