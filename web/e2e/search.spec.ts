@@ -24,7 +24,7 @@ test('filters titles and requests locally and opens a keyboard result', async ({
   await alice.getByRole('button', { name: 'Send', exact: true }).click()
   await expect(alice.getByRole('heading', { name: 'Bob', exact: true })).toBeVisible()
 
-  const requests = bob.getByRole('navigation', { name: 'Requests', exact: true })
+  const requests = bob.getByRole('navigation', { name: 'Requests', exact: true, includeHidden: true })
   await expect(requests.getByRole('button', { name: /Álice/, includeHidden: true })).toBeAttached()
   const bobSearch = bob.getByRole('searchbox', { name: 'Search conversations' })
   await expect(bobSearch).toHaveCount(0)
@@ -56,9 +56,9 @@ test('filters titles and requests locally and opens a keyboard result', async ({
   await alice.getByRole('button', { name: 'Settings', exact: true }).focus()
   await alice.keyboard.press('/')
   await expect(search).toBeFocused()
-  await search.fill('CAFE')
+  await search.fill('CAFE EQUIPE')
   await expect(rows).toHaveCount(1)
-  await expect(rows.locator('mark')).toHaveText('Café')
+  await expect(rows.locator('mark')).toHaveText('Café Équipe')
   await search.press('ArrowDown')
   await expect(rows).toBeFocused()
   await alice.keyboard.press('Escape')
@@ -107,8 +107,10 @@ test('search stays compact and opens a filtered chat on a phone', async ({ brows
   await alice.getByRole('button', { name: 'Back to conversations', exact: true }).click()
   const search = alice.getByRole('searchbox', { name: 'Search conversations' })
   await expect(search).toHaveCount(0)
-  for (let i = 1; i <= 5; i++) await createGroup(alice, `Phone group ${i}`, ['echo.00'])
-  await alice.getByRole('button', { name: 'Back to conversations', exact: true }).click()
+  for (let i = 1; i <= 5; i++) {
+    await createGroup(alice, `Phone group ${i}`, ['echo.00'])
+    await alice.getByRole('button', { name: 'Back to conversations', exact: true }).click()
+  }
   await search.fill('ECHO')
   const nav = alice.getByRole('navigation', { name: 'Conversations', exact: true })
   await expect(nav.locator('mark')).toHaveText('Echo')
