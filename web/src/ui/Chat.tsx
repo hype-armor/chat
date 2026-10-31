@@ -22,6 +22,7 @@ import { BlockedList, DeleteAccount, ReportForm } from './Safety'
 import { VerificationBadge, Verify } from './Verify'
 import { type NotificationState, enableNotifications, notificationState, refreshSubscription } from '../notifications'
 import { useVisualViewport } from './useVisualViewport'
+import { filterConversations, highlightTitle, normalizeSearch, searchUsername } from './conversationSearch'
 
 type Ready = Extract<AppView, { phase: 'ready' }>
 
@@ -112,9 +113,6 @@ export function Chat({
     setPanel('chats')
     sidebar.current?.querySelector<HTMLButtonElement>('[aria-label="New chat"]')?.focus()
   }
-  const requests = view.conversations.filter((c) => c.request)
-  const accepted = view.conversations.filter((c) => !c.request)
-
   return (
     <>
       <LiveBanner core={core} sharing={view.liveSharing} />
@@ -215,31 +213,14 @@ export function Chat({
           ) : (
             <>
               <SetupBanner setup={setup} />
-              <nav aria-label="Conversations" className="conversation-nav">
-                {requests.length > 0 && (
-                  <details className="message-requests">
-                    <summary>Message requests ({requests.length})</summary>
-                    <nav aria-label="Requests">
-                      <ConversationList conversations={requests} selected={selected} onSelect={select} />
-                    </nav>
-                  </details>
-                )}
-                <ConversationList conversations={accepted} selected={selected} onSelect={select} />
-                {accepted.length === 0 && (
-                  <div className="empty">
-                    <p className="muted">No conversations yet</p>
-                    <button type="button" onClick={() => setPanel('chat')}>
-                      Start a chat
-                    </button>
-                    <p className="muted small">
-                      Not here yet?{' '}
-                      <button type="button" className="link" onClick={() => setPanel('settings')}>
-                        Invite someone
-                      </button>
-                    </p>
-                  </div>
-                )}
-              </nav>
+              <ConversationBrowser
+                core={core}
+                conversations={view.conversations}
+                selected={selected}
+                onSelect={select}
+                onNewChat={() => setPanel('chat')}
+                onInvite={() => setPanel('settings')}
+              />
             </>
           )}
         </aside>
@@ -344,14 +325,137 @@ function formatWhen(at: number): string {
     : d.toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
 
+function ConversationBrowser({
+  core,
+  conversations,
+  selected,
+  onSelect,
+  onNewChat,
+  onInvite,
+}: {
+  core: CoreClient
+  conversations: ConversationSummary[]
+  selected?: string
+  onSelect: (id: string) => void
+  onNewChat: () => void
+  onInvite: () => void
+}) {
+  const [query, setQuery] = useState('')
+  const input = useRef<HTMLInputElement>(null)
+  const nav = useRef<HTMLElement>(null)
+  const { busy, error, run } = useAction()
+  const filtering = normalizeSearch(query.trim()).length > 0
+  const results = filterConversations(conversations, query)
+  const requests = results.filter((c) => c.request)
+  const accepted = results.filter((c) => !c.request)
+  const username = searchUsername(query)
+  const clear = () => {
+    setQuery('')
+    input.current?.focus()
+  }
+
+  useEffect(() => {
+    const shortcut = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || !window.matchMedia('(min-width: 40.001rem)').matches) return
+      const target = event.target instanceof Element ? event.target : null
+      const editing = target?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')
+      const slash = event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey && !editing
+      const commandK = event.key.toLowerCase() === 'k' && (event.ctrlKey || event.metaKey) && !event.altKey
+      if ((!slash && !commandK) || !input.current?.getClientRects().length) return
+      event.preventDefault()
+      input.current.focus()
+      input.current.select()
+    }
+    document.addEventListener('keydown', shortcut)
+    return () => document.removeEventListener('keydown', shortcut)
+  }, [])
+
+  return (
+    <nav
+      aria-label="Conversations"
+      className="conversation-nav"
+      ref={nav}
+      onKeyDown={(event) => {
+        if (event.nativeEvent.isComposing || event.altKey || event.ctrlKey || event.metaKey) return
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          clear()
+          return
+        }
+        const rows = Array.from(nav.current?.querySelectorAll<HTMLButtonElement>('.conversations button') ?? [])
+          .filter((row) => row.getClientRects().length > 0)
+        const index = rows.indexOf(event.target as HTMLButtonElement)
+        if (event.target !== input.current && index === -1) return
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          event.preventDefault()
+          const next = index === -1
+            ? (event.key === 'ArrowDown' ? 0 : rows.length - 1)
+            : (index + (event.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length
+          rows[next]?.focus()
+        } else if (event.key === 'Enter' && event.target === input.current && rows.length > 0) {
+          event.preventDefault()
+          rows[0].click()
+        }
+      }}
+    >
+      <div className={`conversation-search ${conversations.length < 6 ? 'subtle' : ''}`}>
+        <span aria-hidden="true">🔍</span>
+        <input
+          ref={input}
+          type="search"
+          aria-label="Search conversations"
+          placeholder="Search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          autoComplete="off"
+          autoCapitalize="none"
+          spellCheck={false}
+        />
+        {query && <button type="button" className="icon" aria-label="Clear search" onClick={clear}>×</button>}
+      </div>
+      {requests.length > 0 && (
+        <details key={filtering ? 'filtered' : 'all'} className="message-requests" open={filtering ? true : undefined}>
+          <summary>Message requests ({requests.length})</summary>
+          <nav aria-label="Requests">
+            <ConversationList conversations={requests} selected={selected} onSelect={onSelect} query={query} />
+          </nav>
+        </details>
+      )}
+      <ConversationList conversations={accepted} selected={selected} onSelect={onSelect} query={query} />
+      {filtering && results.length === 0 ? (
+        <div className="empty search-empty">
+          <p className="muted" role="status">No chats match "{query.trim()}"</p>
+          {username && (
+            <button type="button" disabled={busy} onClick={() => run(async () => onSelect(await core.startChat(username)))}>
+              Start a chat with {username}
+            </button>
+          )}
+          {error && <p role="alert" className="error">{error}</p>}
+        </div>
+      ) : !filtering && accepted.length === 0 && (
+        <div className="empty">
+          <p className="muted">No conversations yet</p>
+          <button type="button" onClick={onNewChat}>Start a chat</button>
+          <p className="muted small">
+            Not here yet?{' '}
+            <button type="button" className="link" onClick={onInvite}>Invite someone</button>
+          </p>
+        </div>
+      )}
+    </nav>
+  )
+}
+
 function ConversationList({
   conversations,
   selected,
   onSelect,
+  query,
 }: {
   conversations: ConversationSummary[]
   selected?: string
   onSelect: (id: string) => void
+  query: string
 }) {
   return (
     <ul className="conversations">
@@ -360,7 +464,9 @@ function ConversationList({
           <button type="button" className={c.id === selected ? 'active' : ''} onClick={() => onSelect(c.id)}>
             <Avatar name={c.title} id={c.peer ?? c.id} />
             <span className="title">
-              {c.title}
+              {highlightTitle(c.title, query).map((part, index) =>
+                part.match ? <mark key={index}>{part.text}</mark> : part.text,
+              )}
               {c.unread > 0 && (
                 <span className="badge small unread" aria-label={`${c.unread} unread`}>
                   {c.unread}

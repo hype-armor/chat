@@ -1194,6 +1194,48 @@ button.icon[aria-pressed='true'] {
 }
 
 /* Conversation list: avatar, name and time, then the preview. */
+.conversation-search {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0.5rem 0.75rem;
+  padding: 0 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--bg);
+  color: var(--muted);
+}
+
+.conversation-search.subtle:not(:focus-within) {
+  border-color: transparent;
+  background: transparent;
+}
+
+.conversation-search input {
+  min-width: 0;
+  padding: 0.375rem 0;
+  border: 0;
+  background: transparent;
+}
+
+.conversation-search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.conversation-search .icon {
+  flex: none;
+}
+
+.search-empty {
+  overflow-wrap: anywhere;
+}
+
+.conversations mark {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-radius: 0.125rem;
+}
+
 .conversations button {
   grid-template-columns: auto 1fr auto;
   grid-template-areas:
