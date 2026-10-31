@@ -173,6 +173,11 @@ form {
   min-height: 2.75rem;
 }
 
+.onboarding-card button[type='submit'] {
+  background: var(--mine);
+  color: var(--mine-fg);
+}
+
 .onboarding-alternatives {
   display: grid;
   gap: 0.75rem;
