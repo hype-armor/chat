@@ -46,8 +46,25 @@ export async function createGroup(page: Page, name: string, usernames: string[])
 
 /** Selects a secondary action from the conversation header. */
 export async function conversationAction(page: Page, action: string) {
+  await closeDetails(page)
   await page.getByRole('button', { name: 'Conversation menu', exact: true }).click()
   await page.getByRole('menuitem', { name: action, exact: true }).click()
+}
+
+export const conversationDetails = (page: Page) => page.getByRole('complementary', { name: 'Conversation details' })
+
+export async function closeDetails(page: Page) {
+  const panel = conversationDetails(page)
+  if (await panel.isVisible()) {
+    await panel.getByRole('button', { name: /^(Close details|Back to conversation)$/ }).click()
+    await expect(panel).toBeHidden()
+  }
+}
+
+export async function memberAction(page: Page, name: string, action: 'Verify' | 'Make admin' | 'Remove') {
+  const panel = conversationDetails(page)
+  await panel.getByRole('button', { name: `Actions for ${name}`, exact: true }).click()
+  await panel.getByRole('menuitem', { name: action, exact: true }).click()
 }
 
 /** Opens the Settings screen (backup, devices, privacy…). */
