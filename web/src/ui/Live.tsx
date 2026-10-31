@@ -6,6 +6,7 @@ import type { CoreClient } from '../core/client'
 import type { ChatMessage, LiveInfo } from '../core/protocol'
 import { formatCoordinates } from './Location'
 import { MapView } from './MapView'
+import { useBannerHeight } from './useVisualViewport'
 
 function remaining(expiresAt: number, now: number): string {
   const minutes = Math.max(0, Math.ceil((expiresAt - now) / 60_000))
@@ -32,6 +33,7 @@ export function LiveBanner({
 }) {
   const now = useNow(30_000)
   const active = sharing.length > 0
+  const banner = useBannerHeight<HTMLDivElement>('--live-banner-height', active)
 
   useEffect(() => {
     if (!active || !navigator.geolocation) return
@@ -52,7 +54,7 @@ export function LiveBanner({
 
   if (!active) return null
   return (
-    <div className="live-banner" role="status" aria-label="Sharing live location">
+    <div className="live-banner" ref={banner} role="status" aria-label="Sharing live location">
       {sharing.map((s) => (
         <span key={s.conversationId}>
           📍 Sharing live location with {s.title} · {remaining(s.expiresAt, now)}{' '}

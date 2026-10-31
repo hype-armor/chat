@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { closeSettings, openSettings, randomUsername, signUp } from './support'
+import { closeSettings, messages, openSettings, randomUsername, signUp, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -81,17 +81,142 @@ test.describe('setup reminders and Settings', () => {
   test('fills desktop and mobile viewports and opens diagnostics from Settings', async ({ page }) => {
     await expect(page.getByRole('contentinfo')).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Diagnostics', exact: true })).toHaveCount(0)
-    for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+    for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }, { width: 390, height: 500 }]) {
       await page.setViewportSize(viewport)
-      const bounds = await page.locator('.chat-layout').boundingBox()
-      expect(bounds?.y).toBe(0)
-      expect(bounds?.height).toBe(viewport.height)
-      expect(bounds?.width).toBe(viewport.width)
+      await expect.poll(async () => {
+        const bounds = await page.locator('.chat-layout').boundingBox()
+        return bounds && { top: bounds.y, height: bounds.height, width: bounds.width }
+      }).toEqual({ top: 0, height: viewport.height, width: viewport.width })
     }
     await openSettings(page)
     await page.getByRole('button', { name: 'Diagnostics', exact: true }).click()
     await expect(page.getByTestId('self-test')).toHaveText('passed')
     await page.getByRole('button', { name: '← Back', exact: true }).click()
     await expect(page.getByRole('navigation', { name: 'Settings', exact: true })).toBeVisible()
+  })
+
+  test('keeps the update banner above the fixed chat layout', async ({ page }) => {
+    await page.addInitScript({ content: `
+      Object.defineProperty(navigator.serviceWorker, 'controller', { value: {} });
+      navigator.serviceWorker.register = async () => Object.assign(new EventTarget(), {
+        waiting: { postMessage: () => document.documentElement.dataset.updateActivated = 'yes' },
+      });
+    ` })
+    await page.reload()
+    await expect(page.getByRole('status')).toHaveText('Connected')
+    const banner = page.getByRole('region', { name: 'Update', exact: true })
+    await expect(banner).toBeVisible()
+    for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }, { width: 390, height: 500 }]) {
+      await page.setViewportSize(viewport)
+      await expect.poll(async () => {
+        const update = (await banner.boundingBox())!
+        const layout = (await page.locator('.chat-layout').boundingBox())!
+        return {
+          bannerTop: update.y,
+          layoutBelowBanner: layout.y === update.y + update.height,
+          layoutBottom: layout.y + layout.height,
+        }
+      }).toEqual({ bannerTop: 0, layoutBelowBanner: true, layoutBottom: viewport.height })
+    }
+    await banner.getByRole('button', { name: 'Update now' }).click()
+    await expect(page.locator('html')).toHaveAttribute('data-update-activated', 'yes')
+  })
+
+  test('keeps the conversation inside a panned iOS visual viewport', async ({ page, browser }) => {
+    test.setTimeout(60_000)
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.addInitScript({ content: `
+      Object.defineProperty(window, 'visualViewport', {
+        configurable: true,
+        value: Object.assign(new EventTarget(), { height: 844, offsetTop: 0, scale: 1 }),
+      })
+    ` })
+    await page.reload()
+    await expect(page.getByRole('status')).toHaveText('Connected')
+    const username = randomUsername()
+    await signUp(browser, 'Bob', username)
+    await startChat(page, username)
+    const input = page.getByLabel('Message', { exact: true })
+    for (let i = 0; i < 12; i++) {
+      await input.fill(`Keyboard history ${i}`)
+      await page.getByRole('button', { name: 'Send', exact: true }).click()
+      await expect(messages(page).last()).toContainText(`Keyboard history ${i}`)
+    }
+    await input.focus()
+    const layout = page.locator('.chat-layout')
+    const expectBounds = async (top: number, height: number) => {
+      await expect.poll(async () => {
+        const bounds = await layout.boundingBox()
+        return bounds && { top: bounds.y, height: bounds.height, width: bounds.width }
+      }).toEqual({ top, height, width: 390 })
+    }
+    const changeViewport = async (height: number, offsetTop: number, event: 'resize' | 'scroll') => {
+      await page.evaluate(`
+        Object.assign(window.visualViewport, ${JSON.stringify({ height, offsetTop })});
+        window.visualViewport.dispatchEvent(new Event(${JSON.stringify(event)}));
+      `)
+    }
+    const expectConversationFits = async (top: number, height: number, bannerHeight = 0) => {
+      await expectBounds(top + bannerHeight, height - bannerHeight)
+      await expect.poll(async () => {
+        const header = (await page.locator('.conversation-bar').boundingBox())!
+        const composer = (await page.locator('.composer').boundingBox())!
+        const newest = (await messages(page).last().boundingBox())!
+        return {
+          headerVisible: header.y >= top + bannerHeight && header.y + header.height <= top + height,
+          composerBottom: composer.y + composer.height,
+          newestVisible: newest.y >= header.y + header.height && newest.y + newest.height <= composer.y,
+        }
+      }).toEqual({ headerVisible: true, composerBottom: top + height, newestVisible: true })
+      await expect.poll(() => page.locator('html').evaluate((root) => ({
+        top: root.ownerDocument.scrollingElement!.scrollTop,
+        height: root.ownerDocument.scrollingElement!.scrollHeight,
+      }))).toEqual({ top: 0, height: 844 })
+      await expect(input).toBeFocused()
+    }
+
+    await changeViewport(500, 344, 'resize')
+    await expectConversationFits(344, 500)
+    await expect(layout).toHaveCSS('padding-bottom', '0px')
+    await changeViewport(500, 300, 'scroll')
+    await expectConversationFits(300, 500)
+
+    // Pinch zoom must not resize or move the app.
+    await page.evaluate(`
+      Object.assign(window.visualViewport, { height: 250, offsetTop: 400, scale: 2 });
+      window.visualViewport.dispatchEvent(new Event('resize'));
+    `)
+    await page.evaluate('new Promise(requestAnimationFrame)')
+    await expectBounds(300, 500)
+    await page.evaluate('Object.assign(window.visualViewport, { scale: 1 })')
+    await changeViewport(844, 0, 'resize')
+    await expectConversationFits(0, 844)
+    await expect.poll(() => page.locator('html').evaluate(
+      (root) => root.style.getPropertyValue('--safe-bottom'),
+    )).toBe('')
+
+    // A wrapped live-location banner must leave room for the whole conversation.
+    await page.context().grantPermissions(['geolocation'])
+    await page.context().setGeolocation({ latitude: 48.8584, longitude: 2.2945 })
+    await page.getByRole('button', { name: 'Add attachment' }).click()
+    await page.getByRole('menuitem', { name: 'Location', exact: true }).click()
+    await page.getByRole('dialog', { name: 'Share this location?' }).getByRole('button', { name: '15 min' }).click()
+    const banner = page.getByRole('status', { name: 'Sharing live location' })
+    await expect(banner).toBeVisible()
+    const bannerHeight = (await banner.boundingBox())!.height
+    expect(bannerHeight).toBeGreaterThan(44)
+    await input.fill('Typing while sharing live location')
+    await page.getByRole('button', { name: 'Send', exact: true }).click()
+    await expect(messages(page).last()).toContainText('Typing while sharing live location')
+    await changeViewport(500, 344, 'resize')
+    await expectConversationFits(344, 500, bannerHeight)
+    await expect.poll(async () => (await banner.boundingBox())!.y).toBe(344)
+    await banner.getByRole('button', { name: 'Stop' }).click()
+    await expect(banner).toBeHidden()
+    await input.focus()
+    await expectConversationFits(344, 500)
+    await expect.poll(() => page.locator('html').evaluate(
+      (root) => root.style.getPropertyValue('--live-banner-height'),
+    )).toBe('')
   })
 })
