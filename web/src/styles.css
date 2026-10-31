@@ -121,8 +121,8 @@ form {
 .chat-layout {
   display: grid;
   grid-template-columns: minmax(16rem, 22rem) 1fr;
-  height: var(--app-height, 100dvh);
-  padding: env(safe-area-inset-top) env(safe-area-inset-right) var(--safe-bottom, env(safe-area-inset-bottom)) env(safe-area-inset-left);
+  height: 100dvh;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 
 .chat-layout[hidden] {
@@ -740,7 +740,7 @@ button.danger {
 }
 
 .chat-layout.with-banner {
-  height: calc(var(--app-height, 100dvh) - 2.75rem);
+  height: calc(100dvh - 2.75rem);
 }
 
 /* ---- UI polish (2026-10-30) ---------------------------------------------- */
