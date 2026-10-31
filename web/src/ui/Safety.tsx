@@ -92,7 +92,7 @@ export function BlockedList({ core }: { core: CoreClient }) {
     <details className="devices" onToggle={(e) => (e.currentTarget.open ? void load() : undefined)}>
       <summary>
         <span>Blocked people</span>
-        <span className="setting-status" aria-label="Blocked count">{contacts.length || undefined}</span>
+        <span className="setting-status" data-testid="blocked-count">{contacts.length || undefined}</span>
       </summary>
       <ul aria-label="Blocked people">
         {contacts.map((c) => (

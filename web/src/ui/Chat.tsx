@@ -190,7 +190,7 @@ export function Chat({
               </section>
               <section className="settings-group" aria-labelledby="settings-about">
                 <h3 id="settings-about">About</h3>
-                <button type="button" className="setting-row" onClick={onDiagnostics}>
+                <button type="button" className="setting-row" aria-label="Diagnostics" onClick={onDiagnostics}>
                   <span>Diagnostics</span>
                   <span className="setting-status">Version &amp; self-test</span>
                 </button>

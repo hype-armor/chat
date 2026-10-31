@@ -16,8 +16,14 @@ test('groups every setting and keeps account deletion last', async ({ browser })
   await expect(settings.locator('summary').last()).toHaveText('Delete account')
   await expect(settings.getByRole('region', { name: 'Account', exact: true })).toContainText('Pat')
   await expect(settings.getByText(`Your username: ${username}`, { exact: true })).toBeVisible()
+  await page.evaluate(`navigator.clipboard.writeText = async () => { throw new Error('Clipboard permission denied') }`)
+  await settings.getByRole('button', { name: 'Copy username' }).click()
+  await expect(settings.getByRole('alert')).toHaveText('Clipboard permission denied')
+  await page.evaluate(`navigator.clipboard.writeText = async (text) => { window.copiedUsername = text }`)
   await settings.getByRole('button', { name: 'Copy username' }).click()
   await expect(settings.getByRole('button', { name: 'Copied', exact: true })).toBeVisible()
+  await expect(settings.getByRole('alert')).toHaveCount(0)
+  expect(await page.evaluate('window.copiedUsername')).toBe(username)
 
   const rows = [
     ['Account', ['Invite someone']],
@@ -57,7 +63,7 @@ test('solid danger buttons have white text and AA contrast in both themes', asyn
   for (const colorScheme of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme })
     await expect(button).toHaveCSS('color', 'rgb(255, 255, 255)')
-    const contrast = await button.evaluate(`(element) => {
+    const contrast = await page.evaluate(`(() => {
       const luminance = (color) => {
         const rgb = color.match(/\\d+/g).slice(0, 3).map((value) => {
           const channel = Number(value) / 255
@@ -65,11 +71,11 @@ test('solid danger buttons have white text and AA contrast in both themes', asyn
         })
         return rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722
       }
-      const style = getComputedStyle(element)
+      const style = getComputedStyle(document.querySelector('.danger-zone button.danger'))
       const fg = luminance(style.color)
       const bg = luminance(style.backgroundColor)
       return (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05)
-    }`)
+    })()`)
     await expect(button).toHaveCSS('background-color', 'rgb(207, 34, 46)')
     expect(contrast).toBeGreaterThanOrEqual(4.5)
   }

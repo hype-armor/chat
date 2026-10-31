@@ -28,7 +28,7 @@ test('reporting and blocking someone, then unblocking them (FR-ID-8)', async ({ 
   await alice.getByRole('button', { name: 'Send' }).click()
   await expect(messages(alice).filter({ hasText: 'Last chance!' }).getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
   const blocked = await openSetting(bob, 'Blocked people')
-  await expect(blocked.getByLabel('Blocked count')).toHaveText('1')
+  await expect(blocked.getByTestId('blocked-count')).toHaveText('1')
   await expect(bob.getByRole('list', { name: 'Blocked people' })).toContainText('Alice')
   await expect(messages(bob)).toHaveText([/Buy cheap watches/])
 
