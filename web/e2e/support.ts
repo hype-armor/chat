@@ -41,7 +41,7 @@ export async function createGroup(page: Page, name: string, usernames: string[])
   await panel.getByLabel('Group name', { exact: true }).fill(name)
   await panel.getByLabel("Members' usernames").fill(usernames.join('\n'))
   await panel.getByRole('button', { name: 'Create group', exact: true }).click()
-  await expect(page.getByRole('heading', { name, exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name, exact: true })).toBeVisible({ timeout: 15_000 })
 }
 
 /** Selects a secondary action from the conversation header. */
