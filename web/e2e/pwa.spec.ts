@@ -95,6 +95,33 @@ test.describe('setup reminders and Settings', () => {
     await expect(page.getByRole('navigation', { name: 'Settings', exact: true })).toBeVisible()
   })
 
+  test('keeps the update banner above the fixed chat layout', async ({ page }) => {
+    await page.addInitScript({ content: `
+      Object.defineProperty(navigator.serviceWorker, 'controller', { value: {} });
+      navigator.serviceWorker.register = async () => Object.assign(new EventTarget(), {
+        waiting: { postMessage: () => document.documentElement.dataset.updateActivated = 'yes' },
+      });
+    ` })
+    await page.reload()
+    await expect(page.getByRole('status')).toHaveText('Connected')
+    const banner = page.getByRole('region', { name: 'Update', exact: true })
+    await expect(banner).toBeVisible()
+    for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }, { width: 390, height: 500 }]) {
+      await page.setViewportSize(viewport)
+      await expect.poll(async () => {
+        const update = (await banner.boundingBox())!
+        const layout = (await page.locator('.chat-layout').boundingBox())!
+        return {
+          bannerTop: update.y,
+          layoutBelowBanner: layout.y === update.y + update.height,
+          layoutBottom: layout.y + layout.height,
+        }
+      }).toEqual({ bannerTop: 0, layoutBelowBanner: true, layoutBottom: viewport.height })
+    }
+    await banner.getByRole('button', { name: 'Update now' }).click()
+    await expect(page.locator('html')).toHaveAttribute('data-update-activated', 'yes')
+  })
+
   test('keeps the conversation inside a panned iOS visual viewport', async ({ page, browser }) => {
     test.setTimeout(60_000)
     await page.setViewportSize({ width: 390, height: 844 })

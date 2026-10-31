@@ -1,4 +1,4 @@
-import { useLayoutEffect } from 'react'
+import { useLayoutEffect, useRef } from 'react'
 
 type Viewport = Pick<VisualViewport, 'height' | 'offsetTop' | 'scale'>
 
@@ -46,4 +46,22 @@ export function trackVisualViewport(
 
 export function useVisualViewport() {
   useLayoutEffect(() => trackVisualViewport(window, document.documentElement.style), [])
+}
+
+export function useBannerHeight<T extends HTMLElement>(property: string, active: boolean) {
+  const banner = useRef<T>(null)
+  useLayoutEffect(() => {
+    if (!active) return
+    const element = banner.current!
+    const style = document.documentElement.style
+    const measure = () => style.setProperty(property, `${element.getBoundingClientRect().height}px`)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    return () => {
+      observer.disconnect()
+      style.removeProperty(property)
+    }
+  }, [property, active])
+  return banner
 }

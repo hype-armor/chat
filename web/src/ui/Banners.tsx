@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useBannerHeight } from './useVisualViewport'
 import {
   type StorageState,
   type SetupBanner as SetupBannerKind,
@@ -20,10 +21,11 @@ import {
 /** A new app version waiting to take over (service worker update). */
 export function UpdateBanner() {
   const [activate, setActivate] = useState(() => updateAvailable())
+  const banner = useBannerHeight<HTMLElement>('--update-banner-height', !!activate)
   useEffect(() => onUpdateAvailable(() => setActivate(() => updateAvailable())), [])
   if (!activate) return null
   return (
-    <section className="banner" aria-label="Update">
+    <section className="banner" ref={banner} aria-label="Update">
       <p>A new version of Chat is ready.</p>
       <button type="button" onClick={activate}>
         Update now
