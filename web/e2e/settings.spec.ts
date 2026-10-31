@@ -91,7 +91,8 @@ for (const mode of ['unavailable', 'installed', 'ios'] as const) {
         : matchMedia(query)
       // This test covers a browser without an install prompt.
       window.addEventListener('beforeinstallprompt', (event) => event.stopImmediatePropagation(), true)
-      Object.defineProperty(navigator.storage, 'persisted', { value: async () => true })
+      Object.defineProperty(StorageManager.prototype, 'persisted', { configurable: true, value: async () => true })
+      Object.defineProperty(StorageManager.prototype, 'persist', { configurable: true, value: async () => true })
       if (${mode === 'ios'}) Object.defineProperty(navigator, 'userAgent', { value: 'iPhone Version/18.0 Safari/604.1' })
     ` })
     const page = await context.newPage()
@@ -100,10 +101,12 @@ for (const mode of ['unavailable', 'installed', 'ios'] as const) {
     await page.getByLabel('Your name').fill('Pat')
     await page.getByRole('button', { name: 'Sign up' }).click()
     await expect(page.getByRole('status')).toHaveText('Connected')
+    expect(await page.evaluate('navigator.storage.persisted()')).toBe(true)
     const section = await openSetting(page, 'This device')
+    await expect(section.locator('summary .setting-status')).toHaveText(mode === 'installed' ? 'Installed' : 'Data kept')
+    await expect(section).toContainText('Data is kept on this device.')
     await expect(section.getByRole('button', { name: 'Install app', exact: true })).toHaveCount(0)
     await expect(section.getByRole('button', { name: 'Keep data on this device' })).toBeDisabled()
-    await expect(section).toContainText('Data is kept on this device.')
     if (mode === 'installed') await expect(section).toContainText('Chat is installed.')
     else if (mode === 'unavailable') await expect(section.getByRole('heading', { name: 'Install app' })).toHaveCount(0)
     else {
