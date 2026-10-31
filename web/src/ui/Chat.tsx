@@ -841,7 +841,7 @@ function Conversation({
   request: boolean
   onBack: () => void
 }) {
-  const [panel, setPanel] = useState<'add' | 'info' | 'verify' | 'report'>()
+  const [panel, updatePanel] = useState<'add' | 'info' | 'verify' | 'report'>()
   const [detailsVersion, setDetailsVersion] = useState(0)
   const detailsId = useId()
   const detailsHeadingId = useId()
@@ -896,6 +896,16 @@ function Conversation({
   const composer = useRef<HTMLTextAreaElement>(null)
   const [recording, setRecording] = useState(false)
   const wasRecording = useRef(false)
+  const setPanel = useCallback((next: typeof panel) => {
+    const list = viewport.current
+    // Capture pending user scrolling before a panel change reflows the messages.
+    if (list) {
+      atBottom.current = list.scrollHeight - list.scrollTop - list.clientHeight <= 80
+      lastScrollTop.current = list.scrollTop
+      viewportSize.current = { width: list.clientWidth, height: list.clientHeight }
+    }
+    updatePanel(next)
+  }, [])
   const menuItems: MenuItem[] = [
     ...(isGroup ? [{ label: 'Group info', onSelect: () => openPanel('info') }] : []),
     ...(peer ? [{ label: 'Verify safety number', onSelect: () => openPanel('verify') }] : []),
@@ -929,6 +939,11 @@ function Conversation({
     atBottom.current = list.scrollHeight - list.scrollTop - list.clientHeight <= 80
     if (atBottom.current) setNewMessages(false)
   }, [scrollToBottom])
+
+  useLayoutEffect(() => {
+    // Consume this resize before a later scroll can race its ResizeObserver.
+    onScroll()
+  }, [panelOpen, onScroll])
 
   useEffect(() => {
     let live = true

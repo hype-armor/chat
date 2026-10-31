@@ -128,6 +128,23 @@ test('details stay beside messages on desktop and replace them on phones without
   expect(messageBounds.x + messageBounds.width).toBeLessThanOrEqual(panelBounds.x)
   await expect(composer).toBeVisible()
   await expect.poll(pinned).toBeLessThan(3)
+  // Both transitions must respect a scroll whose event is still queued.
+  await ann.evaluate(`(() => {
+    document.querySelector('.messages-viewport').scrollTop = 0
+    document.querySelector('.details-head button').click()
+  })()`)
+  await ann.evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+  await expect(panel).toBeHidden()
+  await expect.poll(() => viewport.evaluate((el) => el.scrollTop)).toBe(0)
+  await viewport.evaluate((el) => { el.scrollTop = el.scrollHeight })
+  await expect.poll(pinned).toBeLessThan(3)
+  await ann.evaluate(`(() => {
+    document.querySelector('.messages-viewport').scrollTop = 0
+    document.querySelector('.conversation-title').click()
+  })()`)
+  await ann.evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+  await expect(panel).toBeVisible()
+  await expect.poll(() => viewport.evaluate((el) => el.scrollTop)).toBe(0)
   await expect(ann.getByLabel('Group name', { exact: true })).toBeHidden()
   await ann.getByRole('button', { name: 'Edit group name' }).click()
   const save = panel.getByRole('button', { name: 'Save', exact: true })
