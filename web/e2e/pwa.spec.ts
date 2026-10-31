@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { closeSettings, openSettings, randomUsername, signUp } from './support'
+import { closeSettings, messages, openSettings, randomUsername, signUp, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -81,17 +81,90 @@ test.describe('setup reminders and Settings', () => {
   test('fills desktop and mobile viewports and opens diagnostics from Settings', async ({ page }) => {
     await expect(page.getByRole('contentinfo')).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Diagnostics', exact: true })).toHaveCount(0)
-    for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+    for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }, { width: 390, height: 500 }]) {
       await page.setViewportSize(viewport)
-      const bounds = await page.locator('.chat-layout').boundingBox()
-      expect(bounds?.y).toBe(0)
-      expect(bounds?.height).toBe(viewport.height)
-      expect(bounds?.width).toBe(viewport.width)
+      await expect.poll(async () => {
+        const bounds = await page.locator('.chat-layout').boundingBox()
+        return bounds && { top: bounds.y, height: bounds.height, width: bounds.width }
+      }).toEqual({ top: 0, height: viewport.height, width: viewport.width })
     }
     await openSettings(page)
     await page.getByRole('button', { name: 'Diagnostics', exact: true }).click()
     await expect(page.getByTestId('self-test')).toHaveText('passed')
     await page.getByRole('button', { name: '← Back', exact: true }).click()
     await expect(page.getByRole('navigation', { name: 'Settings', exact: true })).toBeVisible()
+  })
+
+  test('keeps the conversation inside a panned iOS visual viewport', async ({ page, browser }) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.addInitScript(() => {
+      Object.defineProperty(window, 'visualViewport', {
+        configurable: true,
+        value: Object.assign(new EventTarget(), { height: 844, offsetTop: 0, scale: 1 }),
+      })
+    })
+    await page.reload()
+    await expect(page.getByRole('status')).toHaveText('Connected')
+    const username = randomUsername()
+    await signUp(browser, 'Bob', username)
+    await startChat(page, username)
+    const input = page.getByLabel('Message', { exact: true })
+    for (let i = 0; i < 12; i++) {
+      await input.fill(`Keyboard history ${i}`)
+      await page.getByRole('button', { name: 'Send', exact: true }).click()
+      await expect(messages(page).last()).toContainText(`Keyboard history ${i}`)
+    }
+    await input.focus()
+    const layout = page.locator('.chat-layout')
+    const expectBounds = async (top: number, height: number) => {
+      await expect.poll(async () => {
+        const bounds = await layout.boundingBox()
+        return bounds && { top: bounds.y, height: bounds.height, width: bounds.width }
+      }).toEqual({ top, height, width: 390 })
+    }
+    const changeViewport = async (height: number, offsetTop: number, event: 'resize' | 'scroll') => {
+      await page.evaluate(({ height, offsetTop, event }) => {
+        Object.assign(window.visualViewport!, { height, offsetTop })
+        window.visualViewport!.dispatchEvent(new Event(event))
+      }, { height, offsetTop, event })
+    }
+    const expectConversationFits = async (top: number, height: number) => {
+      await expectBounds(top, height)
+      await expect.poll(async () => {
+        const header = (await page.locator('.conversation-bar').boundingBox())!
+        const composer = (await page.locator('.composer').boundingBox())!
+        const newest = (await messages(page).last().boundingBox())!
+        return {
+          headerVisible: header.y >= top && header.y + header.height <= top + height,
+          composerBottom: composer.y + composer.height,
+          newestVisible: newest.y >= header.y + header.height && newest.y + newest.height <= composer.y,
+        }
+      }).toEqual({ headerVisible: true, composerBottom: top + height, newestVisible: true })
+      await expect.poll(() => page.evaluate(() => ({
+        top: document.scrollingElement!.scrollTop,
+        height: document.scrollingElement!.scrollHeight,
+      }))).toEqual({ top: 0, height: 844 })
+      await expect(input).toBeFocused()
+    }
+
+    await changeViewport(500, 344, 'resize')
+    await expectConversationFits(344, 500)
+    await expect(layout).toHaveCSS('padding-bottom', '0px')
+    await changeViewport(500, 300, 'scroll')
+    await expectConversationFits(300, 500)
+
+    // Pinch zoom must not resize or move the app.
+    await page.evaluate(() => {
+      Object.assign(window.visualViewport!, { height: 250, offsetTop: 400, scale: 2 })
+      window.visualViewport!.dispatchEvent(new Event('resize'))
+    })
+    await page.evaluate(() => new Promise(requestAnimationFrame))
+    await expectBounds(300, 500)
+    await page.evaluate(() => { Object.assign(window.visualViewport!, { scale: 1 }) })
+    await changeViewport(844, 0, 'resize')
+    await expectConversationFits(0, 844)
+    await expect.poll(() => page.evaluate(
+      () => document.documentElement.style.getPropertyValue('--safe-bottom'),
+    )).toBe('')
   })
 })

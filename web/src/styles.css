@@ -119,10 +119,14 @@ form {
 
 /* Chat layout: two panes on wide screens, one at a time on phones. */
 .chat-layout {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: var(--app-top, 0px);
   display: grid;
   grid-template-columns: minmax(16rem, 22rem) 1fr;
-  height: 100dvh;
-  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  height: var(--app-height, 100dvh);
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) var(--safe-bottom, env(safe-area-inset-bottom)) env(safe-area-inset-left);
 }
 
 .chat-layout[hidden] {
@@ -728,6 +732,10 @@ button.danger {
 }
 
 .live-banner {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: var(--app-top, 0px);
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -740,7 +748,8 @@ button.danger {
 }
 
 .chat-layout.with-banner {
-  height: calc(100dvh - 2.75rem);
+  top: calc(var(--app-top, 0px) + 2.75rem);
+  height: calc(var(--app-height, 100dvh) - 2.75rem);
 }
 
 /* ---- UI polish (2026-10-30) ---------------------------------------------- */
