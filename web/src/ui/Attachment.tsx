@@ -49,6 +49,9 @@ export function Attachment({
   const photo = isPhoto(file.mime)
   const playable = isPlayable(file.mime)
   const video = playable && file.mime.startsWith('video/')
+  const generic = !photo && !playable
+  const extension = file.name.includes('.') ? file.name.split('.').pop()!.toUpperCase() : ''
+  const fileType = ['PDF', 'TXT', 'CSV', 'DOC', 'DOCX', 'XLS', 'XLSX', 'ZIP', 'GZ', 'TAR'].includes(extension) ? extension : 'FILE'
   const [thumb] = useState(() => (file.thumbnail ? new Blob([file.thumbnail], { type: 'image/jpeg' }) : undefined))
   const [full, setFull] = useState<Blob>()
   const [busy, setBusy] = useState(false)
@@ -95,7 +98,14 @@ export function Attachment({
   const label = file.voiceNote ? 'Voice note' : file.name
   const duration = file.durationMs ? ` · ${formatDuration(file.durationMs)}` : ''
   return (
-    <div className="attachment" data-testid="attachment">
+    <div className={`attachment${generic ? ' file-card' : ''}`} data-testid="attachment">
+      {generic && (
+        <svg className="file-icon" viewBox="0 0 40 48" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+          <path d="M5 2h20l10 10v34H5V2Z" strokeLinejoin="round" />
+          <path d="M25 2v10h10" strokeLinejoin="round" />
+          <text x="20" y="32" fill="currentColor" stroke="none" textAnchor="middle" fontSize="8" fontWeight="700">{fileType}</text>
+        </svg>
+      )}
       {playable && fullUrl ? (
         video ? (
           <video src={fullUrl} controls autoPlay playsInline aria-label={label} style={{ aspectRatio: aspect }} />
@@ -130,7 +140,7 @@ export function Attachment({
           <img src={fullUrl ?? thumbUrl} alt={file.name} style={{ aspectRatio: aspect }} data-full={!!fullUrl} />
         </button>
       ) : (
-        <span className="file-name">📎 {file.name}</span>
+        <span className="file-name" title={file.name}>{generic ? file.name : `📎 ${file.name}`}</span>
       )}
       <span className="small muted">
         {progress !== undefined && (
@@ -140,7 +150,7 @@ export function Attachment({
         )}
         {formatSize(file.size)}
         {video && thumbUrl && duration}
-        {!file.voiceNote && (
+        {!generic && !file.voiceNote && (
           <>
             {' · '}
             <button type="button" className="link small" onClick={() => void download()} disabled={busy}>
@@ -149,6 +159,11 @@ export function Attachment({
           </>
         )}
       </span>
+      {generic && (
+        <button type="button" className="file-download" onClick={() => void download()} disabled={busy || sending}>
+          {sending ? 'Sending…' : busy ? 'Opening…' : 'Download'}
+        </button>
+      )}
       {error && (
         <span className="small error" role="alert">
           {error}

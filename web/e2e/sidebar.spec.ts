@@ -50,7 +50,7 @@ for (const width of [1280, 640, 320]) {
     await expect(alice.getByRole('navigation', { name: 'Conversations', exact: true })).toHaveCount(0)
     await alice.getByRole('button', { name: '← Back', exact: true }).click()
     await expect(trigger).toBeFocused()
-    await alice.getByRole('button', { name: 'Start a chat', exact: true }).click()
+    await sidebar.getByRole('button', { name: 'Start a chat', exact: true }).click()
     await expect(alice.getByLabel("Contact's username")).toBeFocused()
     await alice.getByRole('button', { name: '← Back', exact: true }).click()
 
