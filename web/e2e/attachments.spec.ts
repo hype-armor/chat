@@ -73,6 +73,7 @@ test('photos lose their metadata, and files arrive intact', async ({ browser }) 
   await openChat(bob, /Alice/)
   const received = messages(bob).filter({ hasText: 'The view' })
   await expect(received.getByRole('img', { name: 'beach.jpg' })).toBeVisible()
+  await expect(received.locator('.file-card')).toHaveCount(0)
 
   // The full photo: decrypted, without the EXIF block.
   // Photos download by themselves (ADR-0025) and show full size.
@@ -88,6 +89,9 @@ test('photos lose their metadata, and files arrive intact', async ({ browser }) 
   expect(saved.includes(Buffer.from('Exif\0\0', 'latin1'))).toBe(false)
 
   const file = messages(bob).filter({ hasText: 'notes.txt' })
+  await expect(file.locator('.file-card')).toBeVisible()
+  await expect(file.locator('.file-icon text')).toHaveText('TXT')
+  await expect(file.locator('.file-card')).toContainText('20 B')
   const [fileDownload] = await Promise.all([
     bob.waitForEvent('download'),
     file.getByRole('button', { name: 'Download' }).click(),

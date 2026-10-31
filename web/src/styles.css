@@ -293,6 +293,29 @@ form {
 .placeholder {
   display: grid;
   place-items: center;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.empty-conversation {
+  max-width: 26rem;
+  text-align: center;
+}
+
+.empty-icon {
+  width: 4rem;
+  height: 4rem;
+  color: var(--accent);
+}
+
+.empty-conversation h2 {
+  font-size: 1.25rem;
+}
+
+.empty-conversation .actions {
+  justify-content: center;
+  flex-wrap: wrap;
 }
 
 .conversation {
@@ -431,7 +454,7 @@ form {
 @container (max-width: 40rem) {
   .details-open .conversation-bar,
   .details-open .header-actions,
-  .details-open .composer {
+  .details-open .composer-row {
     flex-wrap: wrap;
   }
 
@@ -470,7 +493,9 @@ form {
 
 .messages {
   list-style: none;
-  margin: 0;
+  width: 100%;
+  max-width: 54rem;
+  margin: 0 auto;
   padding: 1rem;
   display: flex;
   flex-direction: column;
@@ -551,10 +576,17 @@ form {
 }
 
 .composer {
+  border-top: 1px solid var(--border);
+}
+
+.composer-row {
   display: flex;
+  align-items: center;
   gap: 0.5rem;
   padding: 0.75rem 1rem;
-  border-top: 1px solid var(--border);
+  width: 100%;
+  max-width: 54rem;
+  margin-inline: auto;
 }
 
 .diagnostics {
@@ -967,6 +999,61 @@ button.link.danger {
   padding: 0.25rem 0.5rem;
 }
 
+.file-card {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.75rem;
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid currentColor;
+  border-radius: 0.75rem;
+}
+
+.file-icon {
+  grid-row: 1 / 3;
+  width: 2rem;
+  height: 2.5rem;
+}
+
+.file-card .file-name {
+  grid-column: 2;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.file-card > .muted {
+  grid-column: 2;
+}
+
+.file-download {
+  grid-column: 3;
+  grid-row: 1 / 3;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.85rem;
+  padding: 0.5rem;
+}
+
+.file-card > .error {
+  grid-column: 1 / -1;
+}
+
+@container (max-width: 40rem) {
+  .details-open .file-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .details-open .file-download {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    justify-self: stretch;
+    min-width: 0;
+  }
+}
+
 .recording {
   display: flex;
   align-items: center;
@@ -1341,10 +1428,6 @@ button.conversation-title {
 
 .messages .theirs {
   border-bottom-left-radius: 0.25rem;
-}
-
-.composer {
-  align-items: center;
 }
 
 .composer textarea {

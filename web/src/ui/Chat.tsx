@@ -262,7 +262,21 @@ export function Chat({
             onBack={() => setSelected(undefined)}
           />
         ) : (
-          <section className="placeholder muted">Select a conversation or start a new one.</section>
+          <section className="placeholder" aria-label="Start a conversation">
+            <div className="empty-conversation">
+              <svg className="empty-icon" viewBox="0 0 64 64" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <path d="M12 10h40v30H28L12 52V10Z" strokeLinejoin="round" />
+                <rect x="25" y="23" width="14" height="11" rx="2" />
+                <path d="M28 23v-4a4 4 0 0 1 8 0v4" />
+              </svg>
+              <h2>Your messages are end-to-end encrypted</h2>
+              <p className="muted">Select a conversation or start a new one.</p>
+              <div className="actions">
+                <button type="button" onClick={() => setPanel('chat')}>Start a chat</button>
+                <button type="button" className="link" onClick={() => setPanel('group')}>New group</button>
+              </div>
+            </div>
+          </section>
         )}
       </div>
     </>
@@ -1246,69 +1260,71 @@ function Conversation({
         }}
         hidden={!active || blocked || request}
       >
-        <input
-          ref={picker}
-          type="file"
-          hidden
-          data-testid="attach-input"
-          onChange={(e) => void attach(e.target.files?.[0])}
-        />
-        <ShareLocation
-          core={core}
-          conversationId={id}
-          onError={setAttachError}
-          onSend={() => composer.current?.focus({ preventScroll: true })}
-          trigger={(locate) =>
-            recording ? null : attaching ? (
-              <span className="small" role="status">Attaching…</span>
-            ) : (
-              <Menu
-                triggerLabel="Add attachment"
-                triggerContent="+"
-                items={[
-                  { label: 'Photo or file', onSelect: () => picker.current?.click() },
-                  { label: 'Location', onSelect: locate },
-                ]}
-              />
-            )
-          }
-        />
-        <label className="visually-hidden" htmlFor="composer">
-          Message
-        </label>
-        <textarea
-          ref={composer}
-          id="composer"
-          rows={1}
-          hidden={recording}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (
-              e.key === 'Enter' && !e.shiftKey &&
-              !e.nativeEvent.isComposing && e.nativeEvent.keyCode !== 229 &&
-              !matchMedia('(pointer: coarse)').matches
-            ) {
-              e.preventDefault()
-              void send()
+        <div className="composer-row">
+          <input
+            ref={picker}
+            type="file"
+            hidden
+            data-testid="attach-input"
+            onChange={(e) => void attach(e.target.files?.[0])}
+          />
+          <ShareLocation
+            core={core}
+            conversationId={id}
+            onError={setAttachError}
+            onSend={() => composer.current?.focus({ preventScroll: true })}
+            trigger={(locate) =>
+              recording ? null : attaching ? (
+                <span className="small" role="status">Attaching…</span>
+              ) : (
+                <Menu
+                  triggerLabel="Add attachment"
+                  triggerContent="+"
+                  items={[
+                    { label: 'Photo or file', onSelect: () => picker.current?.click() },
+                    { label: 'Location', onSelect: locate },
+                  ]}
+                />
+              )
             }
-          }}
-          placeholder="Message"
-          autoComplete="off"
-          maxLength={4000}
-        />
-        {draft.length > 0 && !recording && (
-          <button type="submit" disabled={!draft.trim()} onMouseDown={(e) => e.preventDefault()}>
-            Send
-          </button>
-        )}
-        <Recorder
-          hidden={draft.length > 0}
-          disabled={attaching}
-          onRecordingChange={setRecording}
-          onRecorded={(file, media) => void attach(file, media)}
-          onError={setAttachError}
-        />
+          />
+          <label className="visually-hidden" htmlFor="composer">
+            Message
+          </label>
+          <textarea
+            ref={composer}
+            id="composer"
+            rows={1}
+            hidden={recording}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (
+                e.key === 'Enter' && !e.shiftKey &&
+                !e.nativeEvent.isComposing && e.nativeEvent.keyCode !== 229 &&
+                !matchMedia('(pointer: coarse)').matches
+              ) {
+                e.preventDefault()
+                void send()
+              }
+            }}
+            placeholder="Message"
+            autoComplete="off"
+            maxLength={4000}
+          />
+          {draft.length > 0 && !recording && (
+            <button type="submit" disabled={!draft.trim()} onMouseDown={(e) => e.preventDefault()}>
+              Send
+            </button>
+          )}
+          <Recorder
+            hidden={draft.length > 0}
+            disabled={attaching}
+            onRecordingChange={setRecording}
+            onRecorded={(file, media) => void attach(file, media)}
+            onError={setAttachError}
+          />
+        </div>
       </form>
     </section>
     {panel && (
