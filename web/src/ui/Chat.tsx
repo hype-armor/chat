@@ -21,6 +21,7 @@ import type { MediaInfo } from '../core/protocol'
 import { BlockedList, DeleteAccount, ReportForm } from './Safety'
 import { VerificationBadge, Verify } from './Verify'
 import { type NotificationState, enableNotifications, notificationState, refreshSubscription } from '../notifications'
+import { useVisualViewport } from './useVisualViewport'
 
 type Ready = Extract<AppView, { phase: 'ready' }>
 
@@ -82,6 +83,7 @@ export function Chat({
   showDiagnostics: boolean
   onDiagnostics: () => void
 }) {
+  useVisualViewport()
   const [selected, setSelected] = useState<string>()
   const [panel, setPanel] = useState<'chats' | 'settings' | 'chat' | 'group'>('chats')
   const sidebar = useRef<HTMLElement>(null)
