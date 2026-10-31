@@ -56,6 +56,18 @@ export async function openSettings(page: Page) {
   if ((await button.getAttribute('aria-pressed')) !== 'true') await button.click()
 }
 
+/** Opens a Settings row without collapsing it if it is already open. */
+export async function openSetting(page: Page, name: string) {
+  await openSettings(page)
+  const summary = page.getByRole('navigation', { name: 'Settings', exact: true })
+    .locator('summary').filter({ hasText: name })
+  await expect(summary).toHaveCount(1)
+  const section = summary.locator('..')
+  if ((await section.getAttribute('open')) === null) await summary.click()
+  await expect(section).toHaveAttribute('open', '')
+  return section
+}
+
 /** Back from Settings to the conversation list. */
 export async function closeSettings(page: Page) {
   const button = page.getByRole('button', { name: 'Settings' })
@@ -68,8 +80,7 @@ export async function linkDevice(browser: Browser, page: Page): Promise<Page> {
   await laptop.goto('/')
   await laptop.getByRole('button', { name: /Link this one/ }).click()
   const code = (await laptop.getByTestId('link-code').textContent())!.trim()
-  await openSettings(page)
-  await page.getByText('Linked devices').click()
+  await openSetting(page, 'Linked devices')
   await page.getByRole('button', { name: 'Link a new device' }).click()
   await page.getByLabel('Or type the code shown on the new device').fill(code)
   await expect(page.getByText('The new device will be able to read every message')).toBeVisible()

@@ -10,6 +10,7 @@
   --mine-fg: #ffffff;
   --theirs: #eff2f5;
   --danger: #cf222e;
+  --danger-bg: #cf222e;
   --ok: #1a7f37;
   color-scheme: light dark;
   font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -409,7 +410,12 @@ textarea {
   color: var(--muted);
 }
 
-button.danger {
+button.danger:not(.link):not([role='menuitem']) {
+  background: var(--danger-bg);
+  color: #ffffff;
+}
+
+button.link.danger {
   color: var(--danger);
 }
 
@@ -619,6 +625,38 @@ button.danger {
   color: var(--danger);
 }
 
+.setup-banner {
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.85rem;
+  line-height: 1.25;
+}
+
+.setup-banner p {
+  flex: 1;
+  min-width: 0;
+}
+
+.setup-banner button {
+  flex: none;
+  padding: 0.375rem 0.5rem;
+}
+
+.setup-banner .setup-dismiss {
+  color: var(--muted);
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.setup-banner:has(.error) {
+  flex-wrap: wrap;
+}
+
+.setup-banner .error {
+  flex-basis: 100%;
+}
+
 /* Invites (ADR-0021) */
 .invite {
   display: grid;
@@ -813,6 +851,90 @@ button.icon[aria-pressed='true'] {
 .settings-identity {
   margin: 0;
   padding: 0.75rem 1rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.25rem 0.5rem;
+  overflow-wrap: anywhere;
+}
+
+.settings-identity strong,
+.settings-identity .error {
+  grid-column: 1 / -1;
+}
+
+.settings-group h3 {
+  margin: 0;
+  padding: 1rem 1rem 0.375rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.settings .devices {
+  padding: 0 1rem;
+}
+
+.settings .devices > summary,
+.settings .setting-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+  padding: 0.75rem 0;
+  color: var(--fg);
+  font-size: 0.9rem;
+  list-style: none;
+}
+
+.settings .devices > summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings .devices > summary::after,
+.settings .setting-row::after {
+  content: '›';
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.settings .devices[open] > summary::after {
+  transform: rotate(90deg);
+}
+
+.setting-status {
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.settings .devices > summary > span:first-child {
+  flex: none;
+}
+
+.settings .devices > summary:has(.setting-status)::after,
+.settings .setting-row::after {
+  margin-left: 0;
+}
+
+.settings .devices[open] {
+  padding-bottom: 0.75rem;
+}
+
+.settings .setting-row {
+  width: 100%;
+  padding-inline: 1rem;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: none;
+  text-align: left;
+}
+
+.settings .danger-zone h3,
+.settings .danger-zone summary {
+  color: var(--danger);
 }
 
 /* Conversation list: avatar, name and time, then the preview. */

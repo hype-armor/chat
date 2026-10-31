@@ -1,5 +1,5 @@
 import { type Browser, type Page, expect, test } from '@playwright/test'
-import { closeSettings, openChat, openSettings, randomUsername, startChat } from './support'
+import { closeSettings, openChat, openSetting, randomUsername, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -108,8 +108,7 @@ test.describe('calls', () => {
 
   test('"always relay calls" refuses to call without a relay (FR-CALL-9)', async ({ browser, browserName }) => {
     const { alice } = await pair(browser, browserName)
-    await openSettings(alice)
-    await alice.getByText('Privacy').click()
+    await openSetting(alice, 'Privacy')
     await alice.getByLabel('Always relay calls').check()
     await closeSettings(alice)
     await alice.getByRole('button', { name: /Bob/ }).click()

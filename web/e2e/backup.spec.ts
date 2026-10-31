@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { messages, openChat, openSettings, randomUsername, signUp, startChat } from './support'
+import { messages, openChat, openSetting, randomUsername, signUp, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -18,14 +18,21 @@ test('restoring a backup on a wiped browser; contacts add the device back (ADR-0
   await expect(messages(alice)).toHaveText([/Before the backup/, /Got it/])
 
   // Alice turns on backup and notes her recovery key.
-  await openSettings(alice)
-  await alice.getByText('Backup', { exact: true }).click()
+  await openSetting(alice, 'Backup')
   await alice.getByRole('button', { name: 'Turn on backup' }).click()
   const recoveryKey = (await alice.getByTestId('recovery-key').textContent())!.trim()
   expect(recoveryKey).toMatch(/^([A-Z2-7]{4}-){6}[A-Z2-7]{2}$/)
   await alice.getByLabel("I've stored my recovery key somewhere safe").check()
   await alice.getByRole('button', { name: 'Done' }).click()
   await expect(alice.getByTestId('backup-status')).toContainText('Last backup')
+  const backup = await openSetting(alice, 'Backup')
+  await expect(backup.locator('summary')).toContainText('Last backup:')
+  const turnOff = backup.getByRole('button', { name: 'Turn off backup' })
+  for (const colorScheme of ['light', 'dark'] as const) {
+    await alice.emulateMedia({ colorScheme })
+    await expect(turnOff).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+    await expect(turnOff).toHaveCSS('color', colorScheme === 'light' ? 'rgb(207, 34, 46)' : 'rgb(248, 81, 73)')
+  }
 
   // Her browser is wiped; she restores in a fresh one.
   await alice.context().close()
