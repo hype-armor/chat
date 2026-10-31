@@ -178,6 +178,9 @@ test.describe('setup reminders and Settings', () => {
     await expect(banner).toBeVisible()
     const bannerHeight = (await banner.boundingBox())!.height
     expect(bannerHeight).toBeGreaterThan(44)
+    await input.fill('Typing while sharing live location')
+    await page.getByRole('button', { name: 'Send', exact: true }).click()
+    await expect(messages(page).last()).toContainText('Typing while sharing live location')
     await changeViewport(500, 344, 'resize')
     await expectConversationFits(344, 500, bannerHeight)
     await expect.poll(async () => (await banner.boundingBox())!.y).toBe(344)
