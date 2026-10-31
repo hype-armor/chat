@@ -96,13 +96,14 @@ test.describe('setup reminders and Settings', () => {
   })
 
   test('keeps the conversation inside a panned iOS visual viewport', async ({ page, browser }) => {
+    test.setTimeout(60_000)
     await page.setViewportSize({ width: 390, height: 844 })
-    await page.addInitScript(() => {
+    await page.addInitScript({ content: `
       Object.defineProperty(window, 'visualViewport', {
         configurable: true,
         value: Object.assign(new EventTarget(), { height: 844, offsetTop: 0, scale: 1 }),
       })
-    })
+    ` })
     await page.reload()
     await expect(page.getByRole('status')).toHaveText('Connected')
     const username = randomUsername()
@@ -123,26 +124,26 @@ test.describe('setup reminders and Settings', () => {
       }).toEqual({ top, height, width: 390 })
     }
     const changeViewport = async (height: number, offsetTop: number, event: 'resize' | 'scroll') => {
-      await page.evaluate(({ height, offsetTop, event }) => {
-        Object.assign(window.visualViewport!, { height, offsetTop })
-        window.visualViewport!.dispatchEvent(new Event(event))
-      }, { height, offsetTop, event })
+      await page.evaluate(`
+        Object.assign(window.visualViewport, ${JSON.stringify({ height, offsetTop })});
+        window.visualViewport.dispatchEvent(new Event(${JSON.stringify(event)}));
+      `)
     }
-    const expectConversationFits = async (top: number, height: number) => {
-      await expectBounds(top, height)
+    const expectConversationFits = async (top: number, height: number, bannerHeight = 0) => {
+      await expectBounds(top + bannerHeight, height - bannerHeight)
       await expect.poll(async () => {
         const header = (await page.locator('.conversation-bar').boundingBox())!
         const composer = (await page.locator('.composer').boundingBox())!
         const newest = (await messages(page).last().boundingBox())!
         return {
-          headerVisible: header.y >= top && header.y + header.height <= top + height,
+          headerVisible: header.y >= top + bannerHeight && header.y + header.height <= top + height,
           composerBottom: composer.y + composer.height,
           newestVisible: newest.y >= header.y + header.height && newest.y + newest.height <= composer.y,
         }
       }).toEqual({ headerVisible: true, composerBottom: top + height, newestVisible: true })
-      await expect.poll(() => page.evaluate(() => ({
-        top: document.scrollingElement!.scrollTop,
-        height: document.scrollingElement!.scrollHeight,
+      await expect.poll(() => page.locator('html').evaluate((root) => ({
+        top: root.ownerDocument.scrollingElement!.scrollTop,
+        height: root.ownerDocument.scrollingElement!.scrollHeight,
       }))).toEqual({ top: 0, height: 844 })
       await expect(input).toBeFocused()
     }
@@ -154,17 +155,38 @@ test.describe('setup reminders and Settings', () => {
     await expectConversationFits(300, 500)
 
     // Pinch zoom must not resize or move the app.
-    await page.evaluate(() => {
-      Object.assign(window.visualViewport!, { height: 250, offsetTop: 400, scale: 2 })
-      window.visualViewport!.dispatchEvent(new Event('resize'))
-    })
-    await page.evaluate(() => new Promise(requestAnimationFrame))
+    await page.evaluate(`
+      Object.assign(window.visualViewport, { height: 250, offsetTop: 400, scale: 2 });
+      window.visualViewport.dispatchEvent(new Event('resize'));
+    `)
+    await page.evaluate('new Promise(requestAnimationFrame)')
     await expectBounds(300, 500)
-    await page.evaluate(() => { Object.assign(window.visualViewport!, { scale: 1 }) })
+    await page.evaluate('Object.assign(window.visualViewport, { scale: 1 })')
     await changeViewport(844, 0, 'resize')
     await expectConversationFits(0, 844)
-    await expect.poll(() => page.evaluate(
-      () => document.documentElement.style.getPropertyValue('--safe-bottom'),
+    await expect.poll(() => page.locator('html').evaluate(
+      (root) => root.style.getPropertyValue('--safe-bottom'),
+    )).toBe('')
+
+    // A wrapped live-location banner must leave room for the whole conversation.
+    await page.context().grantPermissions(['geolocation'])
+    await page.context().setGeolocation({ latitude: 48.8584, longitude: 2.2945 })
+    await page.getByRole('button', { name: 'Add attachment' }).click()
+    await page.getByRole('menuitem', { name: 'Location', exact: true }).click()
+    await page.getByRole('dialog', { name: 'Share this location?' }).getByRole('button', { name: '15 min' }).click()
+    const banner = page.getByRole('status', { name: 'Sharing live location' })
+    await expect(banner).toBeVisible()
+    const bannerHeight = (await banner.boundingBox())!.height
+    expect(bannerHeight).toBeGreaterThan(44)
+    await changeViewport(500, 344, 'resize')
+    await expectConversationFits(344, 500, bannerHeight)
+    await expect.poll(async () => (await banner.boundingBox())!.y).toBe(344)
+    await banner.getByRole('button', { name: 'Stop' }).click()
+    await expect(banner).toBeHidden()
+    await input.focus()
+    await expectConversationFits(344, 500)
+    await expect.poll(() => page.locator('html').evaluate(
+      (root) => root.style.getPropertyValue('--live-banner-height'),
     )).toBe('')
   })
 })

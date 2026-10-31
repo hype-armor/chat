@@ -748,8 +748,8 @@ button.danger {
 }
 
 .chat-layout.with-banner {
-  top: calc(var(--app-top, 0px) + 2.75rem);
-  height: calc(var(--app-height, 100dvh) - 2.75rem);
+  top: calc(var(--app-top, 0px) + var(--live-banner-height, 2.75rem));
+  height: calc(var(--app-height, 100dvh) - var(--live-banner-height, 2.75rem));
 }
 
 /* ---- UI polish (2026-10-30) ---------------------------------------------- */

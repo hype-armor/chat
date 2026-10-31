@@ -1,7 +1,7 @@
 // Live location (FR-LOC-2/3/6, doc 06 §2). The page watches the position
 // (the Geolocation API exists only here) while this device shares, and
 // hands each fix to the core worker, which decides what to send.
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CoreClient } from '../core/client'
 import type { ChatMessage, LiveInfo } from '../core/protocol'
 import { formatCoordinates } from './Location'
@@ -32,6 +32,21 @@ export function LiveBanner({
 }) {
   const now = useNow(30_000)
   const active = sharing.length > 0
+  const banner = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    if (!active) return
+    const element = banner.current!
+    const style = document.documentElement.style
+    const measure = () => style.setProperty('--live-banner-height', `${element.getBoundingClientRect().height}px`)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    return () => {
+      observer.disconnect()
+      style.removeProperty('--live-banner-height')
+    }
+  }, [active])
 
   useEffect(() => {
     if (!active || !navigator.geolocation) return
@@ -52,7 +67,7 @@ export function LiveBanner({
 
   if (!active) return null
   return (
-    <div className="live-banner" role="status" aria-label="Sharing live location">
+    <div className="live-banner" ref={banner} role="status" aria-label="Sharing live location">
       {sharing.map((s) => (
         <span key={s.conversationId}>
           📍 Sharing live location with {s.title} · {remaining(s.expiresAt, now)}{' '}
