@@ -1,5 +1,5 @@
 import { type Page, expect, test } from '@playwright/test'
-import { conversationAction, createGroup, messages, openChat, randomUsername, signUp, startChat } from './support'
+import { conversationAction, createGroup, memberAction, messages, openChat, randomUsername, signUp, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -421,27 +421,28 @@ test('group admin: rename, promote, remove, and members leaving', async ({ brows
 
   // Only admins can rename.
   await conversationAction(ben, 'Group info')
-  await expect(ben.getByRole('button', { name: 'Rename' })).toHaveCount(0)
+  await expect(ben.getByRole('button', { name: 'Edit group name' })).toHaveCount(0)
   await conversationAction(ann, 'Group info')
+  await ann.getByRole('button', { name: 'Edit group name' }).click()
   await ann.getByLabel('Group name', { exact: true }).last().fill('Book club')
-  await ann.getByRole('button', { name: 'Rename' }).click()
+  await ann.getByRole('button', { name: 'Save', exact: true }).click()
   await expect(ben.getByRole('heading', { name: 'Book club' })).toBeVisible()
 
   // Promote Ben; he can now rename.
-  await ann.getByRole('listitem').filter({ hasText: 'Ben' }).getByRole('button', { name: 'Make admin' }).click()
-  await expect(ben.getByRole('button', { name: 'Rename' })).toBeVisible()
+  await memberAction(ann, 'Ben', 'Make admin')
+  await expect(ben.getByRole('button', { name: 'Edit group name' })).toBeVisible()
 
   // Remove Cat.
-  await ann.getByRole('button', { name: 'Remove Cat' }).click()
+  await memberAction(ann, 'Cat', 'Remove')
   await expect(cat.getByText('You were removed from this group.')).toBeVisible()
-  await expect(ann.getByText('3 people')).toBeVisible()
+  await expect(ann.locator('.conversation-title')).toContainText('3 people')
 
   // Dee leaves; Ann (first admin) commits it.
   await conversationAction(dee, 'Group info')
   await dee.getByRole('button', { name: 'Leave group' }).click()
   await expect(dee.getByText('You left this group.')).toBeVisible()
-  await expect(ann.getByText('2 people')).toBeVisible()
-  await expect(ben.getByText('2 people')).toBeVisible()
+  await expect(ann.locator('.conversation-title')).toContainText('2 people')
+  await expect(ben.locator('.conversation-title')).toContainText('2 people')
 
   // Only the remaining members get new messages.
   await ben.getByLabel('Message').fill('Just us now')

@@ -483,17 +483,41 @@ function GroupInfo({
   title,
   amAdmin,
   active,
+  memberCount,
+  adding,
+  onAdd,
+  onAdded,
 }: {
   core: CoreClient
   id: string
   title: string
   amAdmin: boolean
   active: boolean
+  memberCount: number
+  adding: boolean
+  onAdd: () => void
+  onAdded: () => void
 }) {
   const [members, setMembers] = useState<MemberInfo[]>([])
   const [verifying, setVerifying] = useState<MemberInfo>()
   const [name, setName] = useState(title)
+  const [editing, setEditing] = useState(false)
+  const verifyBack = useRef<HTMLButtonElement>(null)
+  const verifyTrigger = useRef<HTMLElement | null>(null)
+  const editTrigger = useRef<HTMLButtonElement>(null)
   const { busy, error, run } = useAction()
+  const verifyingOpen = !!verifying
+
+  useLayoutEffect(() => {
+    if (!verifyingOpen) return
+    verifyBack.current?.focus({ preventScroll: true })
+    return () => verifyTrigger.current?.focus({ preventScroll: true })
+  }, [verifyingOpen])
+
+  useLayoutEffect(() => {
+    if (!editing) return
+    return () => editTrigger.current?.focus({ preventScroll: true })
+  }, [editing])
 
   useEffect(() => {
     let live = true
@@ -508,81 +532,122 @@ function GroupInfo({
 
   return (
     <section className="group-info" aria-label="Group info">
-      {amAdmin && (
+      <div className="details-identity">
+        <Avatar name={title} id={id} size={5} />
+        <div className="details-name">
+          <strong>{title}</strong>
+          {amAdmin && (
+            <button
+              type="button"
+              className="icon"
+              ref={editTrigger}
+              aria-label="Edit group name"
+              hidden={editing}
+              onClick={() => {
+                setName(title)
+                setEditing(true)
+              }}
+            >
+              ✎
+            </button>
+          )}
+        </div>
+        <span className="muted small">{memberCount} people</span>
+      </div>
+      {amAdmin && editing && (
         <form
           className="rename"
           onSubmit={(e) => {
             e.preventDefault()
-            run(() => core.renameGroup(id, name))
+            void run(async () => {
+              await core.renameGroup(id, name.trim())
+              setEditing(false)
+            })
           }}
         >
           <label>
             Group name
-            <input value={name} onChange={(e) => setName(e.target.value)} required maxLength={64} />
+            <input autoFocus value={name} onChange={(e) => setName(e.target.value)} required maxLength={64} />
           </label>
-          <button type="submit" disabled={busy}>
-            Rename
-          </button>
+          <span className="actions">
+            <button type="submit" disabled={busy || !name.trim() || name.trim() === title}>Save</button>
+            <button type="button" className="link" disabled={busy} onClick={() => setEditing(false)}>Cancel</button>
+          </span>
         </form>
       )}
-      <ul className="members" aria-label="Members">
-        {members.map((m) => (
-          <li key={m.account}>
-            <span>
-              {m.isMe ? `${m.name} (you)` : m.name}
-              {m.isAdmin && <span className="badge small">Admin</span>}
-              <VerificationBadge status={m.verification} />
-            </span>
-            {!m.isMe && (
-              <button
-                type="button"
-                className="link small"
-                onClick={() => setVerifying(m)}
-                aria-label={`Verify ${m.name}`}
-              >
-                Verify
-              </button>
-            )}
-            {amAdmin && !m.isMe && (
-              <span className="actions">
-                {!m.isAdmin && (
-                  <button
-                    type="button"
-                    className="link small"
-                    disabled={busy}
-                    onClick={() => run(() => core.makeAdmin(id, m.account))}
-                  >
-                    Make admin
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="link small danger"
-                  disabled={busy}
-                  onClick={() => run(() => core.removeMember(id, m.account))}
-                  aria-label={`Remove ${m.name}`}
-                >
-                  Remove
-                </button>
-              </span>
-            )}
-          </li>
-        ))}
-      </ul>
       {verifying && (
-        <Verify
-          core={core}
-          conversationId={id}
-          account={verifying.account}
-          name={verifying.name}
-          status={members.find((m) => m.account === verifying.account)?.verification}
-          onDone={() => setVerifying(undefined)}
-        />
+        <div>
+          <button ref={verifyBack} type="button" className="link" onClick={() => setVerifying(undefined)}>← Members</button>
+          <Verify
+            key={verifying.account}
+            core={core}
+            conversationId={id}
+            account={verifying.account}
+            name={verifying.name}
+            status={members.find((m) => m.account === verifying.account)?.verification}
+            onDone={() => setVerifying(undefined)}
+          />
+        </div>
       )}
+      <div className="details-members" hidden={!!verifying}>
+        <h3>Members</h3>
+        {active && <button type="button" className="link add-member" onClick={onAdd}>＋ Add people</button>}
+        {adding && active && <AddPeople core={core} id={id} onDone={onAdded} />}
+        <ul className="members" aria-label="Members">
+          {members.map((m) => (
+            <li key={m.account}>
+              <Avatar name={m.name} id={m.account} />
+              <span className="member-name">
+                <span>{m.name}</span>
+                {m.isMe && <span className="badge small">You</span>}
+                {m.isAdmin && <span className="badge small">Admin</span>}
+                <VerificationBadge status={m.verification} />
+              </span>
+              {!m.isMe && (
+                <Menu
+                  triggerLabel={`Actions for ${m.name}`}
+                  triggerContent="⋮"
+                  items={[
+                    {
+                      label: 'Verify',
+                      onSelect: () => {
+                        verifyTrigger.current = document.activeElement as HTMLElement | null
+                        setVerifying(m)
+                      },
+                    },
+                    ...(amAdmin ? [
+                      ...(!m.isAdmin ? [{
+                        label: 'Make admin',
+                        onSelect: () => { if (!busy) void run(() => core.makeAdmin(id, m.account)) },
+                      }] : []),
+                      {
+                        label: 'Remove',
+                        danger: true,
+                        onSelect: () => { if (!busy) void run(() => core.removeMember(id, m.account)) },
+                      },
+                    ] : []),
+                  ]}
+                />
+              )}
+            </li>
+          ))}
+        </ul>
+      </div>
       {active && (
-        <button type="button" className="link danger" disabled={busy} onClick={() => run(() => core.leaveGroup(id))}>
-          Leave group
-        </button>
+        <div className="details-danger">
+          <h3>Danger zone</h3>
+          <button
+            type="button"
+            className="link danger"
+            disabled={busy}
+            onClick={() => run(async () => {
+              await core.leaveGroup(id)
+              onAdded()
+            })}
+          >
+            Leave group
+          </button>
+        </div>
       )}
       {error && (
         <p role="alert" className="error">
@@ -729,9 +794,42 @@ function Conversation({
 }) {
   const [panel, setPanel] = useState<'add' | 'info' | 'verify' | 'report'>()
   const detailsId = useId()
+  const detailsHeadingId = useId()
+  const details = useRef<HTMLElement>(null)
+  const detailsClose = useRef<HTMLButtonElement>(null)
+  const detailsTrigger = useRef<HTMLElement | null>(null)
+  const [narrow, setNarrow] = useState(() => matchMedia('(max-width: 40rem)').matches)
   const [reported, setReported] = useState(false)
   const active = status === 'active'
-  const toggle = (p: 'add' | 'info' | 'verify' | 'report') => setPanel((current) => (current === p ? undefined : p))
+  const openPanel = (p: 'add' | 'info' | 'verify' | 'report') => {
+    if (!panel) detailsTrigger.current = document.activeElement as HTMLElement | null
+    setPanel(p)
+  }
+  const panelOpen = !!panel
+
+  useEffect(() => {
+    const media = matchMedia('(max-width: 40rem)')
+    const update = () => setNarrow(media.matches)
+    media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!panelOpen) return
+    detailsClose.current?.focus({ preventScroll: true })
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      // Let an open Menu dismiss itself before dismissing the details view.
+      if (event.target instanceof Element && event.target.closest('[role="menu"]')) return
+      event.preventDefault()
+      setPanel(undefined)
+    }
+    document.addEventListener('keydown', escape)
+    return () => {
+      document.removeEventListener('keydown', escape)
+      detailsTrigger.current?.focus({ preventScroll: true })
+    }
+  }, [panelOpen])
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [draft, setDraft] = useState('')
   const [attaching, setAttaching] = useState(false)
@@ -747,10 +845,10 @@ function Conversation({
   const [recording, setRecording] = useState(false)
   const wasRecording = useRef(false)
   const menuItems: MenuItem[] = [
-    ...(isGroup ? [{ label: 'Group info', onSelect: () => toggle('info') }] : []),
-    ...(peer ? [{ label: 'Verify safety number', onSelect: () => toggle('verify') }] : []),
-    ...(active ? [{ label: 'Add people', onSelect: () => toggle('add') }] : []),
-    ...(peer ? [{ label: 'Report', onSelect: () => toggle('report') }] : []),
+    ...(isGroup ? [{ label: 'Group info', onSelect: () => openPanel('info') }] : []),
+    ...(peer ? [{ label: 'Verify safety number', onSelect: () => openPanel('verify') }] : []),
+    ...(active ? [{ label: 'Add people', onSelect: () => openPanel('add') }] : []),
+    ...(peer ? [{ label: 'Report', onSelect: () => openPanel('report') }] : []),
     ...(peer && !blocked ? [{ label: 'Block', onSelect: () => void core.block(peer), danger: true }] : []),
   ]
 
@@ -873,7 +971,8 @@ function Conversation({
   }
 
   return (
-    <section className="conversation" aria-label={`Conversation with ${title}`}>
+    <div className={`conversation-shell${panel ? ' details-open' : ''}`}>
+    <section className="conversation" aria-label={`Conversation with ${title}`} inert={panelOpen && narrow}>
       <header className="bar conversation-bar">
         <div className="title-row">
           <button type="button" className="link back" onClick={onBack} aria-label="Back to conversations">
@@ -884,7 +983,8 @@ function Conversation({
             className="conversation-title"
             aria-label={isGroup ? 'Group info' : 'Verify safety number'}
             aria-describedby={detailsId}
-            onClick={() => toggle(isGroup ? 'info' : 'verify')}
+            aria-expanded={panelOpen}
+            onClick={() => openPanel(isGroup ? 'info' : 'verify')}
           >
             <Avatar name={title} id={peer ?? id} />
             <span className="who" id={detailsId}>
@@ -940,25 +1040,11 @@ function Conversation({
           <Menu key={id} triggerLabel="Conversation menu" triggerContent="⋮" items={menuItems} />
         </div>
       </header>
-      {panel === 'add' && active && <AddPeople core={core} id={id} onDone={() => setPanel(undefined)} />}
       {isGroup && active && !request && <OngoingCall core={core} groupCalls={groupCalls} id={id} title={title} />}
       {verification === 'changed' && panel !== 'verify' && (
         <p className="notice warning" role="note">
           {title}'s safety number changed since you verified it. Verify it again before sharing anything sensitive.
         </p>
-      )}
-      {panel === 'report' && peer && (
-        <ReportForm
-          core={core}
-          conversationId={id}
-          account={peer}
-          name={title}
-          blocked={blocked}
-          onDone={(sent) => {
-            setReported(sent)
-            setPanel(undefined)
-          }}
-        />
       )}
       {reported && (
         <p className="notice" role="status">
@@ -993,17 +1079,6 @@ function Conversation({
           </button>
         </p>
       )}
-      {panel === 'verify' && peer && (
-        <Verify
-          core={core}
-          conversationId={id}
-          account={peer}
-          name={title}
-          status={verification}
-          onDone={() => setPanel(undefined)}
-        />
-      )}
-      {panel === 'info' && <GroupInfo core={core} id={id} title={title} amAdmin={amAdmin && active} active={active} />}
       <div className="messages-viewport" ref={viewport} onScroll={onScroll}>
         <ol className="messages" ref={content}>
           {messageLayout(messages, Date.now()).map(({ message: m, day, first, last }) => (
@@ -1162,5 +1237,95 @@ function Conversation({
         />
       </form>
     </section>
+    {panel && (
+      <aside
+        className="conversation-details"
+        aria-labelledby={detailsHeadingId}
+        ref={details}
+        onKeyDown={(event) => {
+          if (!narrow || event.key !== 'Tab') return
+          const buttons = Array.from(details.current?.querySelectorAll<HTMLElement>(
+            'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [tabindex="0"]',
+          ) ?? []).filter((element) => element.getClientRects().length > 0)
+          const first = buttons[0]
+          const last = buttons[buttons.length - 1]
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault()
+            last?.focus()
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault()
+            first?.focus()
+          }
+        }}
+      >
+        <header className="details-head">
+          <button
+            type="button"
+            className="link"
+            ref={detailsClose}
+            aria-label={narrow ? 'Back to conversation' : 'Close details'}
+            onClick={() => setPanel(undefined)}
+          >{narrow ? '← Back' : '✕'}</button>
+          <h2 id={detailsHeadingId}>Conversation details</h2>
+        </header>
+        <div className="details-content">
+          {isGroup ? (
+            <GroupInfo
+              core={core}
+              id={id}
+              title={title}
+              amAdmin={amAdmin && active}
+              active={active}
+              memberCount={memberCount}
+              adding={panel === 'add'}
+              onAdd={() => setPanel('add')}
+              onAdded={() => setPanel(undefined)}
+            />
+          ) : (
+            <>
+              <div className="details-identity">
+                <Avatar name={title} id={peer ?? id} size={5} />
+                <strong>{title}</strong>
+                <VerificationBadge status={verification} />
+              </div>
+              {panel === 'add' && active ? (
+                <AddPeople core={core} id={id} onDone={() => setPanel(undefined)} />
+              ) : panel === 'report' && peer ? (
+                <ReportForm
+                  core={core}
+                  conversationId={id}
+                  account={peer}
+                  name={title}
+                  blocked={blocked}
+                  onDone={(sent) => {
+                    setReported(sent)
+                    setPanel(undefined)
+                  }}
+                />
+              ) : peer && (
+                <Verify
+                  core={core}
+                  conversationId={id}
+                  account={peer}
+                  name={title}
+                  status={verification}
+                  onDone={() => setPanel(undefined)}
+                />
+              )}
+              {peer && (
+                <div className="details-danger">
+                  <h3>Danger zone</h3>
+                  <button type="button" className="link danger" onClick={() => void (
+                    blocked ? core.unblock(peer) : core.block(peer)
+                  )}>{blocked ? 'Unblock' : 'Block'}</button>
+                  <button type="button" className="link danger" onClick={() => setPanel('report')}>Report</button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </aside>
+    )}
+    </div>
   )
 }

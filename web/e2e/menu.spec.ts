@@ -1,5 +1,5 @@
 import { type Page, expect, test } from '@playwright/test'
-import { conversationAction, createGroup, randomUsername, signUp, startChat } from './support'
+import { closeDetails, conversationAction, conversationDetails, createGroup, memberAction, randomUsername, signUp, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -59,7 +59,7 @@ test('conversation menu supports keyboard, dismissal, actions and a 320px header
 
   await conversationAction(alice, 'Verify safety number')
   await expect(menu).toBeHidden()
-  await expect(trigger).toBeFocused()
+  await expect(alice.getByRole('button', { name: 'Close details' })).toBeFocused()
   await expect(alice.getByTestId('safety-number')).toBeVisible()
   await alice.getByRole('button', { name: 'Mark as verified' }).click()
   await expect(alice.locator('.conversation-title')).toHaveAccessibleDescription(/Verified$/)
@@ -76,7 +76,8 @@ test('conversation menu supports keyboard, dismissal, actions and a 320px header
   await expect(alice.getByTestId('safety-number')).toBeVisible()
   await conversationAction(alice, 'Add people')
   await expect(alice.getByLabel('Usernames to add')).toBeVisible()
-  await conversationAction(alice, 'Block')
+  await conversationDetails(alice).getByRole('button', { name: 'Block', exact: true }).click()
+  await closeDetails(alice)
   await expect(alice.getByRole('note')).toContainText('You blocked')
   await trigger.click()
   await expect(items).toHaveText(['Verify safety number', 'Add people', 'Report'])
@@ -94,10 +95,88 @@ test('group title opens info and the menu keeps group actions on one row', async
   await ann.setViewportSize({ width: 320, height: 640 })
   await expectSingleRow(ann)
   await ann.locator('.conversation-title').click()
-  await expect(ann.getByRole('button', { name: 'Rename', exact: true })).toBeVisible()
+  await expect(conversationDetails(ann)).toBeVisible()
+  await expect(ann.getByLabel('Group name', { exact: true })).toBeHidden()
+  await expect(ann.getByRole('button', { name: 'Back to conversation' })).toBeFocused()
+  await closeDetails(ann)
   await ann.getByRole('button', { name: 'Conversation menu' }).click()
   await expect(ann.getByRole('menuitem')).toHaveText(['Group info', 'Add people'])
   await ann.getByRole('menuitem', { name: 'Add people', exact: true }).click()
   await expect(ann.getByRole('menu')).toBeHidden()
   await expect(ann.getByLabel('Usernames to add')).toBeVisible()
+})
+
+test('details stay beside messages on desktop and replace them on phones without document scrolling', async ({ browser }) => {
+  const username = randomUsername()
+  const ann = await signUp(browser, 'Ann', randomUsername())
+  await signUp(browser, 'Ben', username)
+  await createGroup(ann, 'Club', [username])
+  const title = ann.getByRole('button', { name: 'Group info', exact: true })
+  const panel = conversationDetails(ann)
+  const viewport = ann.locator('.messages-viewport')
+  const composer = ann.getByLabel('Message', { exact: true })
+  for (let i = 0; i < 15; i++) {
+    await composer.fill(`Message ${i}: ${'A longer message to wrap when the details panel opens. '.repeat(5)}`)
+    await ann.getByRole('button', { name: 'Send', exact: true }).click()
+  }
+  const pinned = () => viewport.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)
+  await expect.poll(pinned).toBeLessThan(3)
+  await title.click()
+  await expect(ann.getByRole('button', { name: 'Close details' })).toBeFocused()
+  const messageBounds = (await viewport.boundingBox())!
+  const panelBounds = (await panel.boundingBox())!
+  expect(messageBounds.x + messageBounds.width).toBeLessThanOrEqual(panelBounds.x)
+  await expect(composer).toBeVisible()
+  await expect.poll(pinned).toBeLessThan(3)
+  await expect(ann.getByLabel('Group name', { exact: true })).toBeHidden()
+  await ann.getByRole('button', { name: 'Edit group name' }).click()
+  const save = panel.getByRole('button', { name: 'Save', exact: true })
+  await expect(save).toBeDisabled()
+  await ann.getByLabel('Group name', { exact: true }).fill('Not saved')
+  await panel.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(panel).toContainText('Club')
+  await expect(ann.getByLabel('Group name', { exact: true })).toBeHidden()
+
+  await panel.getByRole('button', { name: 'Actions for Ben' }).click()
+  await expect(panel.getByRole('menuitem', { name: 'Remove', exact: true })).toHaveClass('danger')
+  await ann.keyboard.press('Escape')
+  await expect(panel.getByRole('menu')).toBeHidden()
+  await expect(panel).toBeVisible()
+  await expect(panel.getByRole('button', { name: 'Actions for Ben' })).toBeFocused()
+  await memberAction(ann, 'Ben', 'Verify')
+  await expect(panel.getByTestId('safety-number')).toBeVisible()
+  await panel.getByRole('button', { name: 'Mark as verified' }).click()
+  await expect(panel.getByRole('list', { name: 'Members' })).toContainText('Verified')
+  await ann.keyboard.press('Escape')
+  await expect(panel).toBeHidden()
+  await expect(title).toBeFocused()
+
+  await viewport.evaluate((el) => { el.scrollTop = 0 })
+  await expect.poll(() => viewport.evaluate((el) => el.scrollTop)).toBe(0)
+  await title.click()
+  await expect.poll(() => viewport.evaluate((el) => el.scrollTop)).toBe(0)
+  await closeDetails(ann)
+  await ann.setViewportSize({ width: 320, height: 640 })
+  await title.click()
+  const back = panel.getByRole('button', { name: 'Back to conversation' })
+  await expect(back).toBeFocused()
+  await expect(composer).toBeHidden()
+  await expect(ann.locator('.conversation')).toHaveAttribute('inert')
+  await ann.keyboard.press('Shift+Tab')
+  await expect(panel.getByRole('button', { name: 'Leave group' })).toBeFocused()
+  await ann.keyboard.press('Tab')
+  await expect(back).toBeFocused()
+  await panel.getByRole('button', { name: 'Add people', exact: false }).click()
+  await expect(panel.getByLabel('Usernames to add')).toBeVisible()
+  await expect.poll(() => ann.locator('html').evaluate((el) => ({
+    x: el.scrollLeft,
+    y: el.scrollTop,
+    overflow: el.scrollHeight > el.clientHeight,
+    widthOverflow: el.scrollWidth > el.clientWidth,
+  }))).toEqual({ x: 0, y: 0, overflow: false, widthOverflow: false })
+  await back.click()
+  await expect(panel).toBeHidden()
+  await expect(title).toBeFocused()
+  await expect(composer).toBeVisible()
+  await ann.context().close()
 })
