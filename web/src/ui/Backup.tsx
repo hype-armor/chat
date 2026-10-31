@@ -22,7 +22,12 @@ export function Backup({ core, backup }: { core: CoreClient; backup?: { lastAt?:
 
   return (
     <details className="devices" open={recoveryKey !== undefined || undefined}>
-      <summary>Backup</summary>
+      <summary>
+        <span>Backup</span>
+        <span className="setting-status">
+          {backup?.lastAt ? `Last backup: ${new Date(backup.lastAt).toLocaleDateString()}` : backup ? 'No backup yet' : 'Off'}
+        </span>
+      </summary>
       {recoveryKey ? (
         <div className="recovery">
           <p className="small">

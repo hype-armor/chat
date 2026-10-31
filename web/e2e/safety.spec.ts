@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { conversationAction, conversationDetails, messages, openChat, openSettings, randomUsername, signUp, startChat } from './support'
+import { conversationAction, conversationDetails, messages, openChat, openSetting, randomUsername, signUp, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -28,8 +28,8 @@ test('reporting and blocking someone, then unblocking them (FR-ID-8)', async ({ 
   await alice.getByLabel('Message').fill('Last chance!')
   await alice.getByRole('button', { name: 'Send' }).click()
   await expect(messages(alice).filter({ hasText: 'Last chance!' }).getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
-  await openSettings(bob)
-  await bob.getByText('Blocked people').click()
+  const blocked = await openSetting(bob, 'Blocked people')
+  await expect(blocked.getByTestId('blocked-count')).toHaveText('1')
   await expect(bob.getByRole('list', { name: 'Blocked people' })).toContainText('Alice')
   await expect(messages(bob)).toHaveText([/Buy cheap watches/])
 

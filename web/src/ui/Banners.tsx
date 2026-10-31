@@ -85,24 +85,29 @@ function InstallAction({ setup }: { setup: Setup }) {
       </p>
     )
   }
+  if (!setup.hint) {
+    return setup.installed ? <p className="muted small">Chat is installed.</p> : null
+  }
   return (
-    <>
-      <button type="button" disabled={setup.busy || !setup.hint} onClick={setup.install}>
-        Install app
-      </button>
-      {!setup.hint && (
-        <p className="muted small">
-          {setup.installed ? 'Chat is installed.' : "Use your browser's menu to install Chat, if supported."}
-        </p>
-      )}
-    </>
+    <button type="button" disabled={setup.busy} onClick={setup.install}>
+      Install app
+    </button>
   )
 }
 
 export function SetupActions({ setup }: { setup: Setup }) {
   return (
     <details className="devices">
-      <summary>This device</summary>
+      <summary>
+        <span>This device</span>
+        <span className="setting-status">
+          {setup.installed ? 'Installed'
+            : setup.state === 'persisted' ? 'Data kept'
+            : setup.state === 'denied' ? 'Data at risk'
+            : setup.state === 'unsupported' ? 'Storage unavailable'
+            : setup.state === 'ask' ? 'Not kept' : 'Checking…'}
+        </span>
+      </summary>
       <button
         type="button"
         disabled={setup.busy || !setup.state || setup.state === 'persisted' || setup.state === 'unsupported'}
@@ -115,7 +120,7 @@ export function SetupActions({ setup }: { setup: Setup }) {
       {setup.state === 'denied' && (
         <p className="muted small">Your browser may delete this app's data when storage runs low.</p>
       )}
-      <h3>Install app</h3>
+      {(setup.hint || setup.installed) && <h4>Install app</h4>}
       <InstallAction setup={setup} />
       {setup.error && (
         <p role="alert" className="error">{setup.error}</p>
@@ -130,29 +135,33 @@ export function SetupBanner({ setup }: { setup: Setup }) {
   if (!banner) return null
   return (
     <section
-      className={`banner ${banner === 'storage-warn' ? 'warning' : ''}`}
+      className={`banner setup-banner ${banner === 'storage-warn' ? 'warning' : ''}`}
       aria-label={banner === 'install' ? 'Install' : 'Storage'}
     >
       {banner === 'install' ? (
         <>
-          <p>Install Chat for notifications and quicker start-up.</p>
-          <InstallAction setup={setup} />
+          <p>{setup.hint === 'ios' ? 'Install: Share → Add to Home Screen.' : 'Install Chat for notifications.'}</p>
+          {setup.hint !== 'ios' && <InstallAction setup={setup} />}
         </>
       ) : banner === 'storage-ask' ? (
         <>
-          <p>Keep your keys and messages safe on this device: let the browser keep this app's data.</p>
+          <p>Keep your keys safe on this device.</p>
           <button type="button" disabled={setup.busy} onClick={setup.keepData}>
-            Keep data on this device
+            Keep
           </button>
         </>
       ) : (
         <p>
-          Your browser may delete this app's data when storage runs low, including your keys and messages. Installing
-          the app usually prevents this.
+          Your browser may delete keys and messages. Install Chat to help keep them.
         </p>
       )}
-      <button type="button" className="link small" onClick={() => setup.dismiss(banner)}>
-        Not now
+      <button
+        type="button"
+        className="link setup-dismiss"
+        aria-label="Dismiss setup reminder"
+        onClick={() => setup.dismiss(banner)}
+      >
+        ×
       </button>
       {setup.error && (
         <p role="alert" className="error">{setup.error}</p>

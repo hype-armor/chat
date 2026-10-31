@@ -167,26 +167,39 @@ export function Chat({
                 </button>
                 <h2>Settings</h2>
               </div>
-              <p className="muted small settings-identity">Your username: {view.me.username}</p>
-              <NotificationToggle core={core} />
-              <Backup core={core} backup={view.backup} />
-              <Invite core={core} />
-              <Devices core={core} />
-              <Privacy
-                core={core}
-                readReceipts={view.readReceipts}
-                relayCalls={view.relayCalls}
-                callStats={view.callStats}
-              />
-              <Media core={core} media={view.media} />
-              <BlockedList core={core} />
-              <DeleteAccount core={core} />
-              <SetupActions setup={setup} />
-              <section className="devices" aria-label="About / Diagnostics">
-                <h3>About / Diagnostics</h3>
-                <button type="button" className="link" onClick={onDiagnostics}>
-                  Diagnostics
+              <section className="settings-group" aria-labelledby="settings-account">
+                <h3 id="settings-account">Account</h3>
+                <SettingsIdentity name={view.me.displayName} username={view.me.username} />
+                <Invite core={core} />
+              </section>
+              <section className="settings-group" aria-labelledby="settings-privacy">
+                <h3 id="settings-privacy">Notifications &amp; privacy</h3>
+                <NotificationToggle core={core} />
+                <Privacy
+                  core={core}
+                  readReceipts={view.readReceipts}
+                  relayCalls={view.relayCalls}
+                  callStats={view.callStats}
+                />
+                <BlockedList core={core} />
+              </section>
+              <section className="settings-group" aria-labelledby="settings-data">
+                <h3 id="settings-data">Devices &amp; data</h3>
+                <Devices core={core} />
+                <Backup core={core} backup={view.backup} />
+                <Media core={core} media={view.media} />
+                <SetupActions setup={setup} />
+              </section>
+              <section className="settings-group" aria-labelledby="settings-about">
+                <h3 id="settings-about">About</h3>
+                <button type="button" className="setting-row" aria-label="Diagnostics" onClick={onDiagnostics}>
+                  <span>Diagnostics</span>
+                  <span className="setting-status">Version &amp; self-test</span>
                 </button>
+              </section>
+              <section className="settings-group danger-zone" aria-labelledby="settings-danger">
+                <h3 id="settings-danger">Danger zone</h3>
+                <DeleteAccount core={core} />
               </section>
             </nav>
           ) : panel === 'chat' || panel === 'group' ? (
@@ -253,6 +266,28 @@ export function Chat({
         )}
       </div>
     </>
+  )
+}
+
+function SettingsIdentity({ name, username }: { name: string; username: string }) {
+  const [copied, setCopied] = useState(false)
+  const { error, run } = useAction()
+  return (
+    <div className="settings-identity">
+      <strong>{name}</strong>
+      <span className="muted small">Your username: {username}</span>
+      <button
+        type="button"
+        className="link small"
+        onClick={() => run(async () => {
+          await navigator.clipboard.writeText(username)
+          setCopied(true)
+        })}
+      >
+        {copied ? 'Copied' : 'Copy username'}
+      </button>
+      {error && <p role="alert" className="error">{error}</p>}
+    </div>
   )
 }
 
@@ -416,10 +451,22 @@ function NotificationToggle({ core }: { core: CoreClient }) {
     void refreshSubscription(core)
   }, [core])
 
-  if (state === 'unsupported' || state === 'granted') return null
   return (
-    <div className="notifications">
-      {state === 'denied' ? (
+    <details className="devices">
+      <summary>
+        <span>Notifications</span>
+        <span className="setting-status">
+          {state === 'granted' ? 'Enabled'
+            : state === 'denied' ? 'Blocked'
+            : state === 'unsupported' ? 'Unavailable'
+            : 'Not enabled'}
+        </span>
+      </summary>
+      {state === 'granted' ? (
+        <p className="muted small">Notifications are enabled.</p>
+      ) : state === 'unsupported' ? (
+        <p className="muted small">Notifications are not supported by this browser.</p>
+      ) : state === 'denied' ? (
         <p className="muted small">Notifications are blocked in your browser settings.</p>
       ) : (
         <button
@@ -436,7 +483,7 @@ function NotificationToggle({ core }: { core: CoreClient }) {
           {error}
         </p>
       )}
-    </div>
+    </details>
   )
 }
 
