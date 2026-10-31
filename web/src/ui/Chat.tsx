@@ -793,6 +793,7 @@ function Conversation({
   onBack: () => void
 }) {
   const [panel, setPanel] = useState<'add' | 'info' | 'verify' | 'report'>()
+  const [detailsVersion, setDetailsVersion] = useState(0)
   const detailsId = useId()
   const detailsHeadingId = useId()
   const details = useRef<HTMLElement>(null)
@@ -803,6 +804,7 @@ function Conversation({
   const active = status === 'active'
   const openPanel = (p: 'add' | 'info' | 'verify' | 'report') => {
     if (!panel) detailsTrigger.current = document.activeElement as HTMLElement | null
+    setDetailsVersion((version) => version + 1)
     setPanel(p)
   }
   const panelOpen = !!panel
@@ -829,7 +831,7 @@ function Conversation({
       document.removeEventListener('keydown', escape)
       detailsTrigger.current?.focus({ preventScroll: true })
     }
-  }, [panelOpen])
+  }, [panelOpen, detailsVersion])
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [draft, setDraft] = useState('')
   const [attaching, setAttaching] = useState(false)
@@ -838,6 +840,7 @@ function Conversation({
   const content = useRef<HTMLOListElement>(null)
   const atBottom = useRef(true)
   const lastScrollTop = useRef(0)
+  const viewportSize = useRef({ width: 0, height: 0 })
   const previousMessages = useRef<ChatMessage[]>([])
   const [newMessages, setNewMessages] = useState(false)
   const picker = useRef<HTMLInputElement>(null)
@@ -864,12 +867,19 @@ function Conversation({
   const onScroll = useCallback(() => {
     const list = viewport.current
     if (!list) return
+    // Reflow can move the browser's scroll anchor; it isn't a user scroll.
+    if (list.clientWidth !== viewportSize.current.width || list.clientHeight !== viewportSize.current.height) {
+      viewportSize.current = { width: list.clientWidth, height: list.clientHeight }
+      if (atBottom.current) scrollToBottom()
+      else lastScrollTop.current = list.scrollTop
+      return
+    }
     // A queued event from our own scroll must not unpin newly grown content.
     if (list.scrollTop === lastScrollTop.current) return
     lastScrollTop.current = list.scrollTop
     atBottom.current = list.scrollHeight - list.scrollTop - list.clientHeight <= 80
     if (atBottom.current) setNewMessages(false)
-  }, [])
+  }, [scrollToBottom])
 
   useEffect(() => {
     let live = true
@@ -1271,6 +1281,7 @@ function Conversation({
         <div className="details-content">
           {isGroup ? (
             <GroupInfo
+              key={detailsVersion}
               core={core}
               id={id}
               title={title}

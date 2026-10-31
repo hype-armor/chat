@@ -216,6 +216,7 @@ form {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  container-type: inline-size;
 }
 
 .conversation-shell > .conversation {
@@ -317,6 +318,23 @@ form {
 .conversation-details .rename,
 .conversation-details .add-people {
   min-width: 0;
+}
+
+@container (max-width: 40rem) {
+  .details-open .conversation-bar,
+  .details-open .header-actions,
+  .details-open .composer {
+    flex-wrap: wrap;
+  }
+
+  .details-open .title-row {
+    flex-basis: 100%;
+  }
+
+  .details-open .composer textarea {
+    flex-basis: 100%;
+    order: -1;
+  }
 }
 
 @media (max-width: 40rem) {

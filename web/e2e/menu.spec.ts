@@ -147,6 +147,12 @@ test('details stay beside messages on desktop and replace them on phones without
   await expect(panel.getByTestId('safety-number')).toBeVisible()
   await panel.getByRole('button', { name: 'Mark as verified' }).click()
   await expect(panel.getByRole('list', { name: 'Members' })).toContainText('Verified')
+  await expect(panel.getByRole('button', { name: 'Actions for Ben' })).toBeFocused()
+  await memberAction(ann, 'Ben', 'Verify')
+  // Use the header directly: switching views must work without closing details.
+  await ann.getByRole('button', { name: 'Conversation menu' }).click()
+  await ann.getByRole('menuitem', { name: 'Add people', exact: true }).click()
+  await expect(panel.getByLabel('Usernames to add')).toBeVisible()
   await ann.keyboard.press('Escape')
   await expect(panel).toBeHidden()
   await expect(title).toBeFocused()
@@ -155,6 +161,16 @@ test('details stay beside messages on desktop and replace them on phones without
   await expect.poll(() => viewport.evaluate((el) => el.scrollTop)).toBe(0)
   await title.click()
   await expect.poll(() => viewport.evaluate((el) => el.scrollTop)).toBe(0)
+  await ann.setViewportSize({ width: 641, height: 720 })
+  await expect(composer).toBeVisible()
+  const compactMessageBounds = (await viewport.boundingBox())!
+  const compactPanelBounds = (await panel.boundingBox())!
+  expect(compactMessageBounds.x + compactMessageBounds.width).toBeLessThanOrEqual(compactPanelBounds.x)
+  const menuBounds = (await ann.getByRole('button', { name: 'Conversation menu' }).boundingBox())!
+  expect(menuBounds.x + menuBounds.width).toBeLessThanOrEqual(compactPanelBounds.x)
+  const composerBounds = (await composer.boundingBox())!
+  expect(composerBounds.width).toBeGreaterThan(60)
+  expect(composerBounds.x + composerBounds.width).toBeLessThanOrEqual(compactPanelBounds.x)
   await closeDetails(ann)
   await ann.setViewportSize({ width: 320, height: 640 })
   await title.click()
