@@ -83,11 +83,10 @@ test.describe('setup reminders and Settings', () => {
     await expect(page.getByRole('button', { name: 'Diagnostics', exact: true })).toHaveCount(0)
     for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
       await page.setViewportSize(viewport)
-      // The height follows the visual viewport's resize event, a frame after the resize.
-      await expect.poll(async () => {
-        const bounds = await page.locator('.chat-layout').boundingBox()
-        return bounds && { y: bounds.y, height: bounds.height, width: bounds.width }
-      }).toEqual({ y: 0, height: viewport.height, width: viewport.width })
+      const bounds = await page.locator('.chat-layout').boundingBox()
+      expect(bounds?.y).toBe(0)
+      expect(bounds?.height).toBe(viewport.height)
+      expect(bounds?.width).toBe(viewport.width)
     }
     await openSettings(page)
     await page.getByRole('button', { name: 'Diagnostics', exact: true }).click()
