@@ -245,6 +245,8 @@ form {
 .details-head h2 {
   margin: 0;
   font-size: 1rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .details-content {
@@ -283,8 +285,21 @@ form {
 }
 
 .conversation-details .member-name {
-  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  flex: 1 1 4rem;
   min-width: 0;
+}
+
+.conversation-details .member-name > span:first-child {
+  flex-basis: 100%;
+}
+
+.conversation-details .member-name .badge {
+  margin-left: 0;
+  white-space: nowrap;
 }
 
 .details-members {
@@ -294,6 +309,7 @@ form {
 
 .conversation-details .members li {
   padding-block: 0.375rem;
+  flex-wrap: wrap;
 }
 
 .conversation-details .add-member {

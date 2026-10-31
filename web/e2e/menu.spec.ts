@@ -171,6 +171,7 @@ test('details stay beside messages on desktop and replace them on phones without
   const composerBounds = (await composer.boundingBox())!
   expect(composerBounds.width).toBeGreaterThan(60)
   expect(composerBounds.x + composerBounds.width).toBeLessThanOrEqual(compactPanelBounds.x)
+  await expect.poll(() => panel.locator('.details-content').evaluate((el) => el.scrollWidth - el.clientWidth)).toBe(0)
   await closeDetails(ann)
   await ann.setViewportSize({ width: 320, height: 640 })
   await title.click()
