@@ -27,7 +27,8 @@ export function Onboarding({ core, notice }: { core: CoreClient; notice?: string
   const [linking, setLinking] = useState(false)
   const [restoring, setRestoring] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string>()
+  const [inviteRequired, setInviteRequired] = useState(false)
+  const [error, setError] = useState<{ message: string; field?: 'username' | 'invite' }>()
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
@@ -37,80 +38,143 @@ export function Onboarding({ core, notice }: { core: CoreClient; notice?: string
       await core.signUp(username, name.trim(), invite)
       history.replaceState(null, '', location.pathname)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      const message = err instanceof Error ? err.message : String(err)
+      const field =
+        message === 'that username is taken' || message.startsWith('username must look like')
+          ? 'username'
+          : message === 'sign-up needs an invite' || message.startsWith('this invite is not valid')
+            ? 'invite'
+            : undefined
+      if (message === 'sign-up needs an invite') setInviteRequired(true)
+      setError({ message, field })
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <main className="onboarding">
-      <h1>Chat</h1>
-      <p className="muted">End-to-end encrypted. Your messages never reach our servers in readable form.</p>
+    <main className="onboarding onboarding-card">
       {notice && (
         <p role="status" className="notice">
           {notice}
         </p>
       )}
+      <header className="onboarding-brand">
+        <img src="/icon.svg" width="56" height="56" alt="" />
+        <h1>Chat</h1>
+        <p className="muted">End-to-end encrypted. The server never sees your messages.</p>
+      </header>
       {linking ? (
         <LinkThisDevice core={core} onCancel={() => setLinking(false)} />
       ) : restoring ? (
         <Restore core={core} onCancel={() => setRestoring(false)} />
       ) : (
-        <form onSubmit={submit}>
-          <label>
-            Your name
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              onBlur={() => username || setUsername(suggestUsername(name))}
-              required
-              maxLength={64}
-              autoComplete="name"
-            />
-          </label>
-          <label>
-            Username
-            <input
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              required
-              placeholder="alex.27"
-              pattern="[A-Za-z][A-Za-z0-9_]{2,19}\.[0-9]{2,4}"
-              title="A name of 3-20 letters, digits or _, then a dot and 2-4 digits, like alex.27"
-              autoComplete="username"
-              autoCapitalize="none"
-              spellCheck={false}
-            />
-          </label>
-          <p className="muted small">
-            People add you by your username, so share it only with people you want to hear from.
-          </p>
-          <label>
-            Invite code
-            <input
-              value={invite}
-              onChange={(e) => setInvite(e.target.value)}
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="From your invite link"
-            />
-          </label>
-          <button type="submit" disabled={busy}>
-            Sign up
-          </button>
-          <button type="button" className="link" onClick={() => setLinking(true)}>
-            Already using Chat on another device? Link this one
-          </button>
-          <button type="button" className="link" onClick={() => setRestoring(true)}>
-            Lost your devices? Restore from backup
-          </button>
-        </form>
-      )}
-      {error && (
-        <p role="alert" className="error">
-          {error}
-        </p>
+        <>
+          <form onSubmit={submit} aria-label="Sign up">
+            <div className="onboarding-field">
+              <div className="onboarding-label">
+                <label htmlFor="signup-name">Your name</label>
+                <span className="muted small">Required</span>
+              </div>
+              <input
+                id="signup-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                onBlur={() => username || setUsername(suggestUsername(name))}
+                required
+                maxLength={64}
+                autoComplete="name"
+              />
+            </div>
+            <div className="onboarding-field">
+              <div className="onboarding-label">
+                <label htmlFor="signup-username">Username</label>
+                <span className="muted small">Required</span>
+              </div>
+              <input
+                id="signup-username"
+                value={username}
+                onChange={(e) => {
+                  setUsername(e.target.value)
+                  setError((current) => (current?.field === 'username' ? undefined : current))
+                }}
+                required
+                placeholder="alex.27"
+                pattern="[A-Za-z][A-Za-z0-9_]{2,19}\.[0-9]{2,4}"
+                title="A name of 3-20 letters, digits or _, then a dot and 2-4 digits, like alex.27"
+                autoComplete="username"
+                autoCapitalize="none"
+                spellCheck={false}
+                aria-invalid={error?.field === 'username' || undefined}
+                aria-describedby={`signup-username-help${error?.field === 'username' ? ' signup-username-error' : ''}`}
+              />
+              <p id="signup-username-help" className="muted small">
+                People add you by your username, so share it only with people you want to hear from.
+              </p>
+              {error?.field === 'username' && (
+                <p id="signup-username-error" role="alert" className="error small">
+                  {error.message}
+                </p>
+              )}
+            </div>
+            <div className="onboarding-field">
+              <div className="onboarding-label">
+                <label htmlFor="signup-invite">Invite code</label>
+                <span className="muted small">{inviteRequired ? 'Required' : 'Optional on open servers'}</span>
+              </div>
+              <input
+                id="signup-invite"
+                value={invite}
+                onChange={(e) => {
+                  setInvite(e.target.value)
+                  setError((current) => (current?.field === 'invite' ? undefined : current))
+                }}
+                required={inviteRequired}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="From your invite link"
+                aria-invalid={error?.field === 'invite' || undefined}
+                aria-describedby={error?.field === 'invite' ? 'signup-invite-error' : undefined}
+              />
+              {error?.field === 'invite' && (
+                <p id="signup-invite-error" role="alert" className="error small">
+                  {error.message}
+                </p>
+              )}
+            </div>
+            {error && !error.field && (
+              <p role="alert" className="error small">
+                {error.message}
+              </p>
+            )}
+            <button type="submit" disabled={busy}>
+              Sign up
+            </button>
+          </form>
+          <section className="onboarding-alternatives" aria-labelledby="onboarding-alternatives-heading">
+            <h2 id="onboarding-alternatives-heading">Other ways to get started</h2>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setError(undefined)
+                setLinking(true)
+              }}
+            >
+              Already using Chat on another device? Link this one
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setError(undefined)
+                setRestoring(true)
+              }}
+            >
+              Lost your devices? Restore from backup
+            </button>
+          </section>
+        </>
       )}
     </main>
   )
