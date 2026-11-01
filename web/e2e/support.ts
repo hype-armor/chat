@@ -1,10 +1,13 @@
 // Helpers for the messaging end-to-end tests (real chat-server).
-import { type Browser, type Page, expect, test } from '@playwright/test'
+import { type Browser, type Page, expect, test as base } from '@playwright/test'
 
 // The browser is worker-scoped; contexts created with newContext are not
 // managed by Playwright's per-test context fixture.
-test.afterEach(async ({ browser }) => {
-  await Promise.all(browser.contexts().map((context) => context.close()))
+export const test = base.extend<{ contextCleanup: void }>({
+  contextCleanup: [async ({ browser }, use) => {
+    await use()
+    await Promise.all(browser.contexts().map((context) => context.close()))
+  }, { auto: true }],
 })
 
 /** A fresh username for each test run, e.g. `u4821937.55`. */

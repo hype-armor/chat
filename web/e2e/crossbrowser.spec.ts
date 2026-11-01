@@ -1,8 +1,8 @@
 // Phase 0 spike (d) as a test: SFrame calls across browser engines, whose
 // encoded-transform APIs differ (Chromium's encoded streams, Firefox's
 // RTCRtpScriptTransform). WebKit joins once it has fake media on Linux.
-import { type Browser, type Page, expect, firefox, test } from '@playwright/test'
-import { createGroup, openChat, randomUsername, startChat } from './support'
+import { type Browser, type Page, expect, firefox } from '@playwright/test'
+import { test, createGroup, openChat, randomUsername, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER || !process.env.PW_ALL_BROWSERS, 'needs chat-server and Firefox (PW_ALL_BROWSERS)')
 test.skip(({ browserName }) => browserName !== 'chromium', 'runs once, from the Chromium project')

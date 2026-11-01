@@ -1,5 +1,5 @@
-import { type Browser, type Page, expect, test } from '@playwright/test'
-import { createGroup, openChat, randomUsername } from './support'
+import { type Browser, type Page, expect } from '@playwright/test'
+import { test, createGroup, openChat, randomUsername } from './support'
 
 test.skip(!process.env.E2E_SERVER || !process.env.E2E_LIVEKIT, 'needs chat-server and LiveKit (E2E_LIVEKIT)')
 test.skip(({ browserName }) => browserName === 'webkit', 'fake camera and microphone not set up for WebKit yet')

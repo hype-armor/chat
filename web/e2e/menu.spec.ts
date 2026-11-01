@@ -1,5 +1,5 @@
-import { type Page, expect, test } from '@playwright/test'
-import { closeDetails, conversationAction, conversationDetails, createGroup, memberAction, randomUsername, signUp, startChat } from './support'
+import { type Page, expect } from '@playwright/test'
+import { test, closeDetails, conversationAction, conversationDetails, createGroup, memberAction, randomUsername, signUp, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 

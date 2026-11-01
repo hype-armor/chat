@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
-import { expect, test } from '@playwright/test'
-import { messages, openChat, openSetting, randomUsername, signUp, startChat } from './support'
+import { expect } from '@playwright/test'
+import { test, messages, openChat, openSetting, randomUsername, signUp, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 test('interrupted uploads and downloads resume where they stopped (ADR-0025)', async ({ browser, browserName }) => {
