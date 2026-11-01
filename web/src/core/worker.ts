@@ -74,9 +74,9 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
     case 'deviceNames':
       return { type: 'deviceNames', names: engine.deviceNames(request.conversationId) }
     case 'mapInfo':
-      return { type: 'mapInfo', info: await mapInfo() }
+      return { type: 'mapInfo', info: await mapInfo(engine.token()) }
     case 'tile': {
-      const data = await tile(request.z, request.x, request.y)
+      const data = await tile(request.z, request.x, request.y, engine.token())
       return { type: 'tile', data: data as Uint8Array<ArrayBuffer> | undefined }
     }
     case 'sendFile':

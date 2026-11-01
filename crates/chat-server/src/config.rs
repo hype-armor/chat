@@ -38,6 +38,8 @@ pub struct Config {
     pub turn: crate::turn::TurnConfig,
     /// Group calls (ADR-0031): see [`crate::calls::LiveKitConfig`].
     pub livekit: crate::calls::LiveKitConfig,
+    /// Map areas on demand (ADR-0033): see [`crate::tiles::TilesConfig`].
+    pub tiles: crate::tiles::TilesConfig,
 }
 
 impl Config {
@@ -78,6 +80,11 @@ impl Config {
                 api_url: non_empty("CHAT_LIVEKIT_API_URL"),
                 api_key: non_empty("CHAT_LIVEKIT_API_KEY").unwrap_or_default(),
                 api_secret: non_empty("CHAT_LIVEKIT_API_SECRET").unwrap_or_default(),
+            },
+            tiles: crate::tiles::TilesConfig {
+                dir: non_empty("CHAT_TILES_DIR").map(Into::into),
+                source: non_empty("CHAT_TILES_SOURCE"),
+                max_regions: limit_var("TILES_MAX_REGIONS", 500)?,
             },
             vapid_subject: std::env::var("CHAT_VAPID_SUBJECT")
                 .unwrap_or_else(|_| "mailto:admin@localhost".to_owned()),
