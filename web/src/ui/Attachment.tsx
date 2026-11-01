@@ -94,7 +94,14 @@ export function Attachment({
     if (blob) save(blob, file.name)
   }
 
-  const aspect = file.width && file.height ? `${file.width} / ${file.height}` : undefined
+  const aspect = file.width && file.height ? file.width / file.height : undefined
+  const mediaStyle = {
+    aspectRatio: aspect,
+    // Keep even the placeholder within the height cap, without enlarging tiny media past 4rem.
+    width: aspect && file.width
+      ? `min(${Math.max(file.width, 64 * Math.min(1, aspect))}px, calc(min(60vh, 22rem) * ${aspect}))`
+      : undefined,
+  }
   const label = file.voiceNote ? 'Voice note' : file.name
   const duration = file.durationMs ? ` · ${formatDuration(file.durationMs)}` : ''
   return (
@@ -108,7 +115,7 @@ export function Attachment({
       )}
       {playable && fullUrl ? (
         video ? (
-          <video src={fullUrl} controls autoPlay playsInline aria-label={label} style={{ aspectRatio: aspect }} />
+          <video src={fullUrl} controls autoPlay playsInline aria-label={label} style={mediaStyle} />
         ) : (
           <audio src={fullUrl} controls autoPlay aria-label={label} />
         )
@@ -121,7 +128,7 @@ export function Attachment({
           aria-label={`Play ${label}`}
         >
           {video && thumbUrl ? (
-            <img src={thumbUrl} alt="" style={{ aspectRatio: aspect }} />
+            <img src={thumbUrl} alt="" style={mediaStyle} />
           ) : (
             <span>
               ▶ {file.voiceNote ? '🎤 Voice note' : video ? `🎬 ${file.name}` : `🎵 ${file.name}`}
@@ -137,7 +144,7 @@ export function Attachment({
           disabled={busy || !!full}
           aria-label={full ? `Photo ${file.name}` : `Show photo ${file.name}`}
         >
-          <img src={fullUrl ?? thumbUrl} alt={file.name} style={{ aspectRatio: aspect }} data-full={!!fullUrl} />
+          <img src={fullUrl ?? thumbUrl} alt={file.name} style={mediaStyle} data-full={!!fullUrl} />
         </button>
       ) : (
         <span className="file-name" title={file.name}>{generic ? file.name : `📎 ${file.name}`}</span>

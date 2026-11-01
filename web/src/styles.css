@@ -536,7 +536,9 @@ form {
 .messages li {
   position: relative;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.125rem;
+  min-width: 0;
   max-width: min(80%, 36rem);
   padding: 0.5rem 0.75rem;
   border-radius: 1rem;
@@ -986,11 +988,17 @@ button.link.danger {
 
 .attachment {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.25rem;
   justify-items: start;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .attachment .photo {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   padding: 0;
   border: 0;
   background: none;
@@ -1001,24 +1009,26 @@ button.link.danger {
   cursor: default;
 }
 
-.attachment img {
+.attachment img,
+.attachment video {
   display: block;
-  width: min(16rem, 60vw);
+  max-width: min(100%, 28rem);
   height: auto;
+  max-height: min(60vh, 22rem);
+  object-fit: contain;
   border-radius: 0.5rem;
 }
 
-.attachment img[data-full='true'] {
-  width: min(28rem, 70vw);
-}
-
-.attachment video,
 .attachment audio {
   display: block;
-  max-width: min(28rem, 70vw);
+  min-width: 0;
+  max-width: 100%;
 }
 
 .attachment .play {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   padding: 0.25rem 0.5rem;
 }
 
@@ -1039,12 +1049,13 @@ button.link.danger {
 }
 
 .file-card .file-name {
+  display: -webkit-box;
   grid-column: 2;
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .file-card > .muted {
@@ -1062,6 +1073,19 @@ button.link.danger {
 
 .file-card > .error {
   grid-column: 1 / -1;
+}
+
+@media (max-width: 40rem) {
+  .file-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .file-download {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    justify-self: stretch;
+    min-width: 0;
+  }
 }
 
 @container (max-width: 40rem) {
@@ -1095,7 +1119,14 @@ button.link.danger {
 
 .location {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 0.25rem;
+}
+
+.location .map {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .map {
