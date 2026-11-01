@@ -95,7 +95,7 @@ button.link {
   padding: 0.25rem 0.5rem;
 }
 
-input,
+input:where(:not([type='checkbox'], [type='radio'])),
 .composer textarea {
   font: inherit;
   width: 100%;
@@ -104,6 +104,15 @@ input,
   border-radius: 0.5rem;
   background: var(--bg);
   color: var(--fg);
+}
+
+input[type='checkbox'],
+input[type='radio'] {
+  width: auto;
+  flex: none;
+  padding: 0;
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 label {
@@ -846,11 +855,19 @@ button.link.danger {
   gap: 0.25rem;
 }
 
-.report .choice {
-  display: flex;
+.report .choice,
+.devices .choice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 0.5rem;
-  align-items: flex-start;
+  align-items: start;
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-weight: normal;
+}
+
+.choice > input {
+  margin-top: 0.2em;
 }
 
 .report .actions {
@@ -887,10 +904,6 @@ button.link.danger {
 }
 
 .devices .choice {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  font-weight: normal;
   margin-top: 0.75rem;
 }
 
@@ -1188,8 +1201,10 @@ button.icon[aria-pressed='true'] {
 .conversation-nav {
   flex: 1;
   min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
+  overflow-wrap: anywhere;
 }
 
 .settings-head {
