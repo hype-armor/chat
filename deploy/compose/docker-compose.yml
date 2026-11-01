@@ -37,7 +37,12 @@ services:
       CHAT_LIVEKIT_API_URL: http://livekit:7880
       CHAT_LIVEKIT_API_KEY: devkey
       CHAT_LIVEKIT_API_SECRET: secret
+      # Map areas downloaded from Protomaps when first shared (ADR-0033);
+      # set CHAT_TILES_SOURCE= (empty) to keep maps to tiles you add yourself.
+      CHAT_TILES_DIR: /srv/tile-cache
+      CHAT_TILES_SOURCE: ${CHAT_TILES_SOURCE-https://build.protomaps.com/{yesterday}.pmtiles}
     ports: ["8080:8080"]
+    volumes: [tile-cache:/srv/tile-cache]
     depends_on:
       postgres:
         condition: service_healthy
@@ -185,6 +190,7 @@ services:
       - "7882:7882/udp"
 
 volumes:
+  tile-cache:
   caddy:
   echo:
   postgres:

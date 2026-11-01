@@ -106,6 +106,16 @@ spec:
                   name: {{ .Values.turn.existingSecret }}
                   key: {{ .Values.turn.secretKey }}
             {{- end }}
+            {{- with .Values.server.mapAreas }}
+            {{- if .source }}
+            - name: CHAT_TILES_DIR
+              value: /srv/tile-cache
+            - name: CHAT_TILES_SOURCE
+              value: {{ .source | quote }}
+            - name: CHAT_LIMIT_TILES_MAX_REGIONS
+              value: {{ .maxRegions | quote }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.server.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -123,6 +133,22 @@ spec:
             periodSeconds: 5
           resources:
             {{- toYaml .Values.server.resources | nindent 12 }}
+          {{- if .Values.server.mapAreas.source }}
+          volumeMounts:
+            - { name: tile-cache, mountPath: /srv/tile-cache }
+          {{- end }}
+      {{- with .Values.server.mapAreas }}
+      {{- if .source }}
+      volumes:
+        - name: tile-cache
+          {{- if .existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .existingClaim }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- end }}
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service

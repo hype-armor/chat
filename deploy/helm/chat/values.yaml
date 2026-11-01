@@ -48,6 +48,14 @@ server:
     endpoint: ""          # e.g. http://seaweedfs.chat.svc:8333 for in-cluster SeaweedFS
     region: us-east-1
     existingSecret: ""
+  # Map areas downloaded when first shared (ADR-0033), e.g.
+  # https://build.protomaps.com/{yesterday}.pmtiles. Empty: maps only from a
+  # basemap file on the web pod (web.tiles). Each area is a few MB; without a
+  # claim they live in an emptyDir and are fetched again after a restart.
+  mapAreas:
+    source: ""
+    existingClaim: ""
+    maxRegions: 500
   extraEnv: []
   resources:
     requests: { cpu: 100m, memory: 128Mi }

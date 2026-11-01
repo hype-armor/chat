@@ -20,3 +20,12 @@ describe('received locations', () => {
     expect(safeLocation(0, 0, 1e6, '')).toBeUndefined()
   })
 })
+
+describe('tile coordinates', () => {
+  it('finds the tile holding a point', async () => {
+    const { tileAt } = await import('./maps')
+    expect(tileAt(0, 0, 0)).toEqual({ x: 0, y: 0 })
+    expect(tileAt(48.8584, 2.2945, 10)).toEqual({ x: 518, y: 352 })
+    expect(tileAt(-90, 180, 3)).toEqual({ x: 7, y: 7 })
+  })
+})
