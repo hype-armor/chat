@@ -643,6 +643,7 @@ dd {
 }
 
 textarea {
+  overscroll-behavior: contain;
   font: inherit;
   width: 100%;
   padding: 0.5rem 0.75rem;
@@ -1487,7 +1488,6 @@ button.conversation-title {
   max-height: calc(8.5rem + 2px);
   resize: none;
   overflow-y: auto;
-  overscroll-behavior: contain;
   border-radius: 1.25rem;
 }
 

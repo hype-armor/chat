@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { closeDetails, conversationAction, messages, openSettings, randomUsername, signUp, startChat } from './support'
+import { closeDetails, compose, conversationAction, messages, openSettings, randomUsername, signUp, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -21,6 +21,10 @@ for (const width of [1280, 390]) {
       await expect(alice.locator('.placeholder')).toHaveCSS('overscroll-behavior-y', 'contain')
     }
 
+    await compose(alice, 'New group')
+    await expect(alice.locator('.compose-panel')).toHaveCSS('overscroll-behavior-y', 'contain')
+    await expect(alice.getByLabel("Members' usernames")).toHaveCSS('overscroll-behavior-y', 'contain')
+    await alice.getByRole('button', { name: '← Back', exact: true }).click()
     await startChat(alice, username)
     const viewport = alice.locator('.messages-viewport')
     await expect(viewport).toHaveCSS('overscroll-behavior-y', 'contain')
