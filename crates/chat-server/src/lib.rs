@@ -19,6 +19,7 @@ pub mod metrics;
 pub mod push;
 mod reports;
 mod stats;
+pub mod tiles;
 pub mod turn;
 mod ws;
 
@@ -50,8 +51,10 @@ pub struct AppState {
     pub turn: Arc<turn::TurnConfig>,
     /// The SFU for group calls (ADR-0031); unset turns group calls off.
     pub livekit: Arc<calls::LiveKitConfig>,
-    /// Outgoing requests (LiveKit's API).
+    /// Outgoing requests (LiveKit's API, map downloads).
     pub http: reqwest::Client,
+    /// Map areas downloaded on demand (ADR-0033); off unless configured.
+    pub tiles: Arc<tiles::Tiles>,
 }
 
 impl AppState {
@@ -62,6 +65,7 @@ impl AppState {
             blobs: None,
             turn: Arc::default(),
             livekit: Arc::default(),
+            tiles: Arc::default(),
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(10))
                 .build()
@@ -86,6 +90,11 @@ impl AppState {
 
     pub fn with_livekit(mut self, livekit: calls::LiveKitConfig) -> Self {
         self.livekit = Arc::new(livekit);
+        self
+    }
+
+    pub fn with_tiles(mut self, tiles: tiles::TilesConfig) -> Self {
+        self.tiles = Arc::new(tiles::Tiles::new(tiles));
         self
     }
 
@@ -166,6 +175,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/push/unsubscribe", post(push::unsubscribe))
         .route("/v1/turn", get(turn::credentials))
         .route("/v1/stats/calls", post(stats::calls))
+        .route("/v1/tiles/info", get(tiles::info))
+        .route("/v1/tiles/{z}/{x}/{y}", get(tiles::tile))
         .route("/v1/calls/join", post(calls::join))
         .route("/v1/calls/status", post(calls::status))
         .route("/v1/ws", get(ws::upgrade))
