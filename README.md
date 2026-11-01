@@ -76,6 +76,28 @@ CHAT_HOST=192.168.1.20 docker compose -f deploy/compose/docker-compose.yml --pro
 # then open https://192.168.1.20:8443, and create invites for that address
 ```
 
+### Map tiles
+
+Locations and live locations draw on a map once the server has a basemap:
+one [Protomaps](https://docs.protomaps.com/) PMTiles file, served by the
+**web** container (nginx) from `/tiles/basemap.pmtiles` (ADR-0026). Phones
+only ever fetch tiles from this server. Without the file, locations show as
+coordinates. Cut out the area you need with the
+[`pmtiles` CLI](https://github.com/protomaps/go-pmtiles/releases):
+
+```sh
+# One city to zoom 15: tens to a few hundred MB. Replace the box with yours
+# (min lon, min lat, max lon, max lat), e.g. from https://bboxfinder.com.
+pmtiles extract https://build.protomaps.com/$(date -u -d '-1 day' +%Y%m%d).pmtiles \
+  deploy/compose/tiles/basemap.pmtiles --bbox=-122.55,37.68,-122.33,37.83 --maxzoom=15
+docker compose -f deploy/compose/docker-compose.yml up -d web   # picks it up; no rebuild
+```
+
+`CHAT_TILES_DIR` points compose at another directory; on k3s use Helm's
+`web.tiles.hostPath` or `web.tiles.existingClaim` (deploy/k3s/README.md).
+Labels (street and place names) aren't drawn yet: they need font files the
+server doesn't serve.
+
 ### Echo test bot
 
 `echo.00` sends back whatever you send it, so you can try features alone

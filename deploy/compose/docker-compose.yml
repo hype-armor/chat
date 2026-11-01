@@ -54,6 +54,9 @@ services:
     # Forwards /v1 to the server (Kubernetes does this at the ingress).
     volumes:
       - ./api-proxy.conf:/etc/nginx/conf.d/extra/api-proxy.conf:ro
+      # Map tiles (ADR-0026): put basemap.pmtiles in deploy/compose/tiles/
+      # (or point CHAT_TILES_DIR elsewhere); without it, no map is drawn.
+      - ${CHAT_TILES_DIR:-./tiles}:/srv/tiles:ro
     depends_on: [server]
 
   # Optional echo test bot (--profile echo): message `echo.00` and it sends
