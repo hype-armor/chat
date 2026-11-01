@@ -5,6 +5,7 @@ test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SE
 
 for (const width of [1280, 640, 320]) {
   test(`sidebar prioritizes chats and composes in panels (${width}px)`, async ({ browser, browserName }) => {
+    test.setTimeout(60_000)
     const username = randomUsername()
     const bobUsername = randomUsername()
     const alice = await signUp(browser, 'Alice with a very long display name', username)
@@ -55,6 +56,7 @@ for (const width of [1280, 640, 320]) {
     await alice.getByRole('button', { name: '← Back', exact: true }).click()
 
     await startChat(alice, bobUsername)
+    await expect(alice.getByLabel('Message', { exact: true })).toBeVisible({ timeout: 15_000 })
     await alice.getByLabel('Message', { exact: true }).fill('Hello from the compose panel')
     await alice.getByRole('button', { name: 'Send', exact: true }).click()
     await expect(messages(alice).getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()

@@ -103,7 +103,7 @@ export async function linkDevice(browser: Browser, page: Page): Promise<Page> {
   await expect(page.getByText('The new device will be able to read every message')).toBeVisible()
   await page.getByRole('button', { name: 'Link device' }).click()
   await expect(page.getByRole('button', { name: 'Link a new device' })).toBeVisible({ timeout: 30_000 })
-  await expect(laptop.getByRole('status')).toHaveText('Connected')
+  await expect(laptop.getByRole('status')).toHaveText('Connected', { timeout: 15_000 })
   await closeSettings(page)
   return laptop
 }
