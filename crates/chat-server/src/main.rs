@@ -109,6 +109,7 @@ async fn main() -> anyhow::Result<()> {
         .with_open_registration(config.open_registration)
         .with_turn(config.turn.clone())
         .with_livekit(config.livekit.clone())
+        .with_tiles(config.tiles.clone())
         .with_push(push)
         .with_limits(config.limits.clone());
     if let Some(addr) = config.metrics_bind {

@@ -5,6 +5,9 @@ import { type ReactNode, useEffect, useRef, useState } from 'react'
 import type { CoreClient } from '../core/client'
 import type { LocationInfo } from '../core/protocol'
 import { MapView } from './MapView'
+import { isApple, mapsAppLink } from './mapsLink'
+
+const APPLE = typeof navigator !== 'undefined' && isApple(navigator.userAgent, navigator.maxTouchPoints ?? 0)
 
 const LIVE_CHOICES: [string, number][] = [
   ['15 min', 15 * 60_000],
@@ -31,7 +34,12 @@ export function LocationCard({ core, location }: { core: CoreClient; location: L
         </button>
         {' · '}
         {/* Hands the point to the device's own maps app, only when tapped. */}
-        <a className="small" href={`geo:${location.latitude},${location.longitude}`}>
+        <a
+          className="small"
+          href={mapsAppLink(location.latitude, location.longitude, location.label, APPLE)}
+          target={APPLE ? '_blank' : undefined}
+          rel="noopener noreferrer"
+        >
           Open in maps app
         </a>
       </span>

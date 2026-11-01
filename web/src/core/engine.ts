@@ -86,7 +86,7 @@ import { type MediaInfo, isPhoto, isPlayable } from './protocol'
 import { isMp4, scrubMp4 } from './mp4'
 import { DEFAULT_MEDIA, autoDownloads, onMobileData } from './policy'
 import * as transfers from './transfers'
-import { safeLocation } from './maps'
+import { prepareArea, safeLocation } from './maps'
 import { LIVE_DURATIONS_MS, plausibleExpiry, updateDue } from './live'
 import { type MediaTransformOptions, frameTransform } from './media'
 import { CALL_KINDS, type CallEnd, type CallRecord, GIVE_UP_MS, STALE_OFFER_MS, callNotice, safeSignalText } from './calls'
@@ -1481,7 +1481,13 @@ export class Engine {
   }
 
   /** Shares a location once (FR-LOC-1); it travels only inside MLS. */
+  /** The device's token, for requests the worker makes itself (map tiles). */
+  token(): string | undefined {
+    return this.account?.token
+  }
+
   async sendLocation(conversationId: string, location: LocationInfo) {
+    prepareArea(location.latitude, location.longitude, this.token())
     const { core } = this.ready()
     this.checkCanSend(conversationId)
     const checked = safeLocation(location.latitude, location.longitude, location.accuracyM, location.label ?? '')
@@ -1512,6 +1518,7 @@ export class Engine {
 
   /** Starts sharing in one conversation for 15 min, 1 h or 8 h, from `location`. */
   async startLive(conversationId: string, durationMs: number, location: LocationInfo) {
+    prepareArea(location.latitude, location.longitude, this.token())
     const { core } = this.ready()
     this.checkCanSend(conversationId)
     if (!(LIVE_DURATIONS_MS as readonly number[]).includes(durationMs)) throw new Error('Choose 15 minutes, 1 hour or 8 hours')
@@ -1986,6 +1993,7 @@ export class Engine {
     const sessionId = view.sessionId.length === 16 ? toHex(view.sessionId) : undefined
     const place = view.location
     const point = place && safeLocation(place.latitude, place.longitude, place.accuracyM, '')
+    if (point) prepareArea(point.latitude, point.longitude, this.token())
     place?.free()
     if (!sessionId || !plausibleExpiry(view.expiresAtMs, sentAt)) return
     const list = await this.stored(conversationId)
@@ -2578,6 +2586,7 @@ export class Engine {
       const attachment = view && this.receivedFile(view)
       const place = event.location
       const location = place && safeLocation(place.latitude, place.longitude, place.accuracyM, place.label)
+      if (location) prepareArea(location.latitude, location.longitude, this.token())
       place?.free()
       // An unusable attachment is dropped with its caption, and a bad location with it.
       const text = view ? attachment && view.caption : place ? location && '' : event.text

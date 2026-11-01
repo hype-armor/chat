@@ -53,7 +53,11 @@ test('a location shared once arrives encrypted and maps without third parties (F
   await openChat(bob, /Alice/)
   const card = messages(bob).getByTestId('location')
   await expect(card).toContainText('48.85840, 2.29450 · ±12 m')
-  await expect(card.getByRole('link', { name: 'Open in maps app' })).toHaveAttribute('href', 'geo:48.8584,2.2945')
+  // Apple devices (Playwright's WebKit reports a Mac) open Apple Maps; others take geo:.
+  await expect(card.getByRole('link', { name: 'Open in maps app' })).toHaveAttribute(
+    'href',
+    browserName === 'webkit' ? 'https://maps.apple.com/?ll=48.8584,2.2945&q=Shared%20location' : 'geo:48.8584,2.2945',
+  )
   await card.getByRole('button', { name: 'Show map' }).click()
   // Drawn by MapLibre (WebGL), or a plain notice where the browser has none.
   await expect(card.locator('.maplibregl-canvas').or(card.getByText("The map can't be shown"))).toBeVisible()
