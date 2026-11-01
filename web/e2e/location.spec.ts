@@ -100,11 +100,11 @@ test('location preview actions stay aligned at narrow and wide viewport sizes', 
       expect(Math.abs(box.x - bounds.x)).toBeLessThan(1)
       expect(Math.abs(box.width - bounds.width)).toBeLessThan(1)
     }
-    for (const button of await preview.getByRole('button').all()) {
+    for (const button of await preview.locator('.actions').getByRole('button').all()) {
       await expect(button).toBeInViewport({ ratio: 1 })
       await expect(button).toHaveCSS('white-space', 'nowrap')
       expect((await button.boundingBox())!.height).toBeGreaterThanOrEqual(44)
-      expect(await button.evaluate<boolean>('el => el.scrollWidth <= el.clientWidth')).toBe(true)
+      expect(await button.evaluate<boolean, void>('el => el.scrollWidth <= el.clientWidth')).toBe(true)
     }
     await preview.getByRole('button', { name: 'Cancel', exact: true }).click()
     await expect(preview).toBeHidden()

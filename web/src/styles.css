@@ -1144,7 +1144,7 @@ button.link.danger {
   gap: 0.5rem;
 }
 
-.share-location button {
+.share-location .actions button {
   min-height: 44px;
   padding-inline: 0.5rem;
   white-space: nowrap;
