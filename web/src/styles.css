@@ -1129,6 +1129,27 @@ button.link.danger {
   width: 100%;
 }
 
+.share-location .actions {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.share-location h3 {
+  margin: 0.5rem 0 0;
+}
+
+.share-location .live-choices {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.share-location button {
+  min-height: 44px;
+  padding-inline: 0.5rem;
+  white-space: nowrap;
+}
+
 .live-banner {
   position: fixed;
   left: 0;

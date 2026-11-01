@@ -72,6 +72,48 @@ test('a location shared once arrives encrypted and maps without third parties (F
   )
 })
 
+test('location preview actions stay aligned at narrow and wide viewport sizes', async ({ browser }) => {
+  const bobUsername = randomUsername()
+  const alice = await signUp(browser, 'Alice', randomUsername(), new Set(), [])
+  const bob = await signUp(browser, 'Bob', bobUsername, new Set(), [])
+  await startChat(alice, bobUsername)
+
+  for (const width of [320, 390, 768, 1280]) {
+    await alice.setViewportSize({ width, height: 720 })
+    const add = alice.getByRole('button', { name: 'Add attachment' })
+    await add.click()
+    await alice.getByRole('menuitem', { name: 'Location', exact: true }).click()
+    const preview = alice.getByRole('dialog', { name: 'Share this location?' })
+    await expect(preview).toBeVisible()
+    const group = preview.getByRole('group', { name: 'Share live location for' })
+    const durations = group.getByRole('button')
+    await expect(durations).toHaveText(['15 min', '1 hour', '8 hours'])
+    const bounds = (await group.boundingBox())!
+    const first = (await durations.first().boundingBox())!
+    for (const button of await durations.all()) {
+      const box = (await button.boundingBox())!
+      expect(Math.abs(box.y - first.y)).toBeLessThan(1)
+      expect(Math.abs(box.width - first.width)).toBeLessThan(1)
+    }
+    for (const name of ['Send location', 'Cancel']) {
+      const box = (await preview.getByRole('button', { name, exact: true }).boundingBox())!
+      expect(Math.abs(box.x - bounds.x)).toBeLessThan(1)
+      expect(Math.abs(box.width - bounds.width)).toBeLessThan(1)
+    }
+    for (const button of await preview.getByRole('button').all()) {
+      await expect(button).toBeInViewport({ ratio: 1 })
+      await expect(button).toHaveCSS('white-space', 'nowrap')
+      expect((await button.boundingBox())!.height).toBeGreaterThanOrEqual(44)
+      expect(await button.evaluate<boolean>('el => el.scrollWidth <= el.clientWidth')).toBe(true)
+    }
+    await preview.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(preview).toBeHidden()
+    await expect(add).toBeFocused()
+  }
+  await alice.context().close()
+  await bob.context().close()
+})
+
 test('live location follows the sender and is gone when they stop (FR-LOC-2/3/6)', async ({ browser }) => {
   test.setTimeout(90_000)
   const bobUsername = randomUsername()
