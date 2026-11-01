@@ -98,7 +98,15 @@ export default defineConfig({
               },
             },
           },
-          { name: 'webkit', use: { ...devices['Desktop Safari'] } },
+          {
+            name: 'webkit',
+            use: { ...devices['Desktop Safari'] },
+            // WebKit on CI runners is several times slower to start pages and
+            // run the MLS work (#78/#79 found no app regression), so give its
+            // waits room instead of patching them one by one.
+            timeout: 60_000,
+            expect: { timeout: 15_000 },
+          },
         ]
       : []),
   ],
