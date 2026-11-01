@@ -95,7 +95,7 @@ button.link {
   padding: 0.25rem 0.5rem;
 }
 
-input:not([type='checkbox']):not([type='radio']),
+input:where(:not([type='checkbox'], [type='radio'])),
 .composer textarea {
   font: inherit;
   width: 100%;

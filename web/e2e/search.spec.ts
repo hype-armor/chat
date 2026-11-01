@@ -113,6 +113,10 @@ test('search stays compact and opens a filtered chat on a phone', async ({ brows
     await createGroup(alice, `Phone group ${i}`, [bobUsername])
     await alice.getByRole('button', { name: 'Back to conversations', exact: true }).click()
   }
+  await expect(search).toBeVisible()
+  await expect(search).toHaveCSS('border-style', 'none')
+  await expect(search).toHaveCSS('padding', '6px 0px')
+  await expect(search).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
   await search.fill('BOB')
   const nav = alice.getByRole('navigation', { name: 'Conversations', exact: true })
   await expect(nav.locator('mark')).toHaveText('Bob')
