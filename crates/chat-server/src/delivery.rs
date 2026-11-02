@@ -9,7 +9,11 @@ use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::error::ApiError;
+use crate::{
+    error::ApiError,
+    keys::LEASE_MINUTES,
+    limits::{self, DAY, Limits},
+};
 
 const MAX_ID_BYTES: usize = 64;
 const MAX_CIPHERTEXT_BYTES: usize = 128 * 1024;
@@ -84,7 +88,7 @@ const CLAIM_VALID_DAYS: i32 = 7;
 /// - every other envelope must come from a member and go to members;
 /// - handshake messages are accepted only if they build on the group's
 ///   current epoch, so every member applies the same sequence of commits.
-pub async fn send(db: &PgPool, req: Send<'_>) -> Result<SendOutcome, ApiError> {
+pub async fn send(db: &PgPool, caps: &Limits, req: Send<'_>) -> Result<SendOutcome, ApiError> {
     let env = req.envelope;
     let content_type = validate(env)?;
     if let Some((welcome, _)) = req.welcome
@@ -190,14 +194,51 @@ pub async fn send(db: &PgPool, req: Send<'_>) -> Result<SendOutcome, ApiError> {
         }
     }
 
+    // What this send will store, charged to the sender inside the
+    // transaction: a device cannot flood a recipient's queue day after day.
+    let kib = envelope_kib(env) + req.welcome.map_or(0, |(w, _)| envelope_kib(w));
+    limits::tx_take(
+        &mut tx,
+        &format!("send-bytes:{}", req.sender),
+        kib,
+        caps.send_mb_per_day.saturating_mul(1024),
+        DAY,
+    )
+    .await?;
+
     if let Some((welcome, recipients)) = req.welcome {
         require_claims(&mut tx, req.sender, recipients).await?;
+        // The welcome consumes the package the sender leased for each device.
+        sqlx::query("DELETE FROM key_packages WHERE claimed_by = $1 AND device_id = ANY($2)")
+            .bind(req.sender)
+            .bind(recipients)
+            .execute(&mut *tx)
+            .await?;
         add_members(&mut tx, conversation, recipients).await?;
         enqueue(&mut tx, welcome, recipients).await?;
     }
     enqueue(&mut tx, env, recipients).await?;
+    // Hard bound per recipient: the oldest unacked envelopes go first, so a
+    // flood costs the sender its budget and the recipient no newest message.
+    sqlx::query(
+        "DELETE FROM queued_envelopes WHERE queue_id IN (
+             SELECT queue_id FROM queued_envelopes
+             WHERE recipient_device_id = ANY($1)
+             ORDER BY queue_id DESC OFFSET $2)",
+    )
+    .bind(&unique)
+    .bind(caps.queue_rows_per_device.max(1))
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(SendOutcome::Accepted)
+}
+
+/// Size of an envelope in KiB, at least 1: the rate-limit table counts units.
+fn envelope_kib(env: &Envelope) -> i32 {
+    i32::try_from(env.encoded_len().div_ceil(1024))
+        .unwrap_or(i32::MAX)
+        .max(1)
 }
 
 type Tx<'a> = sqlx::Transaction<'a, sqlx::Postgres>;
@@ -295,6 +336,15 @@ pub async fn ack(db: &PgPool, device: Uuid, message_id: &[u8]) -> Result<(), Api
 /// Deletes expired queue entries, key packages and verification state
 /// (FR-MSG-9: 30-day retention).
 pub async fn expire(db: &PgPool) -> Result<(), sqlx::Error> {
+    // Leases from claims that never became a welcome; a package a welcome did
+    // use is deleted in `send`.
+    sqlx::query(
+        "UPDATE key_packages SET claimed_by = NULL, claimed_at = NULL
+         WHERE claimed_at < now() - make_interval(mins => $1)",
+    )
+    .bind(LEASE_MINUTES)
+    .execute(db)
+    .await?;
     for stmt in [
         "DELETE FROM queued_envelopes WHERE received_at < now() - interval '30 days'",
         "DELETE FROM key_packages WHERE expires_at < now()",
