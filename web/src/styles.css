@@ -4,7 +4,8 @@
   --fg: #1f2328;
   --muted: #59636e;
   --border: #d1d9e0;
-  --accent: #1f6feb;
+  --accent-bg: #1f6feb;
+  --accent-text: #0969da;
   --accent-fg: #ffffff;
   --mine: #1f6feb;
   --mine-fg: #ffffff;
@@ -23,7 +24,7 @@
     --fg: #e6edf3;
     --muted: #9198a1;
     --border: #3d444d;
-    --accent: #4493f8;
+    --accent-text: #4493f8;
     --mine: #1f6feb;
     --theirs: #262c36;
     --danger: #f85149;
@@ -79,7 +80,7 @@ button {
   padding: 0.5rem 1rem;
   border: 0;
   border-radius: 0.5rem;
-  background: var(--accent);
+  background: var(--accent-bg);
   color: var(--accent-fg);
   cursor: pointer;
 }
@@ -89,9 +90,13 @@ button:disabled {
   cursor: default;
 }
 
+button.link,
+a {
+  color: var(--accent-text);
+}
+
 button.link {
   background: none;
-  color: var(--accent);
   padding: 0.25rem 0.5rem;
 }
 
@@ -112,7 +117,7 @@ input[type='radio'] {
   flex: none;
   padding: 0;
   margin: 0;
-  accent-color: var(--accent);
+  accent-color: var(--accent-bg);
 }
 
 label {
@@ -322,7 +327,7 @@ form {
 .empty-icon {
   width: 4rem;
   height: 4rem;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .empty-conversation h2 {
@@ -536,7 +541,9 @@ form {
 .messages li {
   position: relative;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.125rem;
+  min-width: 0;
   max-width: min(80%, 36rem);
   padding: 0.5rem 0.75rem;
   border-radius: 1rem;
@@ -737,7 +744,7 @@ button.link.danger {
 
 .devices summary {
   cursor: pointer;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .devices ul {
@@ -812,7 +819,7 @@ button.link.danger {
 }
 
 .badge.verified {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .badge.changed,
@@ -898,9 +905,9 @@ button.link.danger {
 
 /* Receipts and unread counts (FR-MSG-5) */
 .badge.unread {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--bg);
+  border-color: var(--accent-bg);
+  background: var(--accent-bg);
+  color: var(--accent-fg);
 }
 
 .devices .choice {
@@ -986,11 +993,17 @@ button.link.danger {
 
 .attachment {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.25rem;
   justify-items: start;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .attachment .photo {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   padding: 0;
   border: 0;
   background: none;
@@ -1001,24 +1014,26 @@ button.link.danger {
   cursor: default;
 }
 
-.attachment img {
+.attachment img,
+.attachment video {
   display: block;
-  width: min(16rem, 60vw);
+  max-width: min(100%, 28rem);
   height: auto;
+  max-height: min(60vh, 22rem);
+  object-fit: contain;
   border-radius: 0.5rem;
 }
 
-.attachment img[data-full='true'] {
-  width: min(28rem, 70vw);
-}
-
-.attachment video,
 .attachment audio {
   display: block;
-  max-width: min(28rem, 70vw);
+  min-width: 0;
+  max-width: 100%;
 }
 
 .attachment .play {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   padding: 0.25rem 0.5rem;
 }
 
@@ -1039,12 +1054,13 @@ button.link.danger {
 }
 
 .file-card .file-name {
+  display: -webkit-box;
   grid-column: 2;
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .file-card > .muted {
@@ -1062,6 +1078,19 @@ button.link.danger {
 
 .file-card > .error {
   grid-column: 1 / -1;
+}
+
+@media (max-width: 40rem) {
+  .file-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .file-download {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    justify-self: stretch;
+    min-width: 0;
+  }
 }
 
 @container (max-width: 40rem) {
@@ -1095,7 +1124,14 @@ button.link.danger {
 
 .location {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 0.25rem;
+}
+
+.location .map {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .map {
@@ -1127,6 +1163,27 @@ button.link.danger {
 
 .share-location .map {
   width: 100%;
+}
+
+.share-location .actions {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.share-location h3 {
+  margin: 0.5rem 0 0;
+}
+
+.share-location .live-choices {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.share-location .actions button {
+  min-height: 44px;
+  padding-inline: 0.5rem;
+  white-space: nowrap;
 }
 
 .live-banner {
@@ -1191,7 +1248,7 @@ button.icon {
 }
 
 button.icon[aria-pressed='true'] {
-  background: var(--accent);
+  background: var(--accent-bg);
   color: var(--accent-fg);
 }
 
@@ -1342,7 +1399,7 @@ button.icon[aria-pressed='true'] {
 }
 
 .conversations mark {
-  background: var(--accent);
+  background: var(--accent-bg);
   color: var(--accent-fg);
   border-radius: 0.125rem;
 }
@@ -1460,8 +1517,8 @@ button.conversation-title {
 /* Our own bubbles: secondary text and links stay readable on blue. */
 .messages .mine .muted,
 .messages .mine .meta {
-  color: inherit;
-  opacity: 0.85;
+  color: var(--mine-fg);
+  opacity: 1;
 }
 
 .messages .mine button.link,
@@ -1471,7 +1528,7 @@ button.conversation-title {
 }
 
 .messages .mine .error {
-  color: #ffd8d3;
+  color: var(--mine-fg);
 }
 
 /* An opened photo is shown as is, not dimmed like a disabled button. */
@@ -1481,7 +1538,7 @@ button.conversation-title {
 
 .messages .sender {
   font-weight: 600;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .messages li {
@@ -1533,6 +1590,7 @@ button.conversation-title {
 
 /* Calls (ADR-0028) */
 .call-screen {
+  --call-controls-height: 5rem;
   position: fixed;
   inset: 0;
   z-index: 50;
@@ -1541,7 +1599,7 @@ button.conversation-title {
   align-items: center;
   justify-content: center;
   gap: 2rem;
-  padding: 1.5rem 1rem calc(1.5rem + env(safe-area-inset-bottom));
+  padding: calc(1.5rem + env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) calc(var(--call-controls-height) + env(safe-area-inset-bottom) + 0.75rem) max(1rem, env(safe-area-inset-left));
   background: #0d1117;
   color: #f0f6fc;
 }
@@ -1555,6 +1613,8 @@ button.conversation-title {
   gap: 0.4rem;
   text-align: center;
   z-index: 1;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .call-info h2 {
   margin: 0.5rem 0 0;
@@ -1566,8 +1626,13 @@ button.conversation-title {
 }
 .call-info.over-video {
   position: absolute;
-  top: 1.5rem;
-  text-shadow: 0 1px 3px #000;
+  inset: 0 0 auto;
+  padding: calc(1rem + env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) 2rem max(1rem, env(safe-area-inset-left));
+  background: linear-gradient(rgba(0, 0, 0, 0.65) calc(100% - 2rem), transparent);
+  color: #fff;
+}
+.call-info.over-video .muted {
+  color: inherit;
 }
 .call-status {
   font-variant-numeric: tabular-nums;
@@ -1584,9 +1649,12 @@ button.conversation-title {
 }
 .call-videos video + video {
   position: absolute;
-  right: 1rem;
-  bottom: calc(6.5rem + env(safe-area-inset-bottom));
+  right: max(1rem, env(safe-area-inset-right));
+  bottom: calc(var(--call-controls-height) + env(safe-area-inset-bottom) + 0.75rem);
   width: min(28vw, 180px);
+  max-height: 28vh;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
   border-radius: 0.75rem;
   border: 2px solid #f0f6fc33;
   transform: scaleX(-1);
@@ -1602,10 +1670,46 @@ button.conversation-title {
   z-index: 1;
   margin-top: auto;
 }
-.call-screen:not(.with-video) .call-actions {
-  margin-top: 0;
+.call-screen > .call-actions {
+  position: absolute;
+  inset: auto 0 0;
+  margin: 0;
+  padding: 1rem max(1rem, env(safe-area-inset-right)) calc(1rem + env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+  background: #0d1117;
 }
-.call-button {
+.call-controls {
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+.call-control,
+.call-controls .menu > button {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 3rem;
+  height: 3rem;
+  min-width: 3rem;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: #f0f6fc22;
+  color: #f0f6fc;
+  font-size: 1.5rem;
+}
+.call-controls .menu-items {
+  position: fixed;
+  top: auto;
+  right: max(1rem, env(safe-area-inset-right));
+  bottom: calc(var(--call-controls-height) + env(safe-area-inset-bottom));
+  max-height: calc(100dvh - var(--call-controls-height) - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 1rem);
+  overflow-y: auto;
+}
+.call-controls .menu-items button {
+  min-height: 3rem;
+  font-size: 1rem;
+}
+.call-button:not(.call-control) {
   min-width: 6.5rem;
   padding: 0.8rem 1.1rem;
   border-radius: 2rem;
@@ -1615,15 +1719,20 @@ button.conversation-title {
   font: inherit;
   cursor: pointer;
 }
+.call-control {
+  cursor: pointer;
+}
 .call-button[aria-pressed='true'] {
   background: #f0f6fc;
   color: #0d1117;
 }
 .call-button.accept {
   background: #238636;
+  color: var(--accent-fg);
 }
 .call-button.decline {
-  background: #da3633;
+  background: var(--danger-bg);
+  color: var(--accent-fg);
 }
 
 /* Group calls (ADR-0031) */

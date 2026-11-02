@@ -178,6 +178,12 @@ pub async fn send(db: &PgPool, caps: &Limits, req: Send<'_>) -> Result<SendOutco
             return Err(ApiError::Forbidden("not a member of this conversation"));
         }
         require_claims(&mut tx, req.sender, recipients).await?;
+        // Standalone welcomes consume leases just like commit-bundled ones.
+        sqlx::query("DELETE FROM key_packages WHERE claimed_by = $1 AND device_id = ANY($2)")
+            .bind(req.sender)
+            .bind(recipients)
+            .execute(&mut *tx)
+            .await?;
         add_members(&mut tx, conversation, &[req.sender]).await?;
         add_members(&mut tx, conversation, recipients).await?;
     } else {
