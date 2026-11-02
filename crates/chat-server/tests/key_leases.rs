@@ -2,6 +2,10 @@
 mod support;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
+use chat_proto::{
+    PROTOCOL_VERSION,
+    v1::{ContentType, Envelope, SendEnvelope, client_frame, server_frame},
+};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use support::TestServer;
@@ -103,4 +107,47 @@ async fn count_excludes_leased_packages(pool: PgPool) {
     // Leased packages are not available to anyone else, but they stay stored.
     assert_eq!(count(&bob_token).await, 2);
     assert_eq!(stored(&server, bob).await, 5);
+}
+
+#[sqlx::test]
+async fn standalone_welcomes_consume_leases_so_new_groups_can_claim(pool: PgPool) {
+    let server = TestServer::start(pool).await;
+    let (bob, bob_token) = server.register("u5550009031.10").await;
+    let (_, alice_token) = server.register("u5550009032.10").await;
+    let (_, carol_token) = server.register("u5550009033.10").await;
+    upload(&server, &bob_token, 5).await;
+    assert!(
+        claim(&server, &carol_token, bob)
+            .await
+            .get(bob.to_string())
+            .is_some()
+    );
+    let mut alice_ws = server.connect(&alice_token).await;
+
+    for remaining in (1..=4).rev() {
+        let packages = claim(&server, &alice_token, bob).await;
+        assert!(packages.get(bob.to_string()).is_some(), "{packages}");
+        let welcome = Envelope {
+            version: PROTOCOL_VERSION,
+            conversation_id: Uuid::new_v4().as_bytes().to_vec(),
+            epoch: 0,
+            content_type: ContentType::Welcome.into(),
+            ciphertext: vec![1],
+            message_id: Uuid::new_v4().as_bytes().to_vec(),
+        };
+        let reply = alice_ws
+            .request(client_frame::Body::Send(SendEnvelope {
+                envelope: Some(welcome),
+                recipient_devices: vec![bob.as_bytes().to_vec()],
+                ..Default::default()
+            }))
+            .await;
+        assert!(
+            matches!(reply.body, Some(server_frame::Body::SendResult(ref result)) if result.accepted),
+            "{reply:?}"
+        );
+        assert_eq!(stored(&server, bob).await, remaining);
+    }
+    // Carol's lease remains stored, but is not available for a second claim.
+    assert_eq!(claim(&server, &carol_token, bob).await, json!({}));
 }
