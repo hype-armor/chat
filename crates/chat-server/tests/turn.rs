@@ -14,5 +14,6 @@ async fn ice_servers_need_a_signed_in_device(pool: PgPool) {
     assert_eq!(status, 200);
     // None configured in tests: calls fall back to host candidates.
     assert_eq!(body["ice_servers"], serde_json::json!([]));
-    assert!(body["ttl"].as_u64().unwrap() > 3600);
+    // Credentials last an hour; a client fetches new ones at each call.
+    assert_eq!(body["ttl"], 3600);
 }
