@@ -273,10 +273,15 @@ async fn send_envelope(
                 .welcome
                 .as_ref()
                 .map(|w| (w, welcome_recipients.as_slice())),
+            // A commit states the membership it leaves behind (ADR-0035). An
+            // empty list leaves the conversation's members unchanged.
+            members: &send.members,
         },
     )
     .await?;
-    if outcome == SendOutcome::Accepted {
+    if let SendOutcome::Accepted { removed } = &outcome {
+        // Devices the commit took out: their sessions re-check and close.
+        state.hub.devices_changed(removed);
         let silent = send.silent;
         for device in recipients.iter().chain(&welcome_recipients) {
             if !state.hub.wake(device)
@@ -290,7 +295,7 @@ async fn send_envelope(
         }
     }
     Ok(Some(server_frame::Body::SendResult(SendResult {
-        accepted: outcome == SendOutcome::Accepted,
+        accepted: matches!(outcome, SendOutcome::Accepted { .. }),
         epoch_conflict: outcome == SendOutcome::EpochConflict,
     })))
 }
