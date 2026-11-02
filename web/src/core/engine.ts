@@ -310,6 +310,12 @@ export class Engine {
   private callTimer?: ReturnType<typeof setInterval>
   /** SFrame keys of calls with media flowing, by call id (ADR-0030). */
   private media = new Map<string, { conversationId: string; media: CallMedia; createdAt: number }>()
+  /**
+   * Call ids whose SFrame keys this page has dropped. A new key state under a
+   * used call id would start its frame counter at 0 and repeat nonces, so such
+   * a call cannot be joined again here (audit M10).
+   */
+  private readonly endedCalls = new Set<string>()
   /** Downloads under way, by message id. */
   private downloads = new Map<string, Promise<Blob>>()
   private nextRequestId = 1
@@ -1861,6 +1867,9 @@ export class Engine {
   }
 
   private callMedia(conversationId: string, callId: string): CallMedia {
+    if (this.endedCalls.has(callId)) {
+      throw new Error('this call already ended on this device')
+    }
     const known = this.media.get(callId)
     if (known) {
       if (known.conversationId !== conversationId) throw new Error('call belongs to another conversation')
@@ -1891,6 +1900,7 @@ export class Engine {
   private forgetMedia(callId: string) {
     this.media.get(callId)?.media.free()
     this.media.delete(callId)
+    this.endedCalls.add(callId)
   }
 
   /** A signal from the other person or another of our devices (under the lock). */
