@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     Error, Result, envelope,
-    mls::{Conversation, Device, Provider, Received},
+    mls::{Conversation, Device, JoinPackage, Provider, Received},
 };
 
 const SNAPSHOT_VERSION: u32 = 1;
@@ -168,11 +168,11 @@ impl Client {
     /// Creates a conversation with the devices whose key packages are given.
     pub fn start_conversation(
         &mut self,
-        key_packages: &[&[u8]],
+        joins: &[JoinPackage<'_>],
         message_id: Vec<u8>,
     ) -> Result<Started> {
         let mut conv = Conversation::create(&self.device)?;
-        let change = conv.add_members(&self.device, key_packages)?;
+        let change = conv.add_members(&self.device, joins)?;
         let conversation_id = conv.id();
         let welcome = Envelope {
             version: PROTOCOL_VERSION,
@@ -187,6 +187,12 @@ impl Client {
             conversation_id,
             welcome,
         })
+    }
+
+    /// The identity inside a claimed key package, so the caller can check it
+    /// against the device it asked for before staging anything (audit H1).
+    pub fn key_package_identity(&self, key_package: &[u8]) -> Result<Vec<u8>> {
+        self.device.key_package_identity(key_package)
     }
 
     /// Members' identities and signature keys, including this device.
@@ -206,7 +212,7 @@ impl Client {
     pub fn add_members(
         &mut self,
         conversation_id: &[u8],
-        key_packages: &[&[u8]],
+        joins: &[JoinPackage<'_>],
         commit_id: Vec<u8>,
         welcome_id: Vec<u8>,
     ) -> Result<Added> {
@@ -214,7 +220,7 @@ impl Client {
         // Commits are built in the current epoch; the server accepts exactly
         // one commit per epoch.
         let epoch = conv.epoch();
-        let change = conv.stage_add_members(device, key_packages)?;
+        let change = conv.stage_add_members(device, joins)?;
         Ok(Added {
             commit_hash: Sha256::digest(&change.commit).to_vec(),
             commit: envelope(
@@ -405,7 +411,15 @@ mod tests {
         let mut bob = Client::new(Device::new(b"bob").unwrap());
         let kp = bob.key_packages(1).unwrap().remove(0);
 
-        let started = alice.start_conversation(&[&kp], vec![1]).unwrap();
+        let started = alice
+            .start_conversation(
+                &[JoinPackage {
+                    identity: b"bob",
+                    key_package: &kp,
+                }],
+                vec![1],
+            )
+            .unwrap();
         let id = started.conversation_id.clone();
         assert_eq!(
             bob.receive(&started.welcome).unwrap(),
@@ -446,7 +460,15 @@ mod tests {
         let mut alice = Client::new(Device::new(b"alice").unwrap());
         let mut bob = Client::new(Device::new(b"bob").unwrap());
         let kp = bob.key_packages(1).unwrap().remove(0);
-        let started = alice.start_conversation(&[&kp], vec![1]).unwrap();
+        let started = alice
+            .start_conversation(
+                &[JoinPackage {
+                    identity: b"bob",
+                    key_package: &kp,
+                }],
+                vec![1],
+            )
+            .unwrap();
         let id = started.conversation_id.clone();
         bob.receive(&started.welcome).unwrap();
 
@@ -471,8 +493,15 @@ mod tests {
         let mut alice = Client::new(Device::new(b"alice").unwrap());
         let mut bob = Client::new(Device::new(b"bob").unwrap());
         let mut carol = Client::new(Device::new(b"carol").unwrap());
+        let bob_kp = bob.key_packages(1).unwrap().remove(0);
         let started = alice
-            .start_conversation(&[&bob.key_packages(1).unwrap()[0]], vec![1])
+            .start_conversation(
+                &[JoinPackage {
+                    identity: b"bob",
+                    key_package: &bob_kp,
+                }],
+                vec![1],
+            )
             .unwrap();
         let id = started.conversation_id.clone();
         bob.receive(&started.welcome).unwrap();
@@ -480,11 +509,27 @@ mod tests {
         let carol_kp = carol.key_packages(1).unwrap().remove(0);
         // A lost race: discard and nothing changes.
         alice
-            .add_members(&id, &[&carol_kp], vec![2], vec![3])
+            .add_members(
+                &id,
+                &[JoinPackage {
+                    identity: b"carol",
+                    key_package: &carol_kp,
+                }],
+                vec![2],
+                vec![3],
+            )
             .unwrap();
         assert!(
             alice
-                .add_members(&id, &[&carol_kp], vec![2], vec![3])
+                .add_members(
+                    &id,
+                    &[JoinPackage {
+                        identity: b"carol",
+                        key_package: &carol_kp
+                    }],
+                    vec![2],
+                    vec![3],
+                )
                 .is_err(),
             "one at a time"
         );
@@ -493,7 +538,15 @@ mod tests {
 
         let carol_kp = carol.key_packages(1).unwrap().remove(0);
         let added = alice
-            .add_members(&id, &[&carol_kp], vec![4], vec![5])
+            .add_members(
+                &id,
+                &[JoinPackage {
+                    identity: b"carol",
+                    key_package: &carol_kp,
+                }],
+                vec![4],
+                vec![5],
+            )
             .unwrap();
         assert_eq!(added.commit.content_type, i32::from(ContentType::Handshake));
         assert_eq!(
@@ -531,7 +584,19 @@ mod tests {
             carol.key_packages(1).unwrap().remove(0),
         ];
         let started = alice
-            .start_conversation(&[&kps[0], &kps[1]], vec![1])
+            .start_conversation(
+                &[
+                    JoinPackage {
+                        identity: b"bob-dev",
+                        key_package: &kps[0],
+                    },
+                    JoinPackage {
+                        identity: b"carol-dev",
+                        key_package: &kps[1],
+                    },
+                ],
+                vec![1],
+            )
             .unwrap();
         let id = started.conversation_id.clone();
         bob.receive(&started.welcome).unwrap();

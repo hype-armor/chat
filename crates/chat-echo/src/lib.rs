@@ -292,7 +292,7 @@ fn call_body(call_id: &[u8], kind: call::Kind, sdp: String, to_device: Vec<u8>) 
 
 #[cfg(test)]
 mod tests {
-    use chat_core::mls::Device;
+    use chat_core::mls::{Device, JoinPackage};
     use chat_proto::v1::{Attachment, Location, Text};
 
     use super::*;
@@ -306,7 +306,15 @@ mod tests {
         let mut alice = Client::new(Device::new(&identity(1, 1)).unwrap());
         let mut echo = Echo::new(Client::new(Device::new(&identity(2, 2)).unwrap()), "Echo");
         let kp = echo.client().key_packages(1).unwrap().remove(0);
-        let started = alice.start_conversation(&[&kp], vec![9]).unwrap();
+        let started = alice
+            .start_conversation(
+                &[JoinPackage {
+                    identity: &identity(2, 2),
+                    key_package: &kp,
+                }],
+                vec![9],
+            )
+            .unwrap();
         let out = echo.handle(&started.welcome, 1).unwrap();
         // Joining: the bot introduces itself, to Alice's device only.
         assert_eq!(out.len(), 1);
