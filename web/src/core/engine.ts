@@ -99,7 +99,7 @@ import { prepareArea, safeLocation } from './maps'
 import { LIVE_DURATIONS_MS, plausibleExpiry, updateDue } from './live'
 import { type MediaTransformOptions, frameTransform } from './media'
 import { CALL_KINDS, type CallEnd, type CallRecord, GIVE_UP_MS, STALE_OFFER_MS, callNotice, safeSignalText } from './calls'
-import { acceptsGroupInfo, designatedCommitter, parseAdmins } from './roles'
+import { acceptsGroupInfo, designatedCommitter, isGroupView, parseAdmins } from './roles'
 import { SecureStore } from './storage'
 
 /** How long the server may take to answer a request before we reconnect. */
@@ -378,7 +378,7 @@ export class Engine {
       .map((c) => ({
         id: c.id,
         title: this.title(c),
-        isGroup: c.name !== undefined || c.peers.length > 1,
+        isGroup: isGroupView(c),
         amAdmin: (c.admins ?? []).includes(this.myAccount()),
         status: c.status ?? ('active' as const),
         memberCount: c.peers.length + 1,
