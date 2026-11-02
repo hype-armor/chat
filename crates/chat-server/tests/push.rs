@@ -183,8 +183,15 @@ async fn subscription_validation(pool: PgPool) {
         .post("/v1/push/subscription", Some(&token), http)
         .await;
     assert_eq!(status, 400);
-    let https =
+    // Only known push services are accepted (audit M5): the endpoint is
+    // attacker-chosen data the server would otherwise fetch.
+    let unknown =
         json!({ "endpoint": "https://push.example.com/x", "keys": { "p256dh": "k", "auth": "a" } });
+    let (status, _) = server
+        .post("/v1/push/subscription", Some(&token), unknown)
+        .await;
+    assert_eq!(status, 400);
+    let https = json!({ "endpoint": "https://fcm.googleapis.com/fcm/send/x", "keys": { "p256dh": "k", "auth": "a" } });
     let (status, _) = server
         .post("/v1/push/subscription", Some(&token), https.clone())
         .await;
