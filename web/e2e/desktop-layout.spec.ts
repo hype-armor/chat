@@ -57,7 +57,8 @@ for (const width of [390, 641, 768, 1280, 1920]) {
         await expect(card.locator('.file-icon text')).toHaveText('PDF')
         await expect(card).toContainText('13 B')
         await expect(card.getByRole('button', { name: 'Download', exact: true })).toBeEnabled()
-        expect(await card.locator('.file-name').evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true)
+        await expect(card.locator('.file-name')).toHaveCSS('-webkit-line-clamp', '2')
+        await expect(card.locator('.file-name')).toHaveAttribute('title', name)
         const bounds = (await card.boundingBox())!
         expect(bounds.x).toBeGreaterThanOrEqual(list.x)
         expect(bounds.x + bounds.width).toBeLessThanOrEqual(list.x + list.width)
