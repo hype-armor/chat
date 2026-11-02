@@ -2631,7 +2631,6 @@ export class Engine {
         event.groupName !== undefined &&
         conv &&
         !conv.status &&
-        this.isGroupConversation(conv) &&
         acceptsGroupInfo(conv.admins, from)
       ) {
         if (event.groupName) conv.name = event.groupName.slice(0, 64)
@@ -2958,7 +2957,7 @@ export class Engine {
 
   /** Device ids (hex) of every member except this device. */
   private recipients(conversationId: string): string[] {
-    const me = toHex(this.core!.identity())
+    const me = toHex(splitIdentity(this.core!.identity()).device)
     return this.memberDevices(conversationId).filter((d) => d !== me)
   }
 

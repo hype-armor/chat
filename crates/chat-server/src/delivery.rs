@@ -247,15 +247,6 @@ pub async fn send(db: &PgPool, caps: &Limits, req: Send<'_>) -> Result<SendOutco
         removed = replace_members(&mut tx, conversation, members).await?;
     }
 
-    // A device that this commit removed does not get it: it is not a member of
-    // the epoch the commit makes, so it cannot read the ciphertext.
-    let recipients: Vec<Uuid> = recipients
-        .iter()
-        .filter(|d| !removed.contains(d))
-        .copied()
-        .collect();
-    let recipients = recipients.as_slice();
-
     // What this send will store, charged to the sender inside the
     // transaction: a device cannot flood a recipient's queue day after day.
     let kib = envelope_kib(env) + req.welcome.map_or(0, |(w, _)| envelope_kib(w));

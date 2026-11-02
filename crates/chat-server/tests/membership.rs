@@ -81,18 +81,31 @@ async fn a_commit_that_removes_a_member_ends_its_send_and_call_access(pool: PgPo
     let mut alice_ws = server.connect(&alice_token).await;
     let commit = SendEnvelope {
         envelope: Some(envelope(b"group", ContentType::Handshake, 3)),
-        recipient_devices: ids(&[alice]),
+        recipient_devices: ids(&[bob]),
         members: ids(&[alice]),
         ..Default::default()
     };
+    let commit_id = commit.envelope.as_ref().unwrap().message_id.clone();
     assert_eq!(send(&mut alice_ws, commit).await, Ok(true));
+
+    // The removed device still needs the old-epoch commit to learn it is out.
+    let mut bob_ws = server.connect(&bob_token).await;
+    let delivery = bob_ws
+        .next_frame(std::time::Duration::from_secs(5))
+        .await
+        .expect("removal commit");
+    match delivery.body {
+        Some(server_frame::Body::Deliver(d)) => {
+            assert_eq!(d.message_id, commit_id);
+        }
+        other => panic!("expected removal commit, got {other:?}"),
+    }
 
     // Bob has no room token now, and his sends are refused.
     let (status, body) = server
         .post("/v1/calls/join", Some(&bob_token), call.clone())
         .await;
     assert_eq!(status, 403, "{body}");
-    let mut bob_ws = server.connect(&bob_token).await;
     assert_eq!(
         send(&mut bob_ws, message(b"group", 4, &[alice])).await,
         Err(403)
