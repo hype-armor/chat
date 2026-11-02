@@ -40,3 +40,5 @@ revisited; do it with a new ADR that supersedes the old one.
 | [0031](0031-group-calls-livekit.md) | Group calls: LiveKit rooms per call, tokens for members only | Accepted |
 | [0032](0032-call-statistics.md) | Opt-in, anonymous daily call statistics | Accepted |
 | [0033](0033-map-areas-on-demand.md) | Map areas downloaded when first shared | Accepted |
+| [0034](0034-identity-binding.md) | Bind MLS identities to account and device | Accepted |
+| [0035](0035-membership-mirroring.md) | Mirror group membership changes to the server | Accepted |

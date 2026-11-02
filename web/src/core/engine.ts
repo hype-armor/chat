@@ -29,7 +29,16 @@ import {
   sendOutcome,
   throwUnlessAccepted,
 } from './commits'
-import { RecentIds, fromHex, makeIdentity, plain, randomId, splitIdentity, toHex } from './ids'
+import {
+  RecentIds,
+  fromHex,
+  makeIdentity,
+  plain,
+  randomId,
+  splitIdentity,
+  toHex,
+  trySplitIdentity,
+} from './ids'
 import { type DeviceSync, deviceHex, linkText, memberDevicePlan, parseDeviceSync, parseLinkCode } from './devices'
 import { applyReceipt, splitIds } from './receipts'
 import {
@@ -90,7 +99,7 @@ import { prepareArea, safeLocation } from './maps'
 import { LIVE_DURATIONS_MS, plausibleExpiry, updateDue } from './live'
 import { type MediaTransformOptions, frameTransform } from './media'
 import { CALL_KINDS, type CallEnd, type CallRecord, GIVE_UP_MS, STALE_OFFER_MS, callNotice, safeSignalText } from './calls'
-import { acceptsGroupInfo, designatedCommitter, parseAdmins } from './roles'
+import { acceptsGroupInfo, designatedCommitter, isGroupView, parseAdmins } from './roles'
 import { SecureStore } from './storage'
 
 /** How long the server may take to answer a request before we reconnect. */
@@ -148,7 +157,14 @@ type Conversation = {
 }
 
 /** A contact resolved through the key directory, with one key package per device. */
-type Invitee = { username: string; account: string; devices: string[]; keyPackages: Uint8Array[] }
+type Invitee = {
+  username: string
+  account: string
+  devices: string[]
+  /** One 32-byte `account ‖ device` identity per key package (audit H1). */
+  identities: Uint8Array[]
+  keyPackages: Uint8Array[]
+}
 
 /** A live-location session this device sends. */
 type LiveSession = {
@@ -294,6 +310,18 @@ export class Engine {
   private callTimer?: ReturnType<typeof setInterval>
   /** SFrame keys of calls with media flowing, by call id (ADR-0030). */
   private media = new Map<string, { conversationId: string; media: CallMedia; createdAt: number }>()
+  /**
+   * Call ids whose SFrame keys this page has dropped. A new key state under a
+   * used call id would start its frame counter at 0 and repeat nonces, so such
+   * a call cannot be joined again here (audit M10).
+   */
+  private readonly endedCalls = new Set<string>()
+  /**
+   * `DeviceSync` frames from an own device this page did not know yet (a
+   * device linked or restored a moment ago). Applied once the server's device
+   * list confirms it (audit H1).
+   */
+  private pendingSyncs: { conversationId: string; device: string; bytes: Uint8Array }[] = []
   /** Downloads under way, by message id. */
   private downloads = new Map<string, Promise<Blob>>()
   private nextRequestId = 1
@@ -356,7 +384,7 @@ export class Engine {
       .map((c) => ({
         id: c.id,
         title: this.title(c),
-        isGroup: c.name !== undefined || c.peers.length > 1,
+        isGroup: isGroupView(c),
         amAdmin: (c.admins ?? []).includes(this.myAccount()),
         status: c.status ?? ('active' as const),
         memberCount: c.peers.length + 1,
@@ -678,6 +706,12 @@ export class Engine {
       const { devices } = await api.devices(this.account.token)
       const mine = devices.map((d) => deviceHex(d.device_id))
       this.state.myDevices = mine
+      // Syncs that waited for this list (a device linked a moment ago).
+      const ready = this.pendingSyncs.filter((p) => mine.includes(p.device))
+      this.pendingSyncs = this.pendingSyncs.filter((p) => !mine.includes(p.device))
+      for (const pending of ready) {
+        await this.exclusive(() => this.applyDeviceSync(pending.conversationId, pending.bytes))
+      }
       const thisDevice = deviceHex(this.account.deviceId)
       const hasSelf = Object.values(this.state.conversations).some((c) => c.self && !c.status)
       // The oldest device creates it; duplicates from races are tolerated.
@@ -745,14 +779,21 @@ export class Engine {
           if (this.state.pendingCommit || this.connection !== 'online') return undefined
           await this.flushOutbox(true)
           const existing = this.recipients(conversationId)
-          const added = core.addMembers(fromHex(conversationId), invitee.keyPackages, randomId(), randomId())
+          const added = core.addMembers(
+            fromHex(conversationId),
+            invitee.identities,
+            invitee.keyPackages,
+            randomId(),
+            randomId(),
+          )
           const pending: PendingCommit = {
             conversationId,
             commitHash: toBase64(added.commitHash),
             invitees: [{ account: invitee.account, username: invitee.username, devices: invitee.devices }],
           }
           const welcome = { envelope: added.welcome, recipients: invitee.devices }
-          return this.sendCommit(pending, added.commit, existing, welcome)
+          const after = [...new Set([...this.memberDevices(conversationId), ...invitee.devices])]
+          return this.sendCommit(pending, added.commit, existing, welcome, after)
         })
       } else if (removing.length > 0) {
         outcome = await this.exclusive(async () => {
@@ -762,7 +803,9 @@ export class Engine {
           const identities = removing.flatMap((p) => p.stale.map((d) => fromHex(p.account + d)))
           const staged = core.removeMembers(fromHex(conversationId), identities, randomId())
           const pending: PendingCommit = { conversationId, commitHash: toBase64(staged.commitHash) }
-          return this.sendCommit(pending, staged.commit, everyone)
+          const gone = removing.flatMap((p) => p.stale)
+          const after = this.memberDevices(conversationId).filter((d) => !gone.includes(d))
+          return this.sendCommit(pending, staged.commit, everyone, undefined, after)
         })
       }
       if (outcome !== 'accepted') return
@@ -782,12 +825,33 @@ export class Engine {
     const packages = new Map(Object.entries(claimed.key_packages).map(([id, kp]) => [deviceHex(id), kp]))
     const found = devices.filter((d) => packages.has(d))
     if (found.length === 0) return undefined
+    const identities = found.map((d) => makeIdentity(account, d))
+    const keyPackages = found.map((d) => fromBase64(packages.get(d)!))
+    this.checkIdentities(identities, keyPackages)
     return {
       username: account === this.myAccount() ? me.username : (this.state.usernames[account] ?? ''),
       account,
       devices: found,
-      keyPackages: found.map((d) => fromBase64(packages.get(d)!)),
+      identities,
+      keyPackages,
     }
+  }
+
+  /**
+   * Refuses any claimed key package whose credential identity is not the
+   * account and device it was claimed for (audit H1). The key directory hands
+   * out packages that their uploader chose, so a package can claim to belong
+   * to someone else. Without this check, messages from that member would be
+   * shown as the other account's.
+   */
+  private checkIdentities(identities: Uint8Array[], keyPackages: Uint8Array[]) {
+    const { core } = this.ready()
+    identities.forEach((identity, i) => {
+      const claimed = core.keyPackageIdentity(keyPackages[i])
+      if (toHex(claimed) !== toHex(identity)) {
+        throw new Error('the server sent a key that belongs to another account')
+      }
+    })
   }
 
   /** This account's other devices, for new conversations. */
@@ -801,7 +865,7 @@ export class Engine {
     const invitee = await this.ownInvitee(mine.filter((d) => d !== thisDevice))
     if (!invitee) return
     await this.exclusive(async () => {
-      const started = this.core!.startConversation(invitee.keyPackages, randomId())
+      const started = this.core!.startConversation(invitee.identities, invitee.keyPackages, randomId())
       const id = toHex(started.conversationId)
       this.state.conversations[id] = { id, peers: [], self: true, lastAt: Date.now() }
       await this.observeKeysIn(id)
@@ -1253,10 +1317,18 @@ export class Engine {
     const own = await this.otherOwnDevices()
 
     const id = await this.exclusive(async () => {
-      const started = core.startConversation(
-        [...devices.map((d) => fromBase64(claimed.key_packages[d])), ...(own?.keyPackages ?? [])],
-        randomId(),
-      )
+      const identities = [
+        ...devices.map((d) => makeIdentity(peer, deviceHex(d))),
+        ...(own?.identities ?? []),
+      ]
+      const keyPackages = [
+        ...devices.map((d) => fromBase64(claimed.key_packages[d])),
+        ...(own?.keyPackages ?? []),
+      ]
+      // The peer's packages are checked here; our own devices were checked
+      // when they were claimed (audit H1).
+      this.checkIdentities(identities.slice(0, devices.length), keyPackages.slice(0, devices.length))
+      const started = core.startConversation(identities, keyPackages, randomId())
       const id = toHex(started.conversationId)
       this.state.usernames[peer] = username
       this.state.conversations[id] = { id, peers: [peer], lastAt: Date.now() }
@@ -1290,6 +1362,7 @@ export class Engine {
 
     const id = await this.exclusive(async () => {
       const started = core.startConversation(
+        everyone.flatMap((i) => i.identities),
         everyone.flatMap((i) => i.keyPackages),
         randomId(),
       )
@@ -1342,6 +1415,7 @@ export class Engine {
       const existing = this.recipients(conversationId)
       const added = core.addMembers(
         fromHex(conversationId),
+        invitees.flatMap((i) => i.identities),
         invitees.flatMap((i) => i.keyPackages),
         randomId(),
         randomId(),
@@ -1352,7 +1426,11 @@ export class Engine {
         invitees: invitees.map(({ account, username, devices }) => ({ account, username, devices })),
       }
       const welcome = { envelope: added.welcome, recipients: invitees.flatMap((i) => i.devices) }
-      throwUnlessAccepted(await this.sendCommit(pending, added.commit, existing, welcome), 'adding people')
+      const after = [...new Set([...this.memberDevices(conversationId), ...invitees.flatMap((i) => i.devices)])]
+      throwUnlessAccepted(
+        await this.sendCommit(pending, added.commit, existing, welcome, after),
+        'adding people',
+      )
     })
     this.emitView()
     void this.flushOutbox()
@@ -1409,7 +1487,11 @@ export class Engine {
       const everyone = this.recipients(conversationId)
       const staged = core.removeMembers(fromHex(conversationId), [fromHex(account)], randomId())
       const pending: PendingCommit = { conversationId, commitHash: toBase64(staged.commitHash) }
-      throwUnlessAccepted(await this.sendCommit(pending, staged.commit, everyone), 'removing them')
+      const after = this.withoutAccounts(conversationId, [account])
+      throwUnlessAccepted(
+        await this.sendCommit(pending, staged.commit, everyone, undefined, after),
+        'removing them',
+      )
     })
     this.emitView()
     void this.flushOutbox()
@@ -1797,6 +1879,9 @@ export class Engine {
   }
 
   private callMedia(conversationId: string, callId: string): CallMedia {
+    if (this.endedCalls.has(callId)) {
+      throw new Error('this call already ended on this device')
+    }
     const known = this.media.get(callId)
     if (known) {
       if (known.conversationId !== conversationId) throw new Error('call belongs to another conversation')
@@ -1827,6 +1912,7 @@ export class Engine {
   private forgetMedia(callId: string) {
     this.media.get(callId)?.media.free()
     this.media.delete(callId)
+    this.endedCalls.add(callId)
   }
 
   /** A signal from the other person or another of our devices (under the lock). */
@@ -2429,15 +2515,21 @@ export class Engine {
         return
       }
       const members = [
-        ...new Set((core.members(fromHex(conversationId)) as Uint8Array[]).map((m) => splitIdentity(m).account)),
+        ...new Set(
+          (core.members(fromHex(conversationId)) as Uint8Array[])
+            .map((m) => trySplitIdentity(m)?.account)
+            .filter((a): a is string => a !== undefined),
+        ),
       ]
       if (designatedCommitter(conv.admins, members, leavers) !== this.myAccount()) return
       await this.flushOutbox(true)
       const everyone = this.recipients(conversationId)
       const staged = core.commitProposals(fromHex(conversationId), randomId())
       const pending: PendingCommit = { conversationId, commitHash: toBase64(staged.commitHash) }
+      // The leavers are the members this commit takes out (ADR-0035).
+      const after = this.withoutAccounts(conversationId, leavers)
       // A conflict means another member committed first; nothing to do.
-      await this.sendCommit(pending, staged.commit, everyone)
+      await this.sendCommit(pending, staged.commit, everyone, undefined, after)
     })
     this.emitView()
   }
@@ -2535,14 +2627,33 @@ export class Engine {
       const conv = this.state.conversations[conversationId]
       const mine = from === this.myAccount()
       if (event.deviceSync !== undefined) {
-        if (mine) await this.applyDeviceSync(conversationId, event.deviceSync)
+        // Only this account's own devices may edit the local account (blocked
+        // list, display name): audit H1. A device linked a moment ago is not
+        // in the local list yet, so hold its sync until the server confirms it
+        // rather than dropping it.
+        const senderDevice = toHex(splitIdentity(event.sender).device)
+        if (mine && this.state.myDevices.includes(senderDevice)) {
+          await this.applyDeviceSync(conversationId, event.deviceSync)
+        } else if (mine) {
+          this.pendingSyncs.push({
+            conversationId,
+            device: senderDevice,
+            bytes: new Uint8Array(event.deviceSync),
+          })
+          void this.syncOwnDevices()
+        }
         return
       }
       if (event.receiptKind !== undefined) {
         if (!mine && conv) await this.applyReceipts(conversationId, from, event.receiptKind === 1, event.receiptIds)
         return
       }
-      if (event.groupName !== undefined && conv && acceptsGroupInfo(conv.admins, from)) {
+      if (
+        event.groupName !== undefined &&
+        conv &&
+        !conv.status &&
+        acceptsGroupInfo(conv.admins, from)
+      ) {
         if (event.groupName) conv.name = event.groupName.slice(0, 64)
         const admins = parseAdmins(event.groupAdmins)
         if (admins.length > 0) conv.admins = admins
@@ -2635,7 +2746,13 @@ export class Engine {
       while (this.state.outbox.length > 0 && this.connection === 'online') {
         const item = this.state.outbox[0]
         const result = await this.request((id) =>
-          encodeSend(id, fromBase64(item.envelope), item.recipients.map(fromHex), item.silent ?? false),
+          encodeSend(
+            id,
+            fromBase64(item.envelope),
+            item.recipients.map(fromHex),
+            item.silent ?? false,
+            [],
+          ),
         )
         if (!result) return // disconnected: retry after reconnecting
         let outcome = sendOutcome(result)
@@ -2696,6 +2813,12 @@ export class Engine {
     commit: Uint8Array,
     recipients: string[],
     welcome?: { envelope: Uint8Array; recipients: string[] },
+    /**
+     * Devices that are members once the server accepts this commit
+     * (ADR-0035). Without it the server keeps the old member list, and a
+     * removed member keeps send and call access.
+     */
+    membersAfter?: string[],
   ): Promise<CommitOutcome> {
     const id = fromHex(pending.conversationId)
     if (recipients.length === 0 && !welcome) {
@@ -2711,8 +2834,9 @@ export class Engine {
             recipients.map(fromHex),
             welcome.envelope,
             welcome.recipients.map(fromHex),
+            (membersAfter ?? []).map(fromHex),
           )
-        : encodeSend(requestId, commit, recipients.map(fromHex), false),
+        : encodeSend(requestId, commit, recipients.map(fromHex), false, (membersAfter ?? []).map(fromHex)),
     )
     if (!result) {
       // The server may or may not have accepted it; ask once reconnected.
@@ -2792,12 +2916,12 @@ export class Engine {
     return found.map((f) => {
       const devices = f.device_ids.filter((d) => claimed.key_packages[d])
       if (devices.length === 0) throw new Error(`${f.username} has no keys available right now; try again later`)
-      return {
-        username: f.username,
-        account: f.account_id.replaceAll('-', ''),
-        devices: devices.map((d) => d.replaceAll('-', '')),
-        keyPackages: devices.map((d) => fromBase64(claimed.key_packages[d])),
-      }
+      const account = f.account_id.replaceAll('-', '')
+      const deviceIds = devices.map((d) => d.replaceAll('-', ''))
+      const identities = deviceIds.map((d) => makeIdentity(account, d))
+      const keyPackages = devices.map((d) => fromBase64(claimed.key_packages[d]))
+      this.checkIdentities(identities, keyPackages)
+      return { username: f.username, account, devices: deviceIds, identities, keyPackages }
     })
   }
 
@@ -2824,12 +2948,38 @@ export class Engine {
     })
   }
 
+  /**
+   * Device ids (hex) of every member, this device included. A member whose
+   * identity is not 32 bytes is skipped: it cannot be addressed, and it must
+   * not stop the rest of the group from sending (audit H1).
+   */
+  private memberDevices(conversationId: string): string[] {
+    return (this.core!.members(fromHex(conversationId)) as Uint8Array[])
+      .map((m) => trySplitIdentity(m))
+      .filter((m): m is { account: string; device: Uint8Array; deviceId: string } => m !== undefined)
+      .map((m) => m.deviceId)
+  }
+
+  /** Device id (hex) to account id (hex), from the core's group state. */
+  private deviceAccounts(conversationId: string): Map<string, string> {
+    const owners = new Map<string, string>()
+    for (const m of this.core!.members(fromHex(conversationId)) as Uint8Array[]) {
+      const split = trySplitIdentity(m)
+      if (split) owners.set(split.deviceId, split.account)
+    }
+    return owners
+  }
+
+  /** Member devices after every device of `accounts` leaves. */
+  private withoutAccounts(conversationId: string, accounts: string[]): string[] {
+    const owners = this.deviceAccounts(conversationId)
+    return this.memberDevices(conversationId).filter((d) => !accounts.includes(owners.get(d) ?? ''))
+  }
+
   /** Device ids (hex) of every member except this device. */
   private recipients(conversationId: string): string[] {
-    const me = toHex(this.core!.identity())
-    return (this.core!.members(fromHex(conversationId)) as Uint8Array[])
-      .filter((m) => toHex(m) !== me)
-      .map((m) => toHex(splitIdentity(m).device))
+    const me = toHex(splitIdentity(this.core!.identity()).device)
+    return this.memberDevices(conversationId).filter((d) => d !== me)
   }
 
   private myAccount(): string {
@@ -2839,7 +2989,9 @@ export class Engine {
   /** Other members' account ids, from the core's current group state. */
   private peersOf(conversationId: string): string[] {
     const me = this.myAccount()
-    const accounts = (this.core!.members(fromHex(conversationId)) as Uint8Array[]).map((m) => splitIdentity(m).account)
+    const accounts = (this.core!.members(fromHex(conversationId)) as Uint8Array[])
+      .map((m) => trySplitIdentity(m)?.account)
+      .filter((a): a is string => a !== undefined)
     return [...new Set(accounts.filter((a) => a !== me))]
   }
 

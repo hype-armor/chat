@@ -24,8 +24,23 @@ export function makeIdentity(accountId: string, deviceId: string): Uint8Array {
 }
 
 export function splitIdentity(identity: Uint8Array): { account: string; device: Uint8Array } {
-  if (identity.length !== 32) throw new Error('identity must be 32 bytes')
-  return { account: toHex(identity.slice(0, 16)), device: identity.slice(16) }
+  const split = trySplitIdentity(identity)
+  if (!split) throw new Error('identity must be 32 bytes')
+  return split
+}
+
+/**
+ * `splitIdentity`, but undefined instead of a throw. A group can contain a
+ * member whose identity is not `account ‖ device` (a commit made by a
+ * misbehaving client); routing must skip it rather than stop working
+ * (audit H1).
+ */
+export function trySplitIdentity(
+  identity: Uint8Array,
+): { account: string; device: Uint8Array; deviceId: string } | undefined {
+  if (identity.length !== 32) return undefined
+  const device = identity.slice(16)
+  return { account: toHex(identity.slice(0, 16)), device, deviceId: toHex(device) }
 }
 
 export function randomId(): Uint8Array {

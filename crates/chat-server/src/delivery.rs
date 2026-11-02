@@ -24,25 +24,42 @@ pub const BATCH: i64 = 100;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum SendOutcome {
-    Accepted,
+    /// Stored. `removed`: devices this commit took out of the conversation;
+    /// the caller tells their sessions (ADR-0022).
+    Accepted { removed: Vec<Uuid> },
     /// Another commit already advanced this group's epoch; the sender must
     /// process it and retry on the new epoch.
     EpochConflict,
 }
 
 pub fn parse_recipients(raw: &[Vec<u8>], allow_empty: bool) -> Result<Vec<Uuid>, ApiError> {
+    parse_ids(raw, allow_empty, "send to 1 to 500 devices")
+}
+
+/// The members a commit leaves in the conversation (M11).
+fn parse_members(raw: &[Vec<u8>]) -> Result<Vec<Uuid>, ApiError> {
+    parse_ids(raw, false, "members must be 1 to 500 device ids")
+}
+
+/// Device ids, sorted and without duplicates. `empty_or_too_many` is the
+/// message for a list that is empty or longer than a send may reach.
+fn parse_ids(
+    raw: &[Vec<u8>],
+    allow_empty: bool,
+    empty_or_too_many: &'static str,
+) -> Result<Vec<Uuid>, ApiError> {
+    if raw.len() > MAX_RECIPIENTS || (raw.is_empty() && !allow_empty) {
+        return Err(ApiError::BadRequest(empty_or_too_many));
+    }
     let mut ids = raw
         .iter()
         .map(|b| {
             Uuid::from_slice(b)
-                .map_err(|_| ApiError::BadRequest("recipient ids must be 16-byte UUIDs"))
+                .map_err(|_| ApiError::BadRequest("device ids must be 16-byte UUIDs"))
         })
         .collect::<Result<Vec<_>, _>>()?;
     ids.sort_unstable();
     ids.dedup();
-    if (ids.is_empty() && !allow_empty) || ids.len() > MAX_RECIPIENTS {
-        return Err(ApiError::BadRequest("send to 1 to 500 devices"));
-    }
     Ok(ids)
 }
 
@@ -74,6 +91,9 @@ pub struct Send<'a> {
     pub recipients: &'a [Uuid],
     /// A welcome accepted together with a commit that adds members.
     pub welcome: Option<(&'a Envelope, &'a [Uuid])>,
+    /// Raw `members` of a commit: the devices it leaves in the conversation.
+    /// Empty means the commit changes no membership.
+    pub members: &'a [Vec<u8>],
 }
 
 /// Welcomes may only go to devices whose key packages the sender claimed
@@ -87,7 +107,9 @@ const CLAIM_VALID_DAYS: i32 = 7;
 ///   claimed key packages for; its recipients become members;
 /// - every other envelope must come from a member and go to members;
 /// - handshake messages are accepted only if they build on the group's
-///   current epoch, so every member applies the same sequence of commits.
+///   current epoch, so every member applies the same sequence of commits;
+/// - a commit that carries the members after it replaces the membership
+///   rows, so a device it removes loses send and call access at once (M11).
 pub async fn send(db: &PgPool, caps: &Limits, req: Send<'_>) -> Result<SendOutcome, ApiError> {
     let env = req.envelope;
     let content_type = validate(env)?;
@@ -180,6 +202,36 @@ pub async fn send(db: &PgPool, caps: &Limits, req: Send<'_>) -> Result<SendOutco
         }
     }
 
+    // The members a commit leaves in the conversation, when the sender states
+    // them. Parsed before the epoch moves, so a bad list fails the same way
+    // on every epoch.
+    let members = if content_type == ContentType::Handshake && !req.members.is_empty() {
+        let members = parse_members(req.members)?;
+        if !members.contains(&req.sender) {
+            return Err(ApiError::BadRequest(
+                "the members after a commit must include the sender",
+            ));
+        }
+        // A device the server no longer has (removed, or replaced by a
+        // restore) cannot be a member: drop it instead of failing the commit,
+        // because the committer's local group still lists it.
+        let known: Vec<(Uuid,)> =
+            sqlx::query_as("SELECT device_id FROM devices WHERE device_id = ANY($1)")
+                .bind(members.as_slice())
+                .fetch_all(&mut *tx)
+                .await?;
+        let known: Vec<Uuid> = known.into_iter().map(|(d,)| d).collect();
+        let members: Vec<Uuid> = members.into_iter().filter(|d| known.contains(d)).collect();
+        if !members.contains(&req.sender) {
+            return Err(ApiError::BadRequest(
+                "the members after a commit must include the sender",
+            ));
+        }
+        Some(members)
+    } else {
+        None
+    };
+
     if content_type == ContentType::Handshake {
         let epoch =
             i64::try_from(env.epoch).map_err(|_| ApiError::BadRequest("epoch out of range"))?;
@@ -198,6 +250,13 @@ pub async fn send(db: &PgPool, caps: &Limits, req: Send<'_>) -> Result<SendOutco
         if advanced.is_none() {
             return Ok(SendOutcome::EpochConflict);
         }
+    }
+
+    // Membership follows the commit, and only after the commit won its epoch:
+    // a commit that lost the race changes nothing.
+    let mut removed: Vec<Uuid> = Vec::new();
+    if let Some(members) = &members {
+        removed = replace_members(&mut tx, conversation, members).await?;
     }
 
     // What this send will store, charged to the sender inside the
@@ -237,7 +296,7 @@ pub async fn send(db: &PgPool, caps: &Limits, req: Send<'_>) -> Result<SendOutco
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
-    Ok(SendOutcome::Accepted)
+    Ok(SendOutcome::Accepted { removed })
 }
 
 /// Size of an envelope in KiB, at least 1: the rate-limit table counts units.
@@ -282,6 +341,26 @@ async fn add_members(
     .execute(&mut **tx)
     .await?;
     Ok(())
+}
+
+/// Makes `devices` the members of the conversation and returns the devices
+/// that were removed, so the caller can tell their sessions.
+async fn replace_members(
+    tx: &mut Tx<'_>,
+    conversation: &[u8],
+    devices: &[Uuid],
+) -> Result<Vec<Uuid>, ApiError> {
+    let removed: Vec<(Uuid,)> = sqlx::query_as(
+        "DELETE FROM conversation_members
+         WHERE conversation_id = $1 AND NOT device_id = ANY($2)
+         RETURNING device_id",
+    )
+    .bind(conversation)
+    .bind(devices)
+    .fetch_all(&mut **tx)
+    .await?;
+    add_members(tx, conversation, devices).await?;
+    Ok(removed.into_iter().map(|(device,)| device).collect())
 }
 
 async fn enqueue(tx: &mut Tx<'_>, env: &Envelope, recipients: &[Uuid]) -> Result<(), ApiError> {
