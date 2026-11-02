@@ -26,6 +26,11 @@ pub enum Wake {
 
 type Sessions = HashMap<Uuid, Vec<(u64, mpsc::Sender<Wake>)>>;
 
+/// Open WebSocket sessions one device may have. The oldest is closed beyond
+/// this: a busy loop of connections must not multiply the queue reads that
+/// every send triggers, and a phone plus a laptop is two sessions.
+const MAX_SESSIONS_PER_DEVICE: usize = 2;
+
 #[derive(Clone, Default)]
 pub struct Hub {
     sessions: Arc<Mutex<Sessions>>,
@@ -44,7 +49,16 @@ impl Hub {
         // Small: pending wake-ups already cover later ones of the same kind.
         let (tx, rx) = mpsc::channel(4);
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        self.lock().entry(device).or_default().push((id, tx));
+        {
+            let mut sessions = self.lock();
+            let list = sessions.entry(device).or_default();
+            // Dropping the oldest sender closes its wake channel; that session
+            // reads `None`, closes its socket and frees its database work.
+            while list.len() >= MAX_SESSIONS_PER_DEVICE {
+                list.remove(0);
+            }
+            list.push((id, tx));
+        }
         (
             Registration {
                 hub: self.clone(),
@@ -124,5 +138,20 @@ mod tests {
         assert_eq!(rx.recv().await, Some(Wake::DevicesChanged));
         drop(reg);
         assert!(hub.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_oldest_session_closes_above_the_limit() {
+        let hub = Hub::default();
+        let device = Uuid::new_v4();
+        let (_first_reg, mut first) = hub.register(device);
+        let (_second_reg, mut second) = hub.register(device);
+        let (_third_reg, mut third) = hub.register(device);
+        // The first session's channel closed, so its loop ends and it closes.
+        assert_eq!(first.recv().await, None);
+        hub.wake(&device);
+        assert_eq!(second.recv().await, Some(Wake::Deliveries));
+        assert_eq!(third.recv().await, Some(Wake::Deliveries));
+        assert_eq!(hub.lock().get(&device).map(Vec::len), Some(2));
     }
 }
