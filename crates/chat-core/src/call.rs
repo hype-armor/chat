@@ -37,13 +37,21 @@ fn key_id(epoch: u64, leaf: u32) -> Result<u64> {
         .map_err(|_| Error::Malformed("leaf index out of range"))
 }
 
+/// One epoch that was installed here: the base key it came from and the
+/// receive key IDs it added.
+struct Installed {
+    epoch: u64,
+    base: Vec<u8>,
+    ids: Vec<u64>,
+}
+
 /// One call's SFrame keys on one device.
 pub struct CallKeys {
     counter: MonotonicCounter,
     send: Option<EncryptionKey>,
     receive: HashMap<u64, DecryptionKey>,
-    /// Key IDs installed per epoch, oldest first.
-    epochs: VecDeque<(u64, Vec<u64>)>,
+    /// Epochs installed here, oldest first.
+    epochs: VecDeque<Installed>,
 }
 
 impl Default for CallKeys {
@@ -65,9 +73,23 @@ impl CallKeys {
     /// Installs an epoch's keys: `base_key` from the MLS exporter, this
     /// device's leaf and the other members' leaves. Sending moves to the new
     /// epoch at once; receive keys of the previous epoch stay for a while.
+    ///
+    /// An epoch installs once, and a base key is used for one epoch only.
+    /// Installing what is already installed is a no-op: the key state and the
+    /// frame counter stay as they are, so no AES-GCM nonce repeats (audit
+    /// M10). A device that rejoins a call keeps the keys it has.
     pub fn install(&mut self, base_key: &[u8], epoch: u64, own: u32, others: &[u32]) -> Result<()> {
-        if self.epochs.iter().any(|(e, _)| *e == epoch) {
-            return Ok(());
+        if let Some(existing) = self.epochs.iter().find(|e| e.epoch == epoch) {
+            return if existing.base == base_key {
+                Ok(())
+            } else {
+                Err(Error::Malformed("this epoch already has other keys"))
+            };
+        }
+        if self.epochs.iter().any(|e| e.base == base_key) {
+            return Err(Error::Malformed(
+                "call base key already used for another epoch",
+            ));
         }
         let crypto = |_| Error::Malformed("call key derivation failed");
         self.send =
@@ -81,10 +103,14 @@ impl CallKeys {
             );
             ids.push(id);
         }
-        self.epochs.push_back((epoch, ids));
+        self.epochs.push_back(Installed {
+            epoch,
+            base: base_key.to_vec(),
+            ids,
+        });
         while self.epochs.len() > KEPT_EPOCHS {
-            if let Some((_, old)) = self.epochs.pop_front() {
-                for id in old {
+            if let Some(old) = self.epochs.pop_front() {
+                for id in old.ids {
                     self.receive.remove(&id);
                 }
             }
@@ -172,6 +198,47 @@ mod tests {
         let (mut a, _) = pair(&[7; BASE_KEY_LEN], 3);
         let (_, other) = pair(&[8; BASE_KEY_LEN], 3);
         assert!(other.decrypt(&a.encrypt(b"x", 0).unwrap(), 0).is_err());
+    }
+
+    #[test]
+    fn a_rejoin_does_not_restart_the_frame_counter() {
+        let (mut a, b) = pair(&[7; BASE_KEY_LEN], 3);
+        let first = a.encrypt(b"frame", 0).unwrap();
+        assert_eq!(b.decrypt(&first, 0).unwrap(), b"frame");
+        for _ in 0..2 {
+            let sealed = a.encrypt(b"frame", 0).unwrap();
+            assert_eq!(b.decrypt(&sealed, 0).unwrap(), b"frame");
+        }
+        assert_eq!(a.counter.current(), 3);
+        // A device that rejoins the same call and installs the same epoch
+        // again keeps its key state: nothing restarts at counter 0.
+        a.install(&[7; BASE_KEY_LEN], 3, 0, &[1]).unwrap();
+        assert_eq!(a.counter.current(), 3);
+        // The counter goes on, so the next frame repeats no nonce of frame 0.
+        let again = a.encrypt(b"frame", 0).unwrap();
+        assert_ne!(again, first);
+        assert_eq!(a.counter.current(), 4);
+        assert_eq!(b.decrypt(&again, 0).unwrap(), b"frame");
+    }
+
+    #[test]
+    fn another_base_key_cannot_replace_a_live_epoch() {
+        let (mut a, b) = pair(&[7; BASE_KEY_LEN], 3);
+        assert!(a.install(&[8; BASE_KEY_LEN], 3, 0, &[1]).is_err());
+        // The keys of epoch 3 still work.
+        let sealed = a.encrypt(b"still epoch 3", 0).unwrap();
+        assert_eq!(b.decrypt(&sealed, 0).unwrap(), b"still epoch 3");
+    }
+
+    #[test]
+    fn a_different_base_key_installs_fine() {
+        let (mut a, mut b) = pair(&[7; BASE_KEY_LEN], 3);
+        a.install(&[8; BASE_KEY_LEN], 4, 0, &[1]).unwrap();
+        b.install(&[8; BASE_KEY_LEN], 4, 1, &[0]).unwrap();
+        let sealed = a.encrypt(b"next epoch", 0).unwrap();
+        assert_eq!(b.decrypt(&sealed, 0).unwrap(), b"next epoch");
+        // The same base key for another epoch is a mistake, not a rekey.
+        assert!(a.install(&[8; BASE_KEY_LEN], 5, 0, &[1]).is_err());
     }
 
     #[test]
