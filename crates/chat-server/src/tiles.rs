@@ -11,7 +11,7 @@ use std::{
     collections::HashSet,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
@@ -49,6 +49,8 @@ type Reader = AsyncPmTilesReader<HttpBackend, HashMapCache>;
 #[derive(Default)]
 pub struct Tiles {
     config: TilesConfig,
+    /// Its own client: slow links need longer than the server's 10 s API timeout.
+    http: reqwest::Client,
     reader: tokio::sync::Mutex<Option<(String, Arc<Reader>)>>,
     downloading: Mutex<HashSet<(u32, u32)>>,
 }
@@ -62,8 +64,14 @@ pub struct Info {
 
 impl Tiles {
     pub fn new(config: TilesConfig) -> Self {
+        let http = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(60))
+            .build()
+            .expect("HTTP client");
         Self {
             config,
+            http,
             ..Self::default()
         }
     }
@@ -81,7 +89,7 @@ impl Tiles {
     }
 
     /// The upstream archive, opened once a day (daily builds change name).
-    async fn reader(&self, http: &reqwest::Client) -> anyhow::Result<Arc<Reader>> {
+    async fn reader(&self) -> anyhow::Result<Arc<Reader>> {
         let (_, template) = self.enabled().ok_or_else(|| anyhow::anyhow!("tiles off"))?;
         let url = source_url(template, SystemTime::now());
         let mut slot = self.reader.lock().await;
@@ -90,7 +98,7 @@ impl Tiles {
         {
             return Ok(reader.clone());
         }
-        let backend = HttpBackend::try_from(http.clone(), url.as_str())?;
+        let backend = HttpBackend::try_from(self.http.clone(), url.as_str())?;
         let reader = Arc::new(
             AsyncPmTilesReader::try_from_cached_source(backend, HashMapCache::default()).await?,
         );
@@ -98,8 +106,35 @@ impl Tiles {
         Ok(reader)
     }
 
-    /// Fetches one tile from upstream and stores it (an empty file: no tile there).
+    /// Fetches one tile, trying again after a failure (slow or flaky links).
     async fn fetch(
+        &self,
+        reader: &Reader,
+        dir: &Path,
+        z: u8,
+        x: u32,
+        y: u32,
+    ) -> anyhow::Result<()> {
+        let mut wait = Duration::from_secs(1);
+        let mut attempt = 1;
+        loop {
+            match self.fetch_once(reader, dir, z, x, y).await {
+                Err(e) if attempt < 3 => {
+                    tracing::debug!(
+                        error = format!("{e:#}"),
+                        "fetching a map tile failed; retrying"
+                    );
+                    tokio::time::sleep(wait).await;
+                    wait *= 3;
+                    attempt += 1;
+                }
+                result => return result,
+            }
+        }
+    }
+
+    /// Fetches one tile from upstream and stores it (an empty file: no tile there).
+    async fn fetch_once(
         &self,
         reader: &Reader,
         dir: &Path,
@@ -122,14 +157,9 @@ impl Tiles {
     }
 
     /// Downloads a whole region, then marks it done.
-    async fn download_region(
-        &self,
-        http: &reqwest::Client,
-        rx: u32,
-        ry: u32,
-    ) -> anyhow::Result<()> {
+    async fn download_region(&self, rx: u32, ry: u32) -> anyhow::Result<()> {
         let (dir, _) = self.enabled().ok_or_else(|| anyhow::anyhow!("tiles off"))?;
-        let reader = self.reader(http).await?;
+        let reader = self.reader().await?;
         let mut wanted = Vec::new();
         for z in REGION_ZOOM..=MAX_ZOOM {
             let scale = 1u32 << (z - REGION_ZOOM);
@@ -218,7 +248,7 @@ pub async fn tile(
     }
     if z < REGION_ZOOM {
         // Coarse tiles: fetched one at a time, straight away.
-        let reader = tiles.reader(&state.http).await.map_err(unavailable)?;
+        let reader = tiles.reader().await.map_err(unavailable)?;
         tiles
             .fetch(&reader, &dir, z, x, y)
             .await
@@ -232,7 +262,7 @@ pub async fn tile(
     let region = (x >> shift, y >> shift);
     if Tiles::region_marker(&dir, region.0, region.1).exists() {
         // Downloaded, but this tile failed then: fetch it now.
-        let reader = tiles.reader(&state.http).await.map_err(unavailable)?;
+        let reader = tiles.reader().await.map_err(unavailable)?;
         tiles
             .fetch(&reader, &dir, z, x, y)
             .await
@@ -257,10 +287,10 @@ pub async fn tile(
                 "this server keeps no more map areas",
             ));
         }
-        let http = state.http.clone();
         tokio::spawn(async move {
-            if let Err(e) = tiles.download_region(&http, region.0, region.1).await {
-                tracing::warn!(error = %e, "downloading a map area failed");
+            if let Err(e) = tiles.download_region(region.0, region.1).await {
+                // The whole chain (DNS, TLS, timeout…): the top line alone says little.
+                tracing::warn!(error = format!("{e:#}"), "downloading a map area failed");
             }
             tiles
                 .downloading
@@ -276,7 +306,7 @@ pub async fn tile(
 }
 
 fn unavailable(e: anyhow::Error) -> ApiError {
-    tracing::warn!(error = %e, "map tiles unavailable");
+    tracing::warn!(error = format!("{e:#}"), "map tiles unavailable");
     ApiError::Unavailable
 }
 
@@ -299,8 +329,6 @@ fn tile_response(data: Vec<u8>) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use super::*;
 
     #[test]

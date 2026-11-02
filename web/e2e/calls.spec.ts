@@ -128,20 +128,108 @@ test.describe('calls', () => {
     await alice.getByRole('button', { name: 'Video call', exact: true }).click()
     await expect(alice.getByRole('dialog', { name: 'Call with Bob' })).toContainText("can't encrypt call media")
   })
-
-  test('the echo bot answers a video call and sends it back, SFrame and all', async ({ browser, browserName }) => {
-    const alice = await signUp(browser, browserName, 'Alice', randomUsername())
-    await startChat(alice, 'echo.00')
-    await expect(alice.getByRole('heading', { name: 'Echo (test bot)' })).toBeVisible({ timeout: 15_000 })
-
-    await alice.getByRole('button', { name: 'Video call', exact: true }).click()
-    await expect(alice.locator('.call-status')).toHaveText(/^\d+:\d\d$/, { timeout: 20_000 })
-    // Alice's own (fake) camera, decrypted by the bot, re-encrypted under its key and decrypted here.
-    const video = alice.getByLabel("Echo (test bot)'s video")
-    await expect
-      .poll(() => video.evaluate((v) => (v as { videoWidth: number }).videoWidth), { timeout: 20_000 })
-      .toBeGreaterThan(0)
-    await alice.getByRole('button', { name: 'Hang up' }).click()
-    await expect(alice.getByTestId('notice').filter({ hasText: /🎥 Video call · \d+:\d\d/ })).toBeVisible()
-  })
 })
+
+for (const kind of ['Voice', 'Video'] as const) {
+  test(`the echo bot's ${kind.toLowerCase()} call controls fit at every viewport`, async ({ browser, browserName }) => {
+    test.skip(browserName === 'webkit', 'WebKit has no encoded media transforms for encrypted calls')
+    test.setTimeout(90_000)
+    const alice = await signUp(browser, browserName, 'Alice', randomUsername())
+    try {
+      await startChat(alice, 'echo.00')
+      await expect(alice.getByRole('heading', { name: 'Echo (test bot)' })).toBeVisible({ timeout: 15_000 })
+      await alice.evaluate(`(() => {
+        const original = HTMLMediaElement.prototype.setSinkId
+        if (original) {
+          HTMLMediaElement.prototype.setSinkId = async function (id) {
+            await original.call(this, id)
+            this.dataset.selectedSink = id
+          }
+        }
+      })()`)
+
+      await alice.getByRole('button', { name: `${kind} call`, exact: true }).click()
+      await expect(alice.locator('.call-status')).toHaveText(/^\d+:\d\d$/, { timeout: 20_000 })
+      if (kind === 'Video') {
+        // Alice's camera, decrypted by the bot, re-encrypted and decrypted here.
+        const video = alice.getByLabel("Echo (test bot)'s video")
+        await expect.poll(() => video.evaluate((v) => (v as { videoWidth: number }).videoWidth), { timeout: 20_000 }).toBeGreaterThan(0)
+      }
+
+      const dialog = alice.getByRole('dialog', { name: 'Call with Echo (test bot)' })
+      for (const width of [320, 390, 768, 1280]) {
+        await alice.setViewportSize({ width, height: 720 })
+        const controls = dialog.locator('.call-controls')
+        const boxes = await controls.getByRole('button').evaluateAll((elements) => elements.map((el) => {
+          const { x, y, width, height } = el.getBoundingClientRect()
+          return { x, y, width, height }
+        }))
+        expect(boxes.length).toBeGreaterThanOrEqual(kind === 'Video' ? 3 : 2)
+        for (const [index, box] of boxes.entries()) {
+          expect(box.width).toBeGreaterThanOrEqual(48)
+          expect(box.height).toBeGreaterThanOrEqual(48)
+          expect(box.y).toBe(boxes[0].y)
+          expect(box.x).toBeGreaterThanOrEqual(0)
+          expect(box.x + box.width).toBeLessThanOrEqual(width)
+          expect(box.y + box.height).toBeLessThanOrEqual(720)
+          if (index > 0) expect(box.x).toBeGreaterThanOrEqual(boxes[index - 1].x + boxes[index - 1].width)
+        }
+        const info = (await dialog.locator('.call-info').boundingBox())!
+        const dock = (await controls.boundingBox())!
+        expect(info.y + info.height).toBeLessThanOrEqual(dock.y)
+        if (kind === 'Video') {
+          const self = (await dialog.getByLabel('Your video').boundingBox())!
+          expect(self.y + self.height).toBeLessThan(dock.y)
+          expect(self.y).toBeGreaterThanOrEqual(info.y + info.height)
+          expect(self.x).toBeGreaterThanOrEqual(0)
+          expect(self.x + self.width).toBeLessThanOrEqual(width)
+          await expect(dialog.locator('.over-video')).toHaveCSS('color', 'rgb(255, 255, 255)')
+          await expect(dialog.locator('.over-video .muted')).toHaveCSS('color', 'rgb(255, 255, 255)')
+          await expect(dialog.locator('.over-video')).toHaveCSS('background-image', /linear-gradient/)
+        }
+      }
+
+      await alice.setViewportSize({ width: 320, height: 720 })
+      await dialog.getByRole('button', { name: 'Mute', exact: true }).click()
+      await expect(dialog.getByRole('button', { name: 'Unmute', exact: true })).toHaveAttribute('aria-pressed', 'true')
+      await dialog.getByRole('button', { name: 'Unmute', exact: true }).click()
+      await expect(dialog.getByRole('button', { name: 'Mute', exact: true })).toHaveAttribute('aria-pressed', 'false')
+      if (kind === 'Video') {
+        await dialog.getByRole('button', { name: 'Camera off', exact: true }).click()
+        await expect(dialog.getByRole('button', { name: 'Camera on', exact: true })).toHaveAttribute('aria-pressed', 'true')
+        await expect(dialog.getByLabel('Your video')).toBeHidden()
+        await dialog.getByRole('button', { name: 'Camera on', exact: true }).click()
+        await expect(dialog.getByLabel('Your video')).toBeVisible()
+      }
+      const sharingSupported = await alice.evaluate<boolean>("'getDisplayMedia' in navigator.mediaDevices")
+      await expect(dialog.getByRole('button', { name: 'Share screen', exact: true })).toHaveCount(kind === 'Video' && sharingSupported ? 1 : 0)
+      const more = dialog.getByRole('button', { name: 'More call options' })
+      if (await more.isVisible()) {
+        await more.click()
+        const menu = dialog.getByRole('menu', { name: 'More call options' })
+        const menuBox = (await menu.boundingBox())!
+        expect(menuBox.y).toBeGreaterThanOrEqual(0)
+        expect(menuBox.x).toBeGreaterThanOrEqual(0)
+        expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(320)
+        expect(menuBox.y + menuBox.height).toBeLessThanOrEqual((await more.boundingBox())!.y)
+        const output = menu.getByRole('menuitem', { name: 'Audio output: Default speaker', exact: true })
+        if (await output.isVisible()) {
+          expect((await output.boundingBox())!.height).toBeGreaterThanOrEqual(48)
+          await output.click()
+          await expect(dialog.locator('video').first()).toHaveAttribute('data-selected-sink', '')
+        } else {
+          await alice.keyboard.press('Escape')
+        }
+        await expect(menu).toBeHidden()
+        await expect(more).toBeFocused()
+      }
+      await alice.getByRole('button', { name: 'Hang up' }).click()
+      await expect(dialog).toBeHidden()
+      await expect(alice.getByTestId('notice').filter({ hasText: new RegExp(`${kind} call · \\d+:\\d\\d`) })).toBeVisible()
+    } finally {
+      const hangUp = alice.getByRole('button', { name: 'Hang up' })
+      if (await hangUp.isVisible()) await hangUp.click()
+      await alice.context().close()
+    }
+  })
+}

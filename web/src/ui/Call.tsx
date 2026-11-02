@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { formatCallDuration } from '../core/calls'
 import { Avatar } from './Avatar'
+import { Menu } from './Menu'
 import type { CallController, CallState } from './calls'
 
 export function useCall(calls: CallController): CallState | undefined {
@@ -93,6 +94,21 @@ export function CallScreen({ calls }: { calls: CallController }) {
   const what = call.video ? 'video call' : 'voice call'
   const showVideo = call.video && call.phase !== 'incoming' && call.phase !== 'ended'
   const hasRemoteVideo = !!call.remote?.getVideoTracks().length
+  const ongoing = call.phase === 'calling' || call.phase === 'connecting' || call.phase === 'active'
+  const options = [
+    ...(call.video && call.cameras > 1 && !call.cameraOff && !call.sharing
+      ? [{ label: 'Switch camera', onSelect: () => void calls.switchCamera() }]
+      : []),
+    ...(speakers.length > 0
+      ? [
+          { label: 'Audio output: Default speaker', onSelect: () => calls.setSpeaker('') },
+          ...speakers.map((speaker) => ({
+            label: `Audio output: ${speaker.label || 'Speaker'}`,
+            onSelect: () => calls.setSpeaker(speaker.deviceId),
+          })),
+        ]
+      : []),
+  ]
   return (
     <div
       className={`call-screen ${showVideo ? 'with-video' : ''}`}
@@ -129,7 +145,7 @@ export function CallScreen({ calls }: { calls: CallController }) {
           </span>
         )}
       </div>
-      <div className="call-actions">
+      <div className={`call-actions ${ongoing ? 'call-controls' : ''}`}>
         {call.phase === 'incoming' && (
           <>
             <button type="button" className="call-button decline" onClick={() => void calls.decline()}>
@@ -145,52 +161,49 @@ export function CallScreen({ calls }: { calls: CallController }) {
             </button>
           </>
         )}
-        {(call.phase === 'calling' || call.phase === 'connecting' || call.phase === 'active') && (
+        {ongoing && (
           <>
-            <button type="button" className="call-button" aria-pressed={call.muted} onClick={() => calls.toggleMute()}>
-              {call.muted ? 'Unmute' : 'Mute'}
+            <button
+              type="button"
+              className="call-button call-control"
+              aria-label={call.muted ? 'Unmute' : 'Mute'}
+              aria-pressed={call.muted}
+              onClick={() => calls.toggleMute()}
+            >
+              <span aria-hidden="true">🎤</span>
             </button>
             {call.video && call.local?.getVideoTracks().length ? (
               <button
                 type="button"
-                className="call-button"
+                className="call-button call-control"
+                aria-label={call.cameraOff ? 'Camera on' : 'Camera off'}
                 aria-pressed={call.cameraOff}
                 onClick={() => calls.toggleCamera()}
               >
-                {call.cameraOff ? 'Camera on' : 'Camera off'}
+                <span aria-hidden="true">📷</span>
               </button>
             ) : null}
             {call.video && 'getDisplayMedia' in (navigator.mediaDevices ?? {}) && (
               <button
                 type="button"
-                className="call-button"
+                className="call-button call-control"
+                aria-label={call.sharing ? 'Stop sharing' : 'Share screen'}
                 aria-pressed={!!call.sharing}
                 onClick={() => void calls.toggleScreenShare()}
               >
-                {call.sharing ? 'Stop sharing' : 'Share screen'}
+                <span aria-hidden="true">🖥</span>
               </button>
             )}
-            {call.video && call.cameras > 1 && !call.cameraOff && !call.sharing && (
-              <button type="button" className="call-button" onClick={() => void calls.switchCamera()}>
-                Switch camera
-              </button>
+            {options.length > 0 && (
+              <Menu triggerLabel="More call options" triggerContent={<span aria-hidden="true">⋯</span>} items={options} />
             )}
-            {speakers.length > 1 && (
-              <select
-                aria-label="Audio output"
-                value={call.speaker ?? ''}
-                onChange={(e) => calls.setSpeaker(e.target.value)}
-              >
-                <option value="">Default speaker</option>
-                {speakers.map((s) => (
-                  <option key={s.deviceId} value={s.deviceId}>
-                    {s.label || 'Speaker'}
-                  </option>
-                ))}
-              </select>
-            )}
-            <button type="button" className="call-button decline" onClick={() => void calls.hangUp()}>
-              Hang up
+            <button
+              type="button"
+              className="call-button call-control decline"
+              aria-label="Hang up"
+              onClick={() => void calls.hangUp()}
+            >
+              <span aria-hidden="true">☎</span>
             </button>
           </>
         )}

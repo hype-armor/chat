@@ -2,6 +2,7 @@
 // everyone else by name; mute, camera and leave.
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { Avatar } from './Avatar'
+import { Menu } from './Menu'
 import { type GroupCallController, type GroupCallState, MAX_VIDEO_TILES, type Tile } from './groupCall'
 
 export function useGroupCall(calls: GroupCallController): GroupCallState | undefined {
@@ -102,34 +103,44 @@ export function GroupCallScreen({ calls }: { calls: GroupCallController }) {
             <TrackElement key={t.id} track={t.audio!} kind="audio" label={`${t.name}'s audio`} />
           ))}
       </div>
-      <div className="call-actions">
+      <div className="call-actions call-controls">
         {call.phase === 'active' && (
           <>
-            <button type="button" className="call-button" aria-pressed={call.muted} onClick={() => void calls.toggleMute()}>
-              {call.muted ? 'Unmute' : 'Mute'}
+            <button
+              type="button"
+              className="call-button call-control"
+              aria-label={call.muted ? 'Unmute' : 'Mute'}
+              aria-pressed={call.muted}
+              onClick={() => void calls.toggleMute()}
+            >
+              <span aria-hidden="true">🎤</span>
             </button>
             <button
               type="button"
-              className="call-button"
+              className="call-button call-control"
+              aria-label={call.cameraOff ? 'Camera on' : 'Camera off'}
               aria-pressed={call.cameraOff}
               onClick={() => void calls.toggleCamera()}
             >
-              {call.cameraOff ? 'Camera on' : 'Camera off'}
+              <span aria-hidden="true">📷</span>
             </button>
             {'getDisplayMedia' in (navigator.mediaDevices ?? {}) && (
               <button
                 type="button"
-                className="call-button"
+                className="call-button call-control"
+                aria-label={call.sharing ? 'Stop sharing' : 'Share screen'}
                 aria-pressed={!!call.sharing}
                 onClick={() => void calls.toggleScreenShare()}
               >
-                {call.sharing ? 'Stop sharing' : 'Share screen'}
+                <span aria-hidden="true">🖥</span>
               </button>
             )}
             {!call.cameraOff && (
-              <button type="button" className="call-button" onClick={() => void calls.switchCamera()}>
-                Switch camera
-              </button>
+              <Menu
+                triggerLabel="More call options"
+                triggerContent={<span aria-hidden="true">⋯</span>}
+                items={[{ label: 'Switch camera', onSelect: () => void calls.switchCamera() }]}
+              />
             )}
           </>
         )}
@@ -138,8 +149,8 @@ export function GroupCallScreen({ calls }: { calls: GroupCallController }) {
             Close
           </button>
         ) : (
-          <button type="button" className="call-button decline" onClick={() => void calls.leave()}>
-            Leave
+          <button type="button" className="call-button call-control decline" aria-label="Leave" onClick={() => void calls.leave()}>
+            <span aria-hidden="true">☎</span>
           </button>
         )}
       </div>

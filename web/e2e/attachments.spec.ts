@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { expect } from '@playwright/test'
-import { test, messages, openChat, randomUsername, signUp, startChat } from './support'
+import { test, closeDetails, conversationAction, conversationDetails, messages, openChat, randomUsername, signUp, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -18,6 +18,103 @@ function withExif(jpeg: Buffer): Buffer {
   length.writeUInt16BE(tiff.length + 2)
   return Buffer.concat([jpeg.subarray(0, 2), Buffer.from([0xff, 0xe1]), length, tiff, jpeg.subarray(2)])
 }
+
+test('attachments fit their bubbles at phone, tablet and desktop widths with details open', async ({ browser }) => {
+  test.setTimeout(120_000)
+  const username = randomUsername()
+  const alice = await signUp(browser, 'Alice', randomUsername())
+  const bob = await signUp(browser, 'Bob', username)
+  try {
+    await startChat(alice, username)
+    for (const [name, width, height] of [
+      ['landscape.png', 2400, 800],
+      ['portrait.png', 800, 2400],
+      ['tiny.png', 1, 1],
+    ] as const) {
+      const buffer = Buffer.from(await alice.evaluate<number[]>(`(async () => {
+        const canvas = new OffscreenCanvas(${width}, ${height})
+        const ctx = canvas.getContext('2d')
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
+        return [...new Uint8Array(await (await canvas.convertToBlob({ type: 'image/png' })).arrayBuffer())]
+      })()`))
+      await alice.getByTestId('attach-input').setInputFiles({ name, mimeType: 'image/png', buffer })
+      await expect(messages(alice).filter({ has: alice.getByRole('img', { name }) })
+        .getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
+    }
+    const name = 'quarterly-financial-report-with-detailed-projections-and-supporting-notes-for-the-coming-year.pdf'
+    await alice.getByTestId('attach-input').setInputFiles({
+      name, mimeType: 'application/pdf', buffer: Buffer.from('file contents'),
+    })
+    await expect(messages(alice).filter({ hasText: name })
+      .getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
+    await alice.evaluate(`navigator.geolocation.getCurrentPosition = (success) =>
+      success({ coords: { latitude: 48.8584, longitude: 2.2945, accuracy: 12 } })`)
+    await alice.getByRole('button', { name: 'Add attachment' }).click()
+    await alice.getByRole('menuitem', { name: 'Location', exact: true }).click()
+    await alice.getByRole('dialog', { name: 'Share this location?' }).getByRole('button', { name: 'Send location' }).click()
+    await expect(messages(alice)).toHaveCount(5)
+    await openChat(bob, /Alice/)
+    await expect(messages(bob)).toHaveCount(5)
+
+    for (const page of [alice, bob]) {
+      await expect(page.locator('.attachment img[data-full="true"]')).toHaveCount(3)
+      await page.getByRole('button', { name: 'Show map', exact: true }).click()
+      await expect(page.locator('.location .map')).toBeVisible()
+      for (const width of [320, 390, 768, 1280]) {
+        await page.setViewportSize({ width, height: 720 })
+        for (const details of [false, true]) {
+          if (details) {
+            await conversationAction(page, 'Add people')
+            await expect(conversationDetails(page)).toBeVisible()
+          }
+          // On phones details cover the conversation, but its hidden layout must still fit.
+          const viewport = page.locator('.messages-viewport')
+          await expect.poll(() => viewport.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(0)
+          const overflow = await messages(page).evaluateAll((bubbles) => bubbles.flatMap((bubble) => {
+            const bounds = bubble.getBoundingClientRect()
+            return [...bubble.querySelectorAll('.attachment, .attachment img, .photo, video, audio, .file-name, .file-download, .location, .map')]
+              .filter((child) => {
+                const rect = child.getBoundingClientRect()
+                return rect.left < bounds.left - 1 || rect.right > bounds.right + 1
+              }).map((child) => child.className || child.tagName)
+          }))
+          expect(overflow, `${width}px, details=${details}`).toEqual([])
+          for (const [photo, ratio] of [['landscape.png', 3], ['portrait.png', 1 / 3], ['tiny.png', 1]] as const) {
+            const image = page.getByRole('img', { name: photo, includeHidden: true })
+            const size = await image.evaluate((el) => {
+              const { width, height } = el.getBoundingClientRect()
+              return { width, height }
+            })
+            expect(size.width).toBeGreaterThan(0)
+            expect(size.height).toBeLessThanOrEqual(352)
+            expect(size.width / size.height).toBeCloseTo(ratio, 1)
+            if (photo === 'tiny.png') {
+              expect(size.width).toBeLessThanOrEqual(64)
+              expect(size.height).toBeLessThanOrEqual(64)
+            }
+          }
+          const filename = page.locator('.file-card .file-name')
+          await expect(filename).toHaveText(name)
+          await expect(filename).toHaveAttribute('title', name)
+          await expect(filename).toHaveCSS('-webkit-line-clamp', '2')
+          if (width <= 390) {
+            expect(await filename.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true)
+            const fileLayout = await page.locator('.file-card').evaluate((card) => {
+              const filename = card.querySelector('.file-name')!.getBoundingClientRect()
+              const download = card.querySelector('.file-download')!.getBoundingClientRect()
+              return download.top >= filename.bottom
+            })
+            expect(fileLayout).toBe(true)
+          }
+          await closeDetails(page)
+        }
+      }
+    }
+  } finally {
+    await alice.context().close()
+    await bob.context().close()
+  }
+})
 
 test('photos lose their metadata, and files arrive intact', async ({ browser }) => {
   const bobUsername = randomUsername()

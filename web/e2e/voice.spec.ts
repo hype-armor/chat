@@ -1,5 +1,5 @@
 import { expect } from '@playwright/test'
-import { test, messages, openChat, randomUsername, signUp, startChat } from './support'
+import { test, closeDetails, conversationAction, conversationDetails, messages, openChat, randomUsername, signUp, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 // Chromium's fake microphone and camera; other engines have no equivalent flags.
@@ -74,6 +74,30 @@ test('voice notes and video clips play on the other side (FR-MED-1)', async ({ b
 
   await expect(bob.getByRole('button', { name: /Alice/, includeHidden: true })).toContainText('Video')
   await openChat(bob, /Alice/)
+  const checkSizing = async () => {
+    for (const width of [320, 390, 768, 1280]) {
+      await bob.setViewportSize({ width, height: 720 })
+      for (const details of [false, true]) {
+        if (details) {
+          await conversationAction(bob, 'Add people')
+          await expect(conversationDetails(bob)).toBeVisible()
+        }
+        await expect.poll(() => bob.locator('.messages-viewport')
+          .evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(0)
+        const contained = await messages(bob).evaluateAll((bubbles) => bubbles.every((bubble) => {
+          const bounds = bubble.getBoundingClientRect()
+          return [...bubble.querySelectorAll('.attachment, .photo, img, video, audio')].every((media) => {
+            const rect = media.getBoundingClientRect()
+            return rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1
+          })
+        }))
+        expect(contained, `${width}px, details=${details}`).toBe(true)
+        await closeDetails(bob)
+      }
+    }
+  }
+  await expect(bob.locator('.attachment .photo img')).toBeVisible()
+  await checkSizing()
   await bob.getByRole('button', { name: 'Play Voice note' }).click()
   await expect(bob.getByLabel('Voice note', { exact: true })).toBeVisible()
   await expect.poll(() => bob.evaluate<boolean>(decoded('audio'))).toBe(true)
@@ -81,4 +105,5 @@ test('voice notes and video clips play on the other side (FR-MED-1)', async ({ b
   await bob.getByRole('button', { name: 'Play clip.webm' }).click()
   await expect(bob.getByLabel('clip.webm', { exact: true })).toBeVisible()
   await expect.poll(() => bob.evaluate<boolean>(decoded('video'))).toBe(true)
+  await checkSizing()
 })

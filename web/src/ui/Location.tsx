@@ -122,20 +122,22 @@ export function ShareLocation({
           <p className="small">
             {formatCoordinates(state)} · ±{state.accuracyM} m. Only the people in this conversation will see it.
           </p>
-          <span className="actions">
+          <div className="actions">
             <button type="button" onClick={() => void send(state)}>
               Send location
             </button>
-            <span className="small">Share live for</span>
-            {LIVE_CHOICES.map(([label, ms]) => (
-              <button key={ms} type="button" className="secondary" onClick={() => void live(state, ms)}>
-                {label}
-              </button>
-            ))}
+            <h3 className="small">Share live location for</h3>
+            <div className="live-choices" role="group" aria-label="Share live location for">
+              {LIVE_CHOICES.map(([label, ms]) => (
+                <button key={ms} type="button" className="secondary" onClick={() => void live(state, ms)}>
+                  {label}
+                </button>
+              ))}
+            </div>
             <button type="button" className="link" onClick={close}>
               Cancel
             </button>
-          </span>
+          </div>
         </dialog>
       )}
     </>

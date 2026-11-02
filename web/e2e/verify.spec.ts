@@ -4,7 +4,7 @@ import { test, closeDetails, conversationAction, conversationDetails, linkDevice
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
 test('safety numbers match, and a new device of a verified contact is flagged (ADR-0020)', async ({ browser }) => {
-  test.setTimeout(60_000)
+  test.setTimeout(120_000) // three browser contexts plus a device link; WebKit on CI is slow
   expect(browser.contexts()).toHaveLength(0)
   const bobUsername = randomUsername()
   const alice = await signUp(browser, 'Alice', randomUsername())
