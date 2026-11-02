@@ -4,7 +4,8 @@
   --fg: #1f2328;
   --muted: #59636e;
   --border: #d1d9e0;
-  --accent: #1f6feb;
+  --accent-bg: #1f6feb;
+  --accent-text: #0969da;
   --accent-fg: #ffffff;
   --mine: #1f6feb;
   --mine-fg: #ffffff;
@@ -23,7 +24,7 @@
     --fg: #e6edf3;
     --muted: #9198a1;
     --border: #3d444d;
-    --accent: #4493f8;
+    --accent-text: #4493f8;
     --mine: #1f6feb;
     --theirs: #262c36;
     --danger: #f85149;
@@ -79,7 +80,7 @@ button {
   padding: 0.5rem 1rem;
   border: 0;
   border-radius: 0.5rem;
-  background: var(--accent);
+  background: var(--accent-bg);
   color: var(--accent-fg);
   cursor: pointer;
 }
@@ -89,9 +90,13 @@ button:disabled {
   cursor: default;
 }
 
+button.link,
+a {
+  color: var(--accent-text);
+}
+
 button.link {
   background: none;
-  color: var(--accent);
   padding: 0.25rem 0.5rem;
 }
 
@@ -112,7 +117,7 @@ input[type='radio'] {
   flex: none;
   padding: 0;
   margin: 0;
-  accent-color: var(--accent);
+  accent-color: var(--accent-bg);
 }
 
 label {
@@ -322,7 +327,7 @@ form {
 .empty-icon {
   width: 4rem;
   height: 4rem;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .empty-conversation h2 {
@@ -739,7 +744,7 @@ button.link.danger {
 
 .devices summary {
   cursor: pointer;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .devices ul {
@@ -814,7 +819,7 @@ button.link.danger {
 }
 
 .badge.verified {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .badge.changed,
@@ -900,9 +905,9 @@ button.link.danger {
 
 /* Receipts and unread counts (FR-MSG-5) */
 .badge.unread {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--bg);
+  border-color: var(--accent-bg);
+  background: var(--accent-bg);
+  color: var(--accent-fg);
 }
 
 .devices .choice {
@@ -1243,7 +1248,7 @@ button.icon {
 }
 
 button.icon[aria-pressed='true'] {
-  background: var(--accent);
+  background: var(--accent-bg);
   color: var(--accent-fg);
 }
 
@@ -1394,7 +1399,7 @@ button.icon[aria-pressed='true'] {
 }
 
 .conversations mark {
-  background: var(--accent);
+  background: var(--accent-bg);
   color: var(--accent-fg);
   border-radius: 0.125rem;
 }
@@ -1512,8 +1517,8 @@ button.conversation-title {
 /* Our own bubbles: secondary text and links stay readable on blue. */
 .messages .mine .muted,
 .messages .mine .meta {
-  color: inherit;
-  opacity: 0.85;
+  color: var(--mine-fg);
+  opacity: 1;
 }
 
 .messages .mine button.link,
@@ -1523,7 +1528,7 @@ button.conversation-title {
 }
 
 .messages .mine .error {
-  color: #ffd8d3;
+  color: var(--mine-fg);
 }
 
 /* An opened photo is shown as is, not dimmed like a disabled button. */
@@ -1533,7 +1538,7 @@ button.conversation-title {
 
 .messages .sender {
   font-weight: 600;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .messages li {
@@ -1723,9 +1728,11 @@ button.conversation-title {
 }
 .call-button.accept {
   background: #238636;
+  color: var(--accent-fg);
 }
 .call-button.decline {
-  background: #da3633;
+  background: var(--danger-bg);
+  color: var(--accent-fg);
 }
 
 /* Group calls (ADR-0031) */
