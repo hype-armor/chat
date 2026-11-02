@@ -28,6 +28,7 @@ fn tight() -> Limits {
         restores_per_account_per_day: 2,
         blob_mb_per_day: 2,
         trust_proxy_headers: true,
+        ..Limits::default()
     }
 }
 
