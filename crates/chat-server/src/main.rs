@@ -78,7 +78,8 @@ async fn main() -> anyhow::Result<()> {
             );
             PushSender::generate(config.vapid_subject.clone(), false)?
         }
-    };
+    }
+    .with_allowed_hosts(config.push_hosts.clone());
     if config.open_registration {
         tracing::warn!("CHAT_REGISTRATION=open: anyone can sign up without an invite");
     }

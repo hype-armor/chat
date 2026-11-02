@@ -1,0 +1,77 @@
+# Dependency policy, checked by `cargo deny check` in
+# .github/workflows/security.yml. Format for cargo-deny 0.20:
+# https://embarkstudios.github.io/cargo-deny/checks/cfg.html
+
+[advisories]
+# cargo-deny 0.16 and later replaced the old `warn` level with a scope: with
+# `workspace`, an unmaintained direct dependency fails the check, while an
+# unmaintained crate further down the graph is reported as a warning only.
+unmaintained = "workspace"
+# A yanked version is still installable, so warn instead of failing.
+yanked = "warn"
+# Advisories we knowingly accept for now. Every entry needs a reason and a
+# way out: all of them come from one chain we cannot patch piecemeal
+# (`chat-core` -> openmls_rust_crypto 0.5.1 -> hpke-rs 0.6 -> hpke-rs-libcrux
+# 0.6 -> libcrux-* 0.0.7/0.0.8). The fix is the coordinated upgrade to
+# openmls 0.9 / openmls_rust_crypto 0.6 / hpke-rs 0.8, which selects
+# libcrux-kem 0.0.10, libcrux-sha3 0.0.11, libcrux-aead 0.0.10 and the fixed
+# AES-GCM and ChaCha20-Poly1305 code. That upgrade changes MLS APIs and needs
+# the browser end-to-end run, so it is its own pull request. Remove each
+# ignore when that lands.
+ignore = [
+    # Panics on attacker-supplied key material: contained at the WASM boundary
+    # by catch_unwind in chat-core/src/wasm.rs. Still a client-side DoS risk.
+    { id = "RUSTSEC-2026-0330", reason = "libcrux-kem 0.0.7: panic path contained at the WASM boundary; fixed by the openmls 0.9 upgrade" },
+    { id = "RUSTSEC-2026-0331", reason = "libcrux-kem 0.0.7: panic path contained at the WASM boundary; fixed by the openmls 0.9 upgrade" },
+    { id = "RUSTSEC-2026-0124", reason = "libcrux-chacha20poly1305 0.0.7: panic path contained at the WASM boundary; fixed by the openmls 0.9 upgrade" },
+    { id = "RUSTSEC-2026-0208", reason = "libcrux-sha3 0.0.8: AVX2 SHAKE-256 panic, not reached by the portable WASM build; fixed by the openmls 0.9 upgrade" },
+    # Weaker than promised, not exploitable today.
+    { id = "RUSTSEC-2026-0207", reason = "libcrux-sha3 0.0.8: incremental SHAKE output, unused by MLS HPKE here; fixed by the openmls 0.9 upgrade" },
+    { id = "RUSTSEC-2026-0209", reason = "libcrux-aesgcm 0.0.7: no AAD length limit; our AAD is a small fixed header; fixed by the openmls 0.9 upgrade" },
+    { id = "RUSTSEC-2026-0211", reason = "libcrux-aesgcm 0.0.7: tag check is not constant time; needs a local network attacker and a timing oracle; fixed by the openmls 0.9 upgrade" },
+    { id = "RUSTSEC-2026-0212", reason = "libcrux-secrets 0.0.5: wrong constant-time select on aarch64; WASM build is not aarch64, native echo bot is; fixed by the openmls 0.9 upgrade" },
+    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5.5 timing variability via p256 0.13; fixed by the openmls 0.9 upgrade, which moves to p256 0.14" },
+    # Present but not exercised: jsonwebtoken is used for HS256 only, and the
+    # sqlx MySQL driver is not compiled.
+    { id = "RUSTSEC-2023-0071", reason = "rsa 0.9 Marvin attack; no RSA decryption or verification in this code (HS256 JWTs, Postgres only)" },
+]
+
+[bans]
+# Duplicate versions of a crate are common and rarely a risk on their own;
+# a crate that must not appear at all goes in `deny` later.
+multiple-versions = "warn"
+wildcards = "warn"
+
+[licenses]
+# This project is AGPL-3.0-or-later (workspace crates). Every other crate
+# must use a permissive licence.
+allow = [
+  "AGPL-3.0-or-later",
+  "MIT",
+  "MIT-0",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "0BSD",
+  "BSL-1.0",
+  "ISC",
+  "MPL-2.0",
+  "Zlib",
+  "CC0-1.0",
+  "Unlicense",
+  "Unicode-3.0",
+  "Unicode-DFS-2016",
+  "CDLA-Permissive-2.0",
+]
+# An allowed licence that nothing uses yet is a warning, not an error: the
+# list stays ready for a new dependency instead of failing the build.
+unused-allowed-license = "warn"
+confidence-threshold = 0.8
+
+[sources]
+# Only crates.io and the local workspace; a git or registry source needs an
+# explicit entry here first.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

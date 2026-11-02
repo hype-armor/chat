@@ -16,7 +16,7 @@ use axum::{
     extract::{ConnectInfo, FromRequestParts},
     http::request::Parts,
 };
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::{AppState, error::ApiError};
@@ -41,6 +41,21 @@ pub struct Limits {
     /// Restore attempts per client IP per hour and per account per day.
     pub restores_per_ip_per_hour: i32,
     pub restores_per_account_per_day: i32,
+    /// Wrong recovery secrets per account per day, before recovery locks.
+    pub restore_failures_per_day: i32,
+    /// Envelope bytes a device may store per day (queue flooding: a sender
+    /// must not be able to fill a recipient's queue).
+    pub send_mb_per_day: i32,
+    /// Queued envelopes kept per recipient device; the oldest go first.
+    pub queue_rows_per_device: i64,
+    /// Bytes an account may keep in the attachment store at once.
+    pub blob_mb_per_account: i32,
+    /// TURN credential requests per device per day (relay abuse).
+    pub turn_credentials_per_day: i32,
+    /// Map areas one device may ask the server to download per hour.
+    pub tile_areas_per_hour: i32,
+    /// Tile requests per device per minute.
+    pub tile_reads_per_minute: u32,
     /// Member device-list checks per device per hour (ADR-0022).
     pub device_lists_per_hour: i32,
     /// User reports per device per day (FR-ID-8).
@@ -65,6 +80,13 @@ impl Default for Limits {
             restores_per_ip_per_hour: 10,
             blob_mb_per_day: 2_048,
             restores_per_account_per_day: 10,
+            restore_failures_per_day: 100,
+            send_mb_per_day: 100,
+            queue_rows_per_device: 1_000,
+            blob_mb_per_account: 2_048,
+            turn_credentials_per_day: 20,
+            tile_areas_per_hour: 5,
+            tile_reads_per_minute: 300,
             trust_proxy_headers: false,
         }
     }
@@ -79,6 +101,32 @@ pub async fn take(
     limit: i32,
     window_secs: i64,
 ) -> Result<(), ApiError> {
+    take_on(db, key, amount, limit, window_secs).await
+}
+
+/// Same as [`take`], inside a transaction: a request that fails later rolls
+/// its counter back too, so unauthenticated work cannot spend a victim's
+/// (or the service's) budget.
+pub async fn tx_take(
+    tx: &mut Transaction<'_, Postgres>,
+    key: &str,
+    amount: i32,
+    limit: i32,
+    window_secs: i64,
+) -> Result<(), ApiError> {
+    take_on(&mut **tx, key, amount, limit, window_secs).await
+}
+
+async fn take_on<'e, E>(
+    exec: E,
+    key: &str,
+    amount: i32,
+    limit: i32,
+    window_secs: i64,
+) -> Result<(), ApiError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
     let refused = || ApiError::TooManyRequests("rate limit reached; try again later");
     // Checked up front: the insert path below has no WHERE clause, so an
     // oversized first request would otherwise use up the whole window.
@@ -96,7 +144,7 @@ pub async fn take(
     .bind(amount)
     .bind(limit)
     .bind(window_secs as f64)
-    .fetch_optional(db)
+    .fetch_optional(exec)
     .await?;
     allowed.map(|_| ()).ok_or_else(refused)
 }

@@ -30,6 +30,16 @@ const COALESCE: Duration = Duration::from_secs(30);
 const JWT_LIFETIME_SECS: u64 = 12 * 3600;
 const MAX_ENDPOINT_LEN: usize = 1024;
 
+/// Push services the server will talk to (suffix match, leading `.` covers
+/// subdomains): the browser vendors' push endpoints. `CHAT_PUSH_HOSTS` adds
+/// to or replaces this list for a self-hosted relay.
+pub const DEFAULT_PUSH_HOSTS: &[&str] = &[
+    "fcm.googleapis.com",
+    ".push.services.mozilla.com",
+    ".notify.windows.com",
+    ".push.apple.com",
+];
+
 pub struct PushSender {
     key: SigningKey,
     public_key: String,
@@ -38,6 +48,9 @@ pub struct PushSender {
     last_sent: Mutex<HashMap<Uuid, Instant>>,
     /// Tests use plain-HTTP push endpoints; real ones are always HTTPS.
     allow_http: bool,
+    /// Hosts a subscription endpoint may point at; empty while `allow_http`
+    /// (development and tests) is set.
+    allowed_hosts: Vec<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -56,8 +69,12 @@ impl PushSender {
         let key = SigningKey::from_slice(private_key)?;
         let public_key =
             URL_SAFE_NO_PAD.encode(key.verifying_key().to_sec1_point(false).as_bytes());
+        // A push endpoint is user-chosen data. No redirects (a 302 could move
+        // the request anywhere, including an internal address), a short
+        // timeout, and nothing in the response is read.
         let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(5))
+            .redirect(reqwest::redirect::Policy::none())
             .build()?;
         Ok(Self {
             key,
@@ -66,7 +83,34 @@ impl PushSender {
             http,
             last_sent: Mutex::default(),
             allow_http,
+            allowed_hosts: DEFAULT_PUSH_HOSTS.iter().map(|h| (*h).to_owned()).collect(),
         })
+    }
+
+    /// Replaces the push service allowlist (empty: use the defaults).
+    pub fn with_allowed_hosts(mut self, hosts: Vec<String>) -> Self {
+        if !hosts.is_empty() {
+            self.allowed_hosts = hosts;
+        }
+        self
+    }
+
+    /// May the server make a request to this subscription endpoint? The
+    /// endpoint is attacker-controlled, so it must be a known push service:
+    /// otherwise the server is a request forwarder into its own network.
+    pub fn may_fetch(&self, endpoint: &str) -> bool {
+        if self.allow_http {
+            // Tests and development only: endpoints point at a local listener.
+            return audience(endpoint, true).is_some();
+        }
+        let Some(audience) = audience(endpoint, false) else {
+            return false;
+        };
+        let host = audience
+            .split_once("://")
+            .map(|(_, rest)| rest.to_ascii_lowercase())
+            .unwrap_or_default();
+        host_allowed(&host, &self.allowed_hosts)
     }
 
     /// A random key, for development: subscriptions break on restart.
@@ -138,6 +182,10 @@ impl PushSender {
         }) else {
             return Outcome::Skipped;
         };
+        if !self.may_fetch(&endpoint) {
+            tracing::warn!("push endpoint is not an allowed push service; skipping");
+            return Outcome::Failed;
+        }
         let Some(audience) = audience(&endpoint, self.allow_http) else {
             return Outcome::Failed;
         };
@@ -191,6 +239,23 @@ fn audience(endpoint: &str, allow_http: bool) -> Option<String> {
     Some(format!("{scheme}://{host}"))
 }
 
+/// Does `host` (no scheme, no port) match a suffix in `allowed`? A leading
+/// `.` in an entry allows subdomains but not the bare domain.
+fn host_allowed(host: &str, allowed: &[String]) -> bool {
+    let host = host.split(':').next().unwrap_or_default();
+    allowed.iter().any(|entry| {
+        let entry = entry.trim().to_ascii_lowercase();
+        match entry.strip_prefix('.') {
+            Some(suffix) => {
+                host.len() > suffix.len()
+                    && host.ends_with(suffix)
+                    && host.as_bytes()[host.len() - suffix.len() - 1] == b'.'
+            }
+            None => host == entry,
+        }
+    })
+}
+
 // ---- HTTP API --------------------------------------------------------------
 
 #[derive(Serialize)]
@@ -230,6 +295,13 @@ pub async fn subscribe(
     let allow_http = state.push.as_ref().is_some_and(|p| p.allow_http);
     if sub.endpoint.len() > MAX_ENDPOINT_LEN || audience(&sub.endpoint, allow_http).is_none() {
         return Err(ApiError::BadRequest("endpoint must be an https URL"));
+    }
+    if let Some(push) = &state.push
+        && !push.may_fetch(&sub.endpoint)
+    {
+        return Err(ApiError::BadRequest(
+            "endpoint must be a known push service",
+        ));
     }
     if sub.keys.p256dh.len() > 256 || sub.keys.auth.len() > 64 {
         return Err(ApiError::BadRequest("subscription keys too long"));
@@ -289,6 +361,27 @@ mod tests {
         let sender =
             PushSender::new(&URL_SAFE_NO_PAD.decode(private).unwrap(), "s".into(), false).unwrap();
         assert_eq!(sender.public_key(), public);
+    }
+
+    #[test]
+    fn only_known_push_services_are_fetchable() {
+        let allowed: Vec<String> = DEFAULT_PUSH_HOSTS.iter().map(|h| (*h).to_owned()).collect();
+        assert!(host_allowed("fcm.googleapis.com", &allowed));
+        assert!(host_allowed("updates.push.services.mozilla.com", &allowed));
+        assert!(host_allowed("wns2-by3p.notify.windows.com", &allowed));
+        assert!(host_allowed("web.push.apple.com", &allowed));
+        assert!(!host_allowed("push.services.mozilla.com", &allowed));
+        assert!(!host_allowed("fcm.googleapis.com.evil.example", &allowed));
+        assert!(!host_allowed("127.0.0.1", &allowed));
+        assert!(!host_allowed("169.254.169.254", &allowed));
+        assert!(!host_allowed("localhost", &allowed));
+
+        // A real sender refuses anything outside the list.
+        let sender = PushSender::generate("mailto:ops@example.com".into(), false).unwrap();
+        assert!(sender.may_fetch("https://fcm.googleapis.com/fcm/send/abc"));
+        assert!(!sender.may_fetch("https://127.0.0.1:9090/twirp"));
+        assert!(!sender.may_fetch("https://fcm.googleapis.com.evil.example/x"));
+        assert!(!sender.may_fetch("http://fcm.googleapis.com/fcm/send/abc"));
     }
 
     #[test]

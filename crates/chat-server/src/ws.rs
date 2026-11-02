@@ -264,6 +264,7 @@ async fn send_envelope(
     }
     let outcome = delivery::send(
         db,
+        &state.limits,
         delivery::Send {
             sender,
             envelope: &envelope,

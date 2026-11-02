@@ -99,14 +99,18 @@ async fn backing_up_and_restoring_onto_a_new_device(pool: PgPool) {
     let (status, fetched) = server.raw("GET", "/v1/backup", token, vec![]).await;
     assert_eq!((status, fetched), (200, blob));
 
-    // Attempts per account are limited, right or wrong.
-    assert_eq!(
-        server
-            .post("/v1/backup/restore", None, restore("alice.01", &secret))
-            .await
-            .0,
-        200
-    );
+    // Successful restores per account are limited to three a day. The two
+    // wrong secrets below `restore-account` never touched that counter (audit
+    // M1): charging it before the check let a stranger lock the owner out.
+    for _ in 0..2 {
+        assert_eq!(
+            server
+                .post("/v1/backup/restore", None, restore("alice.01", &secret))
+                .await
+                .0,
+            200
+        );
+    }
     assert_eq!(
         server
             .post("/v1/backup/restore", None, restore("alice.01", &secret))

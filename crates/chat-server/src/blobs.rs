@@ -18,6 +18,7 @@ use object_store::{
     GetOptions, ObjectStore, ObjectStoreExt, PutPayload, WriteMultipart, path::Path,
 };
 use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::{
@@ -94,16 +95,25 @@ pub async fn upload(
     let store = store(&state)?.clone();
     let declared = content_length(&headers)?;
     take_quota(&state, device, declared).await?;
+    let account = account_of(db, device).await?;
+    check_account_quota(&state, db, account, declared).await?;
 
     let id = Uuid::new_v4();
     let received = stream_to(&store, &object_path(id), declared, body).await?;
+    // Checked again after the upload: two concurrent uploads both pass the
+    // first check. On refusal the stored bytes are dropped, not kept.
+    if let Err(e) = check_account_quota(&state, db, account, received).await {
+        let _ = store.delete(&object_path(id)).await;
+        return Err(e);
+    }
     sqlx::query(
-        "INSERT INTO blobs (blob_id, size_bytes, expires_at)
-         VALUES ($1, $2, now() + make_interval(days => $3))",
+        "INSERT INTO blobs (blob_id, size_bytes, expires_at, account_id)
+         VALUES ($1, $2, now() + make_interval(days => $3), $4)",
     )
     .bind(id)
     .bind(received as i64)
     .bind(BLOB_TTL_DAYS)
+    .bind(account)
     .execute(db)
     .await?;
     Ok(Json(Uploaded {
@@ -175,6 +185,48 @@ async fn take_quota(state: &AppState, device: Uuid, bytes: u64) -> Result<(), Ap
     .await
 }
 
+/// The account that owns `device`.
+async fn account_of(db: &PgPool, device: Uuid) -> Result<Uuid, ApiError> {
+    let (account,): (Uuid,) = sqlx::query_as("SELECT account_id FROM devices WHERE device_id = $1")
+        .bind(device)
+        .fetch_one(db)
+        .await?;
+    Ok(account)
+}
+
+/// Bytes this account keeps in the store now (unexpired blobs).
+async fn stored_bytes(db: &PgPool, account: Uuid) -> Result<i64, ApiError> {
+    let (used,): (i64,) = sqlx::query_as(
+        "SELECT coalesce(sum(size_bytes), 0)::bigint FROM blobs
+         WHERE account_id = $1 AND expires_at > now()",
+    )
+    .bind(account)
+    .fetch_one(db)
+    .await?;
+    Ok(used)
+}
+
+/// Refuses when `bytes` more would take the account over its stored-byte cap
+/// (`CHAT_LIMIT_BLOB_MB_PER_ACCOUNT`; 0 disables the cap). The daily upload
+/// allowance alone would still let an account accumulate 60 GB a month.
+async fn check_account_quota(
+    state: &AppState,
+    db: &PgPool,
+    account: Uuid,
+    bytes: u64,
+) -> Result<(), ApiError> {
+    let cap = i64::from(state.limits.blob_mb_per_account) * 1024 * 1024;
+    if cap <= 0 {
+        return Ok(());
+    }
+    if stored_bytes(db, account).await? + i64::try_from(bytes).unwrap_or(i64::MAX) > cap {
+        return Err(ApiError::TooManyRequests(
+            "this account keeps no more attachments; delete some or wait for them to expire",
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 pub struct NewUpload {
     size: u64,
@@ -200,6 +252,8 @@ pub async fn create_upload(
     }
     store(&state)?;
     take_quota(&state, device, req.size).await?;
+    let account = account_of(db(&state)?, device).await?;
+    check_account_quota(&state, db(&state)?, account, req.size).await?;
     let id = Uuid::new_v4();
     let parts = req.size.div_ceil(UPLOAD_PART_BYTES) as i32;
     sqlx::query(
@@ -307,18 +361,23 @@ pub async fn complete_upload(
     if received.len() as i32 != parts {
         return Err(ApiError::Conflict("some parts are missing"));
     }
+    let account = account_of(db(&state)?, device).await?;
+    // The parts are already stored; a refusal here costs one upload session,
+    // which the hourly cleanup then deletes.
+    check_account_quota(&state, db(&state)?, account, size as u64).await?;
     sqlx::query("DELETE FROM blob_uploads WHERE upload_id = $1")
         .bind(id)
         .execute(&mut *tx)
         .await?;
     sqlx::query(
-        "INSERT INTO blobs (blob_id, size_bytes, parts, expires_at)
-         VALUES ($1, $2, $3, now() + make_interval(days => $4))",
+        "INSERT INTO blobs (blob_id, size_bytes, parts, expires_at, account_id)
+         VALUES ($1, $2, $3, now() + make_interval(days => $4), $5)",
     )
     .bind(id)
     .bind(size)
     .bind(parts)
     .bind(BLOB_TTL_DAYS)
+    .bind(account)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -371,6 +430,17 @@ pub async fn download(
     let size = size as u64;
     let range = requested_range(&headers, size)?;
     let (start, end) = range.unwrap_or((0, size));
+    // A blob id is a capability, so downloads are charged like uploads: a
+    // leaked id must not turn into an unlimited download budget.
+    let megabytes = ((end - start).div_ceil(1024 * 1024) as i32).max(1);
+    limits::take(
+        db,
+        &format!("blob-dl:{_device}"),
+        megabytes,
+        state.limits.blob_mb_per_day,
+        limits::DAY,
+    )
+    .await?;
     let store = store(&state)?.clone();
     // (object, byte range within it) for each object the range touches.
     let pieces: Vec<(Path, std::ops::Range<u64>)> = if parts == 0 {

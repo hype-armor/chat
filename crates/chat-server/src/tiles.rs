@@ -8,7 +8,7 @@
 //! asked or the point shared. No tile coordinates are logged.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -25,13 +25,21 @@ use futures_util::{StreamExt, stream};
 use pmtiles::{AsyncPmTilesReader, HashMapCache, HttpBackend, TileCoord};
 use serde::Serialize;
 
-use crate::{AppState, auth::AuthDevice, error::ApiError};
+use crate::{
+    AppState,
+    auth::AuthDevice,
+    error::ApiError,
+    limits::{self, HOUR},
+};
 
 /// Regions are zoom-10 tiles.
 pub const REGION_ZOOM: u8 = 10;
 pub const MAX_ZOOM: u8 = 15;
 /// Tiles fetched at once while downloading a region.
 const PARALLEL: usize = 8;
+/// Areas downloading at once. Each one is ~1,365 tile fetches: without this
+/// cap, one client asking for many areas turns the server into a downloader.
+const MAX_CONCURRENT_REGIONS: usize = 4;
 
 /// `CHAT_TILES_DIR` (cache directory), `CHAT_TILES_SOURCE` (archive URL;
 /// `{yesterday}` becomes the UTC date before today as YYYYMMDD, for
@@ -46,13 +54,17 @@ pub struct TilesConfig {
 type Reader = AsyncPmTilesReader<HttpBackend, HashMapCache>;
 
 /// The on-demand tile cache.
-#[derive(Default)]
 pub struct Tiles {
     config: TilesConfig,
     /// Its own client: slow links need longer than the server's 10 s API timeout.
     http: reqwest::Client,
     reader: tokio::sync::Mutex<Option<(String, Arc<Reader>)>>,
     downloading: Mutex<HashSet<(u32, u32)>>,
+    /// Bounds concurrent region downloads (`MAX_CONCURRENT_REGIONS`).
+    slots: Arc<tokio::sync::Semaphore>,
+    /// When each area was last used, for eviction. In memory only: no file is
+    /// opened on the strength of a request's tile coordinates.
+    used: Mutex<HashMap<(u32, u32), SystemTime>>,
 }
 
 #[derive(Serialize)]
@@ -72,6 +84,7 @@ impl Tiles {
         Self {
             config,
             http,
+            slots: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_REGIONS)),
             ..Self::default()
         }
     }
@@ -185,11 +198,94 @@ impl Tiles {
         let marker = Self::region_marker(dir, rx, ry);
         tokio::fs::create_dir_all(marker.parent().expect("has a parent")).await?;
         tokio::fs::write(marker, b"").await?;
+        self.touch((rx, ry));
         Ok(())
     }
 
     fn regions_done(dir: &Path) -> usize {
         std::fs::read_dir(dir.join("regions")).map_or(0, |d| d.count())
+    }
+
+    /// Records that this area was used just now.
+    fn touch(&self, region: (u32, u32)) {
+        self.used
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(region, SystemTime::now());
+    }
+
+    /// Deletes the least recently used area (marker plus its tiles) to make
+    /// room; false when nothing could be removed. `used` is this process's
+    /// record of when it served each area; areas it never served fall back to
+    /// the marker file's modification time.
+    fn evict_oldest(
+        dir: &Path,
+        max_regions: usize,
+        used: &HashMap<(u32, u32), SystemTime>,
+    ) -> bool {
+        if Self::regions_done(dir) < max_regions.max(1) {
+            return true;
+        }
+        let Ok(entries) = std::fs::read_dir(dir.join("regions")) else {
+            return false;
+        };
+        let mut oldest: Option<(SystemTime, PathBuf, u32, u32)> = None;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some((x, y)) = Self::marker_region(&path) else {
+                continue;
+            };
+            let when = used.get(&(x, y)).copied().unwrap_or_else(|| {
+                entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .unwrap_or(UNIX_EPOCH)
+            });
+            if oldest.as_ref().is_none_or(|(t, _, _, _)| when < *t) {
+                oldest = Some((when, path, x, y));
+            }
+        }
+        let Some((_, marker, x, y)) = oldest else {
+            return false;
+        };
+        for zoom in REGION_ZOOM..=MAX_ZOOM {
+            let shift = zoom - REGION_ZOOM;
+            for dx in 0..(1u32 << shift) {
+                for dy in 0..(1u32 << shift) {
+                    let _ = std::fs::remove_file(Self::tile_path(
+                        dir,
+                        zoom,
+                        (x << shift) + dx,
+                        (y << shift) + dy,
+                    ));
+                }
+            }
+        }
+        std::fs::remove_file(marker).is_ok()
+    }
+
+    /// `regions/3-4.done` → `(3, 4)`; `None` for anything else.
+    fn marker_region(path: &Path) -> Option<(u32, u32)> {
+        let name = path.file_name()?.to_str()?.strip_suffix(".done")?;
+        let (x, y) = name.split_once('-')?;
+        Some((x.parse().ok()?, y.parse().ok()?))
+    }
+}
+
+impl Default for Tiles {
+    fn default() -> Self {
+        Self {
+            config: TilesConfig::default(),
+            http: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(15))
+                .timeout(Duration::from_secs(60))
+                .build()
+                .expect("HTTP client"),
+            reader: tokio::sync::Mutex::new(None),
+            downloading: Mutex::new(HashSet::new()),
+            slots: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_REGIONS)),
+            used: Mutex::new(HashMap::new()),
+        }
     }
 }
 
@@ -226,9 +322,17 @@ pub async fn info(State(state): State<AppState>, AuthDevice(_): AuthDevice) -> J
 /// the map is empty; `202` with `Retry-After` while its region downloads.
 pub async fn tile(
     State(state): State<AppState>,
-    AuthDevice(_): AuthDevice,
+    AuthDevice(device): AuthDevice,
     UrlPath((z, x, y)): UrlPath<(u8, u32, String)>,
 ) -> Result<Response, ApiError> {
+    // Tile reads and area downloads are cheap to ask for and expensive to
+    // serve, so both are limited per device.
+    if !state
+        .send_buckets
+        .allow(device, state.limits.tile_reads_per_minute)
+    {
+        return Err(ApiError::TooManyRequests("reading the map too fast"));
+    }
     let tiles = state.tiles.clone();
     let (dir, _) = tiles
         .enabled()
@@ -261,6 +365,8 @@ pub async fn tile(
     let shift = z - REGION_ZOOM;
     let region = (x >> shift, y >> shift);
     if Tiles::region_marker(&dir, region.0, region.1).exists() {
+        // Use counts as recency, so eviction drops cold areas first.
+        tiles.touch(region);
         // Downloaded, but this tile failed then: fetch it now.
         let reader = tiles.reader().await.map_err(unavailable)?;
         tiles
@@ -277,17 +383,47 @@ pub async fn tile(
         busy.insert(region)
     };
     if start {
+        // Asking for a new area costs a whole download, so it is counted per
+        // device per hour (ADR-0033: the server, not the phone, fetches maps).
+        if let Some(db) = &state.db {
+            let key = format!("tiles-area:{device}");
+            if limits::take(db, &key, 1, state.limits.tile_areas_per_hour, HOUR)
+                .await
+                .is_err()
+            {
+                tiles
+                    .downloading
+                    .lock()
+                    .expect("not poisoned")
+                    .remove(&region);
+                return Err(ApiError::TooManyRequests(
+                    "too many new map areas; try again later",
+                ));
+            }
+        }
         if Tiles::regions_done(&dir) >= tiles.config.max_regions {
-            tiles
-                .downloading
-                .lock()
-                .expect("not poisoned")
-                .remove(&region);
-            return Err(ApiError::TooManyRequests(
-                "this server keeps no more map areas",
-            ));
+            // Make room instead of refusing forever: drop the least recently
+            // used area. File work happens off the async runtime.
+            let (evict_dir, max) = (dir.clone(), tiles.config.max_regions);
+            let used = tiles.used.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            let freed =
+                tokio::task::spawn_blocking(move || Tiles::evict_oldest(&evict_dir, max, &used))
+                    .await
+                    .unwrap_or(false);
+            if !freed {
+                tiles
+                    .downloading
+                    .lock()
+                    .expect("not poisoned")
+                    .remove(&region);
+                return Err(ApiError::TooManyRequests(
+                    "this server keeps no more map areas",
+                ));
+            }
         }
         tokio::spawn(async move {
+            // Bounds how many areas download at once; waits, then starts.
+            let _slot = tiles.slots.acquire().await;
             if let Err(e) = tiles.download_region(region.0, region.1).await {
                 // The whole chain (DNS, TLS, timeout…): the top line alone says little.
                 tracing::warn!(error = format!("{e:#}"), "downloading a map area failed");
@@ -341,5 +477,40 @@ mod tests {
         );
         assert_eq!(civil_from_days(0), (1970, 1, 1));
         assert_eq!(civil_from_days(19_782), (2024, 2, 29));
+    }
+
+    #[test]
+    fn eviction_finds_and_drops_the_oldest_area() {
+        let dir = std::env::temp_dir().join(format!("tiles-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("regions")).unwrap();
+        for (i, (x, y)) in [(1u32, 1u32), (2, 2)].into_iter().enumerate() {
+            let marker = Tiles::region_marker(&dir, x, y);
+            std::fs::write(&marker, b"").unwrap();
+            let tile = Tiles::tile_path(&dir, 11, x * 2, y * 2);
+            std::fs::create_dir_all(tile.parent().unwrap()).unwrap();
+            std::fs::write(&tile, b"t").unwrap();
+            let when = UNIX_EPOCH + Duration::from_secs(1_000 + i as u64 * 1_000);
+            std::fs::File::options()
+                .write(true)
+                .open(&marker)
+                .unwrap()
+                .set_modified(when)
+                .unwrap();
+        }
+        assert_eq!(
+            Tiles::marker_region(Path::new("regions/3-4.done")),
+            Some((3, 4))
+        );
+        assert_eq!(Tiles::marker_region(Path::new("regions/x.done")), None);
+        assert!(Tiles::evict_oldest(
+            &dir,
+            2,
+            &std::collections::HashMap::new()
+        ));
+        assert!(!Tiles::region_marker(&dir, 1, 1).exists());
+        assert!(Tiles::region_marker(&dir, 2, 2).exists());
+        assert!(!Tiles::tile_path(&dir, 11, 2, 2).exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

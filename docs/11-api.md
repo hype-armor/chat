@@ -56,7 +56,9 @@ escape reports.
 The server only ever sees ciphertext. The key and hash travel inside the
 E2EE message that references the blob (an `Attachment` content body;
 format in ADR-0024). Blobs are deleted 30 days after
-upload, whether or not they were fetched.
+upload, whether or not they were fetched. One account keeps at most
+2048 MiB of attachments at once, and one device uploads at most 2048 MiB a
+day (see *Abuse limits*).
 
 ### Backup and restore (ADR-0022)
 
@@ -72,6 +74,11 @@ The server never sees the recovery key, the encryption key or anything
 readable in a backup. The web client derives keys with HKDF-SHA256 and seals
 the backup (gzip, AES-256-GCM). It uploads at most every 10 minutes when
 something changed, or on demand.
+
+A restore is limited to 10 attempts an hour from one address and 10 a day
+for an account. After 100 wrong recovery secrets in a day, further attempts
+for that account get `429` until the next day, so a guessed secret cannot be
+reeled off quickly.
 
 ### Linked devices (ADR-0019)
 
@@ -136,7 +143,8 @@ deliveries have `request_id = 0`.
      MLS messages to the conversation; the server learns only that the
      envelope is silent.
    - Limits: ciphertext ≤ 128 KiB, ids ≤ 64 bytes, ≤ 500 recipients, frame
-     ≤ 256 KiB. Attachments go to blob storage (Phase 2), not the socket.
+     ≤ 256 KiB, and 100 MiB of envelopes per device per day (see *Abuse
+     limits*). Attachments go to blob storage (Phase 2), not the socket.
 5. **DevicesChanged** (server → client, unsolicited): a member's devices
    changed (restore, link, removal, deletion). The client re-checks its
    groups' devices (ADR-0022).
@@ -169,6 +177,13 @@ and fetches the queue. A `404`/`410` from the push service deletes the
 subscription. Configure `CHAT_VAPID_PRIVATE_KEY` (from
 `chat-server generate-vapid-key`) and `CHAT_VAPID_SUBJECT`.
 
+The server sends only to a known push service, by default `fcm.googleapis.com`
+and the subdomains of `push.services.mozilla.com`, `notify.windows.com` and
+`push.apple.com`. `CHAT_PUSH_HOSTS` (comma separated) replaces that list, for
+self-hosted relays: an entry with a leading `.` covers subdomains but not the
+bare domain. `POST /v1/push/subscription` answers `400` for any other
+endpoint, and the server never fetches one.
+
 ## Reports (FR-ID-8)
 
 | Method & path | Auth | Body → Response |
@@ -197,14 +212,26 @@ across restarts and replicas. Exceeding one gives `429` (HTTP) or
 | `POST /v1/keys/claim` | 300 devices per hour | device |
 | Welcomes (first contacts) | 200 recipient devices per day | device |
 | Sends over the WebSocket | 600 per minute (token bucket, in memory) | device |
+| Envelope bytes a device sends | 100 MiB per day | device |
 | `POST /v1/register` | 10 per hour | client IP |
 | `POST /v1/register` | 1000 per day | whole server |
 | `POST /v1/invites` | 10 per day (and 5 unused at once) | account |
 | `POST /v1/link/start` | 20 per hour | client IP |
 | `POST /v1/reports` | 20 per day | device |
 | `POST /v1/devices/of` | 120 per hour | device |
-| `POST /v1/backup/restore` | 10 per hour; 10 per day | client IP; account |
-| `PUT /v1/blobs` | 2048 MB per day | device |
+| `POST /v1/backup/restore` | 10 per hour | client IP |
+| `POST /v1/backup/restore` | 10 per day | account |
+| `POST /v1/backup/restore` | 100 wrong recovery secrets per day | account |
+| `PUT /v1/blobs`, blob uploads | 2048 MiB per day | device |
+| Attachment bytes kept at once | 2048 MiB | account |
+| `GET /v1/turn` | 20 per day | device |
+| `GET /v1/tiles/{z}/{x}/{y}` | 300 per minute (token bucket, in memory) | device |
+| New map areas downloaded | 5 per hour | device |
+
+The envelope allowance counts ciphertext bytes, so a sender cannot fill the
+queues of other devices. The wrong-secret counter is charged only after the
+server checked the recovery secret, so a stranger cannot lock the owner out
+of recovery. Attachment bytes are counted when an upload starts.
 
 The client IP is the socket peer, or the last `X-Forwarded-For` entry when
 `CHAT_TRUST_PROXY_HEADERS=true` (Helm `server.trustProxyHeaders`, on by
@@ -217,13 +244,18 @@ queued and re-sends it after 5 s, doubling to 2 minutes.
 
 | Method & path | Auth | Body → Response |
 |---------------|------|-----------------|
-| `GET /v1/turn` | ✓ | → `{ice_servers: [{urls, username?, credential?}], ttl}`: STUN servers (`CHAT_STUN_URLS`), and TURN servers (`CHAT_TURN_URLS`) with coturn REST-API credentials valid for `ttl` seconds when `CHAT_TURN_SECRET` is set |
+| `GET /v1/turn` | ✓ | → `{ice_servers: [{urls, username?, credential?}], ttl}`: STUN servers (`CHAT_STUN_URLS`), and TURN servers (`CHAT_TURN_URLS`) with coturn REST-API credentials when `CHAT_TURN_SECRET` is set. `ttl` is 3600 seconds, the lifetime of those credentials |
 
 | `POST /v1/calls/join` | ✓ | `{conversation_id, call_id}` (base64; call id 16 bytes) → `{url, token}`: a LiveKit room token for a group call (ADR-0031), members of the conversation only (`403` otherwise, `404` when group calls are off) |
 | `GET /v1/tiles/info` | ✓ | → `{on_demand, max_zoom}` (ADR-0033) |
-| `GET /v1/tiles/{z}/{x}/{y}` | ✓ | → a decompressed vector tile, `204` where empty, `202` + `Retry-After` while its ~40 km area downloads; `404` when off |
+| `GET /v1/tiles/{z}/{x}/{y}` | ✓ | → a decompressed vector tile, `204` where empty, `202` + `Retry-After` while its ~40 km area downloads; `404` when off; `429` after 300 tiles a minute or 5 new areas an hour from one device |
 | `POST /v1/stats/calls` | — | `{direct, group}`, each `{connected, failed, setup_seconds: [..]}` → `204`: opt-in daily totals (ADR-0032), unauthenticated, 6 per IP a day |
 | `POST /v1/calls/status` | ✓ | same body → `{participants}`: how many are in that call now (`0` once it ended) |
+
+TURN credentials are valid for 3600 seconds and are minted per call: coturn
+checks the expiry when a client allocates or refreshes, so a call that lasts
+longer keeps its allocation. Each device may ask for new credentials 20 times
+a day.
 
 Offers, answers, candidates and hang-ups are end-to-end encrypted messages
 (`Call` content); the server only relays them.

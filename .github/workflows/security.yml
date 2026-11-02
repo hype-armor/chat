@@ -1,0 +1,27 @@
+name: Security
+
+# Dependency checks: on every pull request, and once a day so that a new
+# advisory about a dependency we already use is seen without a new push.
+# One tool, one configuration: `cargo deny check` reads deny.toml, where every
+# accepted advisory has a reason and a way out.
+on:
+  pull_request:
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned by commit SHA: a moved tag must not be able to run new code
+      # here (audit M12).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
+        with:
+          command: check
+          arguments: --all-features
+          log-level: warn
