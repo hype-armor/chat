@@ -1533,6 +1533,7 @@ button.conversation-title {
 
 /* Calls (ADR-0028) */
 .call-screen {
+  --call-controls-height: 5rem;
   position: fixed;
   inset: 0;
   z-index: 50;
@@ -1541,7 +1542,7 @@ button.conversation-title {
   align-items: center;
   justify-content: center;
   gap: 2rem;
-  padding: 1.5rem 1rem calc(1.5rem + env(safe-area-inset-bottom));
+  padding: calc(1.5rem + env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) calc(var(--call-controls-height) + env(safe-area-inset-bottom) + 0.75rem) max(1rem, env(safe-area-inset-left));
   background: #0d1117;
   color: #f0f6fc;
 }
@@ -1555,6 +1556,8 @@ button.conversation-title {
   gap: 0.4rem;
   text-align: center;
   z-index: 1;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .call-info h2 {
   margin: 0.5rem 0 0;
@@ -1566,8 +1569,13 @@ button.conversation-title {
 }
 .call-info.over-video {
   position: absolute;
-  top: 1.5rem;
-  text-shadow: 0 1px 3px #000;
+  inset: 0 0 auto;
+  padding: calc(1rem + env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) 2rem max(1rem, env(safe-area-inset-left));
+  background: linear-gradient(rgba(0, 0, 0, 0.65) calc(100% - 2rem), transparent);
+  color: #fff;
+}
+.call-info.over-video .muted {
+  color: inherit;
 }
 .call-status {
   font-variant-numeric: tabular-nums;
@@ -1584,9 +1592,12 @@ button.conversation-title {
 }
 .call-videos video + video {
   position: absolute;
-  right: 1rem;
-  bottom: calc(6.5rem + env(safe-area-inset-bottom));
+  right: max(1rem, env(safe-area-inset-right));
+  bottom: calc(var(--call-controls-height) + env(safe-area-inset-bottom) + 0.75rem);
   width: min(28vw, 180px);
+  max-height: 28vh;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
   border-radius: 0.75rem;
   border: 2px solid #f0f6fc33;
   transform: scaleX(-1);
@@ -1602,10 +1613,46 @@ button.conversation-title {
   z-index: 1;
   margin-top: auto;
 }
-.call-screen:not(.with-video) .call-actions {
-  margin-top: 0;
+.call-screen > .call-actions {
+  position: absolute;
+  inset: auto 0 0;
+  margin: 0;
+  padding: 1rem max(1rem, env(safe-area-inset-right)) calc(1rem + env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+  background: #0d1117;
 }
-.call-button {
+.call-controls {
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+.call-control,
+.call-controls .menu > button {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 3rem;
+  height: 3rem;
+  min-width: 3rem;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: #f0f6fc22;
+  color: #f0f6fc;
+  font-size: 1.5rem;
+}
+.call-controls .menu-items {
+  position: fixed;
+  top: auto;
+  right: max(1rem, env(safe-area-inset-right));
+  bottom: calc(var(--call-controls-height) + env(safe-area-inset-bottom));
+  max-height: calc(100dvh - var(--call-controls-height) - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 1rem);
+  overflow-y: auto;
+}
+.call-controls .menu-items button {
+  min-height: 3rem;
+  font-size: 1rem;
+}
+.call-button:not(.call-control) {
   min-width: 6.5rem;
   padding: 0.8rem 1.1rem;
   border-radius: 2rem;
@@ -1613,6 +1660,9 @@ button.conversation-title {
   background: #f0f6fc22;
   color: #f0f6fc;
   font: inherit;
+  cursor: pointer;
+}
+.call-control {
   cursor: pointer;
 }
 .call-button[aria-pressed='true'] {
