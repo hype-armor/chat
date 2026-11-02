@@ -212,14 +212,20 @@ pub async fn send(db: &PgPool, caps: &Limits, req: Send<'_>) -> Result<SendOutco
                 "the members after a commit must include the sender",
             ));
         }
-        // A device the server does not know would fail the insert below.
-        let (known,): (i64,) =
-            sqlx::query_as("SELECT count(*) FROM devices WHERE device_id = ANY($1)")
+        // A device the server no longer has (removed, or replaced by a
+        // restore) cannot be a member: drop it instead of failing the commit,
+        // because the committer's local group still lists it.
+        let known: Vec<(Uuid,)> =
+            sqlx::query_as("SELECT device_id FROM devices WHERE device_id = ANY($1)")
                 .bind(members.as_slice())
-                .fetch_one(&mut *tx)
+                .fetch_all(&mut *tx)
                 .await?;
-        if known != members.len() as i64 {
-            return Err(ApiError::BadRequest("unknown device in the members list"));
+        let known: Vec<Uuid> = known.into_iter().map(|(d,)| d).collect();
+        let members: Vec<Uuid> = members.into_iter().filter(|d| known.contains(d)).collect();
+        if !members.contains(&req.sender) {
+            return Err(ApiError::BadRequest(
+                "the members after a commit must include the sender",
+            ));
         }
         Some(members)
     } else {

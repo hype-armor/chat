@@ -316,6 +316,12 @@ export class Engine {
    * a call cannot be joined again here (audit M10).
    */
   private readonly endedCalls = new Set<string>()
+  /**
+   * `DeviceSync` frames from an own device this page did not know yet (a
+   * device linked or restored a moment ago). Applied once the server's device
+   * list confirms it (audit H1).
+   */
+  private pendingSyncs: { conversationId: string; device: string; bytes: Uint8Array }[] = []
   /** Downloads under way, by message id. */
   private downloads = new Map<string, Promise<Blob>>()
   private nextRequestId = 1
@@ -700,6 +706,12 @@ export class Engine {
       const { devices } = await api.devices(this.account.token)
       const mine = devices.map((d) => deviceHex(d.device_id))
       this.state.myDevices = mine
+      // Syncs that waited for this list (a device linked a moment ago).
+      const ready = this.pendingSyncs.filter((p) => mine.includes(p.device))
+      this.pendingSyncs = this.pendingSyncs.filter((p) => !mine.includes(p.device))
+      for (const pending of ready) {
+        await this.exclusive(() => this.applyDeviceSync(pending.conversationId, pending.bytes))
+      }
       const thisDevice = deviceHex(this.account.deviceId)
       const hasSelf = Object.values(this.state.conversations).some((c) => c.self && !c.status)
       // The oldest device creates it; duplicates from races are tolerated.
@@ -2615,11 +2627,20 @@ export class Engine {
       const conv = this.state.conversations[conversationId]
       const mine = from === this.myAccount()
       if (event.deviceSync !== undefined) {
-        // Only this account's own devices may edit the local account
-        // (blocked list, display name): audit H1.
+        // Only this account's own devices may edit the local account (blocked
+        // list, display name): audit H1. A device linked a moment ago is not
+        // in the local list yet, so hold its sync until the server confirms it
+        // rather than dropping it.
         const senderDevice = toHex(splitIdentity(event.sender).device)
         if (mine && this.state.myDevices.includes(senderDevice)) {
           await this.applyDeviceSync(conversationId, event.deviceSync)
+        } else if (mine) {
+          this.pendingSyncs.push({
+            conversationId,
+            device: senderDevice,
+            bytes: new Uint8Array(event.deviceSync),
+          })
+          void this.syncOwnDevices()
         }
         return
       }

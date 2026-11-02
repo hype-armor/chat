@@ -151,14 +151,15 @@ async fn a_members_list_the_sender_cannot_use_is_refused(pool: PgPool) {
     };
     assert_eq!(send(&mut alice_ws, too_many).await, Err(400));
 
-    // A device the server does not know is refused.
+    // A device the server no longer has is dropped, not refused: a committer's
+    // local group still lists a device that a restore replaced.
     let unknown = SendEnvelope {
-        envelope: Some(envelope(b"group", ContentType::Handshake, 1)),
+        envelope: Some(envelope(b"group", ContentType::Handshake, 2)),
         recipient_devices: ids(&[alice]),
-        members: ids(&[alice, Uuid::new_v4()]),
+        members: ids(&[alice, bob, Uuid::new_v4()]),
         ..Default::default()
     };
-    assert_eq!(send(&mut alice_ws, unknown).await, Err(400));
+    assert_eq!(send(&mut alice_ws, unknown).await, Ok(true));
 
     // Neither refused request changed the membership: Bob still sends.
     assert_eq!(
