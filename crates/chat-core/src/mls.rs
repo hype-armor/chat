@@ -17,6 +17,10 @@ pub const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_
 /// membership change (and delivered after it) still decrypt. A small
 /// forward-secrecy trade-off: those few epochs' keys live a little longer.
 const MAX_PAST_EPOCHS: usize = 5;
+/// Lower bounds on serialized sizes, checked before the MLS library parses
+/// bytes that came from the server (see `Device::parse_key_package`).
+const MIN_KEY_PACKAGE_BYTES: usize = 128;
+const MIN_WELCOME_BYTES: usize = 64;
 
 /// Exporter label for group-call frame keys (docs/05-media-and-calling.md §4).
 const CALL_KEY_LABEL: &str = "chat call sframe";
@@ -155,6 +159,13 @@ impl Device {
     }
 
     fn parse_key_package(&self, bytes: &[u8]) -> Result<KeyPackage> {
+        // Checked before the library sees the bytes: libcrux 0.0.7 panics on
+        // buffers shorter than the hybrid key types it decodes
+        // (RUSTSEC-2026-0331, RUSTSEC-2026-0124), and these bytes come from
+        // the key directory. A real package is well over 500 bytes.
+        if bytes.len() < MIN_KEY_PACKAGE_BYTES {
+            return Err(Error::Malformed("key package too short"));
+        }
         KeyPackageIn::tls_deserialize_exact(bytes)
             .map_err(mls_err)?
             .validate(self.provider.crypto(), ProtocolVersion::Mls10)
@@ -214,6 +225,11 @@ impl Conversation {
     }
 
     pub fn join(device: &Device, welcome: &[u8]) -> Result<Self> {
+        // Same reason as `parse_key_package`: a welcome is attacker-supplied
+        // bytes that reach the HPKE/KEM code.
+        if welcome.len() < MIN_WELCOME_BYTES {
+            return Err(Error::Malformed("welcome too short"));
+        }
         let MlsMessageBodyIn::Welcome(welcome) = MlsMessageIn::tls_deserialize_exact(welcome)
             .map_err(mls_err)?
             .extract()
@@ -448,6 +464,30 @@ impl Conversation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_server_bytes_are_rejected_before_the_library_sees_them() {
+        // Key packages, welcomes and their HPKE/KEM contents come from the
+        // server. Too-short buffers must be an error, never a panic in the
+        // dependency's decode paths (RUSTSEC-2026-0331, -0124).
+        let alice = Device::new(b"alice").unwrap();
+        let mut conversation = Conversation::create(&alice).unwrap();
+        assert!(conversation.stage_add_members(&alice, &[&[]]).is_err());
+        assert!(
+            conversation
+                .stage_add_members(&alice, &[&[0u8; 16]])
+                .is_err()
+        );
+        assert!(conversation.add_members(&alice, &[&[1u8; 127]]).is_err());
+        assert!(Conversation::join(&alice, &[]).is_err());
+        assert!(Conversation::join(&alice, &[0u8; 63]).is_err());
+        // A real package and welcome still work.
+        let bob = Device::new(b"bob").unwrap();
+        let package = bob.key_package().unwrap();
+        assert!(package.len() > MIN_KEY_PACKAGE_BYTES);
+        let change = conversation.add_members(&alice, &[&package]).unwrap();
+        assert!(Conversation::join(&bob, &change.welcome).is_ok());
+    }
 
     fn app(sender: &[u8], data: &[u8]) -> Received {
         Received::Application {
