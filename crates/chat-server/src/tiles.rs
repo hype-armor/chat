@@ -8,7 +8,7 @@
 //! asked or the point shared. No tile coordinates are logged.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -62,6 +62,9 @@ pub struct Tiles {
     downloading: Mutex<HashSet<(u32, u32)>>,
     /// Bounds concurrent region downloads (`MAX_CONCURRENT_REGIONS`).
     slots: Arc<tokio::sync::Semaphore>,
+    /// When each area was last used, for eviction. In memory only: no file is
+    /// opened on the strength of a request's tile coordinates.
+    used: Mutex<HashMap<(u32, u32), SystemTime>>,
 }
 
 #[derive(Serialize)]
@@ -195,6 +198,7 @@ impl Tiles {
         let marker = Self::region_marker(dir, rx, ry);
         tokio::fs::create_dir_all(marker.parent().expect("has a parent")).await?;
         tokio::fs::write(marker, b"").await?;
+        self.touch((rx, ry));
         Ok(())
     }
 
@@ -202,19 +206,23 @@ impl Tiles {
         std::fs::read_dir(dir.join("regions")).map_or(0, |d| d.count())
     }
 
-    /// Records that this area was used just now (best effort).
-    fn touch_region(dir: &Path, x: u32, y: u32) {
-        if let Ok(file) = std::fs::File::options()
-            .write(true)
-            .open(Self::region_marker(dir, x, y))
-        {
-            let _ = file.set_modified(SystemTime::now());
-        }
+    /// Records that this area was used just now.
+    fn touch(&self, region: (u32, u32)) {
+        self.used
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(region, SystemTime::now());
     }
 
     /// Deletes the least recently used area (marker plus its tiles) to make
-    /// room; false when nothing could be removed.
-    fn evict_oldest(dir: &Path, max_regions: usize) -> bool {
+    /// room; false when nothing could be removed. `used` is this process's
+    /// record of when it served each area; areas it never served fall back to
+    /// the marker file's modification time.
+    fn evict_oldest(
+        dir: &Path,
+        max_regions: usize,
+        used: &HashMap<(u32, u32), SystemTime>,
+    ) -> bool {
         if Self::regions_done(dir) < max_regions.max(1) {
             return true;
         }
@@ -227,12 +235,14 @@ impl Tiles {
             let Some((x, y)) = Self::marker_region(&path) else {
                 continue;
             };
-            let used = entry
-                .metadata()
-                .and_then(|m| m.modified())
-                .unwrap_or(UNIX_EPOCH);
-            if oldest.as_ref().is_none_or(|(t, _, _, _)| used < *t) {
-                oldest = Some((used, path, x, y));
+            let when = used.get(&(x, y)).copied().unwrap_or_else(|| {
+                entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .unwrap_or(UNIX_EPOCH)
+            });
+            if oldest.as_ref().is_none_or(|(t, _, _, _)| when < *t) {
+                oldest = Some((when, path, x, y));
             }
         }
         let Some((_, marker, x, y)) = oldest else {
@@ -274,6 +284,7 @@ impl Default for Tiles {
             reader: tokio::sync::Mutex::new(None),
             downloading: Mutex::new(HashSet::new()),
             slots: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_REGIONS)),
+            used: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -355,7 +366,7 @@ pub async fn tile(
     let region = (x >> shift, y >> shift);
     if Tiles::region_marker(&dir, region.0, region.1).exists() {
         // Use counts as recency, so eviction drops cold areas first.
-        Tiles::touch_region(&dir, region.0, region.1);
+        tiles.touch(region);
         // Downloaded, but this tile failed then: fetch it now.
         let reader = tiles.reader().await.map_err(unavailable)?;
         tiles
@@ -394,9 +405,11 @@ pub async fn tile(
             // Make room instead of refusing forever: drop the least recently
             // used area. File work happens off the async runtime.
             let (evict_dir, max) = (dir.clone(), tiles.config.max_regions);
-            let freed = tokio::task::spawn_blocking(move || Tiles::evict_oldest(&evict_dir, max))
-                .await
-                .unwrap_or(false);
+            let used = tiles.used.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            let freed =
+                tokio::task::spawn_blocking(move || Tiles::evict_oldest(&evict_dir, max, &used))
+                    .await
+                    .unwrap_or(false);
             if !freed {
                 tiles
                     .downloading
@@ -490,7 +503,11 @@ mod tests {
             Some((3, 4))
         );
         assert_eq!(Tiles::marker_region(Path::new("regions/x.done")), None);
-        assert!(Tiles::evict_oldest(&dir, 2));
+        assert!(Tiles::evict_oldest(
+            &dir,
+            2,
+            &std::collections::HashMap::new()
+        ));
         assert!(!Tiles::region_marker(&dir, 1, 1).exists());
         assert!(Tiles::region_marker(&dir, 2, 2).exists());
         assert!(!Tiles::tile_path(&dir, 11, 2, 2).exists());
