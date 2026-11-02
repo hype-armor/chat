@@ -60,3 +60,16 @@ test('an off-screen clipping ancestor does not hide a layout defect', async ({ p
     expect.objectContaining({ problem: 'off-screen content', element: expect.stringContaining('#child') }),
   ]))
 })
+
+test('respects the one-pixel scroll tolerance and 28px choice limit', async ({ page }) => {
+  await page.setContent(`<!doctype html>
+    <div style="width: 80px; overflow-x: auto"><div style="width: 81px">One pixel</div></div>
+    <input type="checkbox" style="width: 28px; height: 28px">
+    <input type="radio" style="width: 28px; height: 28px">
+  `)
+  expect(await layoutReport(page)).toEqual([])
+  await page.locator('input[type="radio"]').evaluate((element) => { element.style.height = '29px' })
+  expect(await layoutReport(page)).toEqual([
+    expect.objectContaining({ problem: 'oversized checkbox/radio' }),
+  ])
+})

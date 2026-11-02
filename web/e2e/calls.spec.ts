@@ -1,5 +1,5 @@
 import { type Browser, type Page, expect, test } from '@playwright/test'
-import { expectLayout, layoutViewports } from './layout'
+import { auditLayouts } from './layout'
 import { closeSettings, openChat, openSetting, randomUsername, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
@@ -158,10 +158,9 @@ for (const kind of ['Voice', 'Video'] as const) {
       }
 
       const dialog = alice.getByRole('dialog', { name: 'Call with Echo (test bot)' })
-      for (const { width, height, colorScheme } of layoutViewports) {
-        await alice.setViewportSize({ width, height })
-        await alice.emulateMedia({ colorScheme })
-        await expectLayout(alice, `echo ${kind} call: ${width}×${height} ${colorScheme}`, true)
+      await auditLayouts(alice, `echo ${kind} call`)
+      for (const width of [320, 390, 768, 1280]) {
+        await alice.setViewportSize({ width, height: 720 })
         const controls = dialog.locator('.call-controls')
         const boxes = await controls.getByRole('button').evaluateAll((elements) => elements.map((el) => {
           const { x, y, width, height } = el.getBoundingClientRect()
@@ -174,7 +173,7 @@ for (const kind of ['Voice', 'Video'] as const) {
           expect(box.y).toBe(boxes[0].y)
           expect(box.x).toBeGreaterThanOrEqual(0)
           expect(box.x + box.width).toBeLessThanOrEqual(width)
-          expect(box.y + box.height).toBeLessThanOrEqual(height)
+          expect(box.y + box.height).toBeLessThanOrEqual(720)
           if (index > 0) expect(box.x).toBeGreaterThanOrEqual(boxes[index - 1].x + boxes[index - 1].width)
         }
         const info = (await dialog.locator('.call-info').boundingBox())!

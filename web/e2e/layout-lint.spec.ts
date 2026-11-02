@@ -114,7 +114,7 @@ test.describe('signed-in layout lint', () => {
         .getByRole('button', { name: /Alice/ })
       await expect(request).toBeVisible()
       await expect(bob.getByRole('navigation', { name: 'Conversations', exact: true })
-        .locator('.conversations button')).toHaveCount(6)
+        .locator(':scope > .conversations button')).toHaveCount(6)
       await auditLayouts(bob, 'six chats, message request and search field')
       await search.fill('Layout')
       await expect(bob.locator('.conversations mark')).toHaveCount(6)

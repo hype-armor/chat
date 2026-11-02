@@ -27,7 +27,7 @@ export async function layoutReport(page: Page, chat = false) {
     const root = doc.scrollingElement!
     if (root.scrollWidth > root.clientWidth) add('page overflow-x', root)
     if (chat && root.scrollHeight > root.clientHeight) add('page overflow-y', root)
-    for (const element of body.querySelectorAll('*')) {
+    for (const element of [body, ...body.querySelectorAll('*')]) {
       if (element.closest('.visually-hidden, [hidden], [inert]')) continue
       if (!element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) continue
       const rect = element.getBoundingClientRect()
