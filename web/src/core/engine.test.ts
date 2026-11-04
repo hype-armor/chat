@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { toBase64 } from './api'
 import type { CoreEvent } from './protocol'
 import { Engine } from './engine'
@@ -66,6 +66,19 @@ describe('engine routing and group metadata', () => {
 
 describe('profile pictures', () => {
   const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3])
+  it('does not send profiles to blocked one-to-one peers', () => {
+    const engine = new Engine(() => {})
+    const sendProfile = vi.fn(() => new Uint8Array([1]))
+    engine['account'] = { displayName: 'Alice' } as NonNullable<Engine['account']>
+    engine['core'] = { sendProfile } as unknown as NonNullable<Engine['core']>
+    engine['state'].blocked.push(peer)
+    engine['state'].conversations[conversationId] = { id: conversationId, peers: [peer], lastAt: 0 }
+
+    engine['queueProfile'](conversationId)
+
+    expect(sendProfile).not.toHaveBeenCalled()
+    expect(engine['state'].outbox).toEqual([])
+  })
   it('keeps a contact’s picture until a profile without one arrives', () => {
     const events: CoreEvent[] = []
     const engine = new Engine((e) => events.push(e))

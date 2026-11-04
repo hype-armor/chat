@@ -3008,6 +3008,15 @@ export class Engine {
 
   private queueProfile(conversationId: string) {
     if (!this.account!.displayName) return // linked device still waiting for its name
+    const conversation = this.state.conversations[conversationId]
+    if (
+      conversation &&
+      conversation.name === undefined &&
+      conversation.peers.length === 1 &&
+      this.state.blocked.includes(conversation.peers[0])
+    ) {
+      return
+    }
     const messageId = randomId()
     const avatar = this.account!.avatar ? fromBase64(this.account!.avatar) : new Uint8Array()
     const envelope = this.core!.sendProfile(
