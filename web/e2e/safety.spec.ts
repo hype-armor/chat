@@ -42,6 +42,7 @@ test('reporting and blocking someone, then unblocking them (FR-ID-8)', async ({ 
 })
 
 test('chats from strangers wait in message requests (FR-SAF-3)', async ({ browser }) => {
+  test.setTimeout(60_000) // three sign-ups plus several server round trips
   const bobUsername = randomUsername()
   const alice = await signUp(browser, 'Alice', randomUsername())
   const mallory = await signUp(browser, 'Mallory', randomUsername())
