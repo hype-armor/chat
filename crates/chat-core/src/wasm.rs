@@ -224,6 +224,9 @@ pub struct EventView {
     pub text: Option<String>,
     #[wasm_bindgen(getter_with_clone, js_name = displayName)]
     pub display_name: Option<String>,
+    /// A `Profile`'s photo (JPEG), if the sender has one.
+    #[wasm_bindgen(getter_with_clone)]
+    pub avatar: Option<Vec<u8>>,
     #[wasm_bindgen(getter_with_clone, js_name = groupName)]
     pub group_name: Option<String>,
     /// Admin account ids from a `GroupInfo`, 16 bytes each, concatenated.
@@ -311,6 +314,7 @@ impl EventView {
             sent_at_ms: 0.0,
             text: None,
             display_name: None,
+            avatar: None,
             group_name: None,
             group_admins: Vec::new(),
             device_sync: None,
@@ -864,13 +868,17 @@ impl CoreClient {
         &mut self,
         conversation_id: &[u8],
         display_name: String,
+        avatar: Vec<u8>,
         sent_at_ms: f64,
         message_id: Vec<u8>,
     ) -> Result<Vec<u8>, JsError> {
         self.send(
             conversation_id,
             sent_at_ms,
-            content::Body::Profile(Profile { display_name }),
+            content::Body::Profile(Profile {
+                display_name,
+                avatar,
+            }),
             message_id,
         )
     }
@@ -932,7 +940,10 @@ impl CoreClient {
                 view.sent_at_ms = content.sent_at_ms as f64;
                 match content.body {
                     Some(content::Body::Text(t)) => view.text = Some(t.body),
-                    Some(content::Body::Profile(p)) => view.display_name = Some(p.display_name),
+                    Some(content::Body::Profile(p)) => {
+                        view.display_name = Some(p.display_name);
+                        view.avatar = Some(p.avatar).filter(|a| !a.is_empty());
+                    }
                     Some(content::Body::GroupInfo(g)) => {
                         view.group_name = Some(g.name);
                         view.group_admins = g.admins.concat();

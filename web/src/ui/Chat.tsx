@@ -5,7 +5,7 @@ import { SetupActions, SetupBanner, useSetup } from './Banners'
 import { Devices } from './Devices'
 import { Invite } from './Invite'
 import { Backup } from './Backup'
-import { Avatar } from './Avatar'
+import { Avatar, useAvatarPhoto } from './Avatar'
 import { Menu, type MenuItem } from './Menu'
 import { Attachment } from './Attachment'
 import { Recorder } from './Recorder'
@@ -124,7 +124,7 @@ export function Chat({
       >
         <aside className="sidebar" ref={sidebar}>
           <header className="bar me">
-            <Avatar name={view.me.displayName} id={view.me.username} />
+            <Avatar name={view.me.displayName} id={view.me.username} account={view.me.account} />
             <div className="who">
               <strong>{view.me.displayName}</strong>
             </div>
@@ -167,7 +167,12 @@ export function Chat({
               </div>
               <section className="settings-group" aria-labelledby="settings-account">
                 <h3 id="settings-account">Account</h3>
-                <SettingsIdentity name={view.me.displayName} username={view.me.username} />
+                <SettingsIdentity
+                  core={core}
+                  account={view.me.account}
+                  name={view.me.displayName}
+                  username={view.me.username}
+                />
                 <Invite core={core} />
               </section>
               <section className="settings-group" aria-labelledby="settings-privacy">
@@ -264,11 +269,53 @@ export function Chat({
   )
 }
 
-function SettingsIdentity({ name, username }: { name: string; username: string }) {
+function SettingsIdentity({
+  core,
+  account,
+  name,
+  username,
+}: {
+  core: CoreClient
+  account: string
+  name: string
+  username: string
+}) {
   const [copied, setCopied] = useState(false)
-  const { error, run } = useAction()
+  const photo = useAvatarPhoto(account)
+  const picker = useRef<HTMLInputElement>(null)
+  const { busy, error, run } = useAction()
   return (
     <div className="settings-identity">
+      <div className="identity-photo">
+        <Avatar name={name} id={username} account={account} size={4} />
+        <div className="photo-actions">
+          <input
+            ref={picker}
+            type="file"
+            accept="image/*"
+            hidden
+            data-testid="avatar-input"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              e.target.value = ''
+              if (file) void run(() => core.setAvatar(file))
+            }}
+          />
+          <button type="button" className="link small" disabled={busy} onClick={() => picker.current?.click()}>
+            {photo ? 'Change photo' : 'Add photo'}
+          </button>
+          {photo && (
+            <button
+              type="button"
+              className="link small"
+              disabled={busy}
+              onClick={() => void run(() => core.setAvatar())}
+            >
+              Remove photo
+            </button>
+          )}
+        </div>
+      </div>
       <strong>{name}</strong>
       <span className="muted small">Your username: {username}</span>
       <button
@@ -482,7 +529,7 @@ function ConversationList({
       {conversations.map((c) => (
         <li key={c.id}>
           <button type="button" className={c.id === selected ? 'active' : ''} onClick={() => onSelect(c.id)}>
-            <Avatar name={c.title} id={c.peer ?? c.id} />
+            <Avatar name={c.title} id={c.peer ?? c.id} account={c.peer} />
             <span className="title">
               {highlightTitle(c.title, query).map((part, index) =>
                 part.match ? <mark key={index}>{part.text}</mark> : part.text,
@@ -771,7 +818,7 @@ function GroupInfo({
         <ul className="members" aria-label="Members">
           {members.map((m) => (
             <li key={m.account}>
-              <Avatar name={m.name} id={m.account} />
+              <Avatar name={m.name} id={m.account} account={m.account} />
               <span className="member-name">
                 <span>{m.name}</span>
                 {m.isMe && <span className="badge small">You</span>}
@@ -1186,7 +1233,7 @@ function Conversation({
             aria-expanded={panelOpen}
             onClick={() => openPanel(isGroup ? 'info' : 'verify')}
           >
-            <Avatar name={title} id={peer ?? id} />
+            <Avatar name={title} id={peer ?? id} account={peer} />
             <span className="who" id={detailsId}>
               <span className="conversation-name" role="heading" aria-level={2}>
                 {title}
@@ -1487,7 +1534,7 @@ function Conversation({
           ) : (
             <>
               <div className="details-identity">
-                <Avatar name={title} id={peer ?? id} size={5} />
+                <Avatar name={title} id={peer ?? id} account={peer} size={5} />
                 <strong>{title}</strong>
                 <VerificationBadge status={verification} />
               </div>

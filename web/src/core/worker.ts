@@ -84,6 +84,11 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
       return { type: 'ok' }
     case 'openAttachment':
       return { type: 'file', blob: await engine.openAttachment(request.conversationId, request.messageId) }
+    case 'setAvatar':
+      await engine.setAvatar(request.file)
+      return { type: 'ok' }
+    case 'avatar':
+      return { type: 'avatar', avatar: engine.avatarOf(request.account) }
     case 'startLink':
       return { type: 'link', offer: await engine.startLink() }
     case 'cancelLink':
