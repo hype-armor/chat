@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::{AuthDevice, db, normalize_username},
-    error::ApiError,
+    error::{ApiError, ApiJson},
     limits,
 };
 
@@ -66,7 +66,7 @@ pub struct Upload {
 pub async fn upload(
     State(state): State<AppState>,
     AuthDevice(device): AuthDevice,
-    Json(req): Json<Upload>,
+    ApiJson(req): ApiJson<Upload>,
 ) -> Result<StatusCode, ApiError> {
     let db = db(&state)?;
     if req.key_packages.is_empty() || req.key_packages.len() > MAX_UPLOAD {
@@ -123,7 +123,7 @@ pub struct Claimed {
 pub async fn claim(
     State(state): State<AppState>,
     AuthDevice(claimer): AuthDevice,
-    Json(req): Json<Claim>,
+    ApiJson(req): ApiJson<Claim>,
 ) -> Result<Json<Claimed>, ApiError> {
     let db = db(&state)?;
     if req.device_ids.is_empty() || req.device_ids.len() > MAX_CLAIM {
@@ -192,7 +192,7 @@ pub struct Account {
 pub async fn lookup(
     State(state): State<AppState>,
     AuthDevice(device): AuthDevice,
-    Json(req): Json<Lookup>,
+    ApiJson(req): ApiJson<Lookup>,
 ) -> Result<Json<Account>, ApiError> {
     let db = db(&state)?;
     let username = normalize_username(&req.username)

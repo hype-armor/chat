@@ -20,6 +20,23 @@ async fn health_and_readiness() {
 }
 
 #[tokio::test]
+async fn missing_json_fields_are_returned_as_a_generic_bad_request() {
+    let response = router(AppState::default())
+        .oneshot(
+            Request::post("/v1/register")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(body.as_ref(), br#"{"error":"invalid request body"}"#);
+}
+
+#[tokio::test]
 async fn websocket_ping_pong_and_malformed_frame() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

@@ -5,14 +5,14 @@
 //! becomes free. Rate-limit windows naming its devices expire within two
 //! days.
 
-use axum::{Json, extract::State, http::StatusCode};
+use axum::{extract::State, http::StatusCode};
 use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
     AppState,
     auth::{AuthDevice, db},
-    error::ApiError,
+    error::{ApiError, ApiJson},
 };
 
 #[derive(Deserialize)]
@@ -24,7 +24,7 @@ pub struct Delete {
 pub async fn delete(
     State(state): State<AppState>,
     AuthDevice(device): AuthDevice,
-    Json(req): Json<Delete>,
+    ApiJson(req): ApiJson<Delete>,
 ) -> Result<StatusCode, ApiError> {
     let mut tx = db(&state)?.begin().await?;
     let row: Option<(Uuid, String)> = sqlx::query_as(

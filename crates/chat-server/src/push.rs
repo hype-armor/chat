@@ -21,7 +21,7 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::{AuthDevice, db},
-    error::ApiError,
+    error::{ApiError, ApiJson},
 };
 
 /// At most one push per device in this window: one wake-up is enough to
@@ -289,7 +289,7 @@ pub struct SubscriptionKeys {
 pub async fn subscribe(
     State(state): State<AppState>,
     AuthDevice(device): AuthDevice,
-    Json(sub): Json<Subscription>,
+    ApiJson(sub): ApiJson<Subscription>,
 ) -> Result<StatusCode, ApiError> {
     let db = db(&state)?;
     let allow_http = state.push.as_ref().is_some_and(|p| p.allow_http);

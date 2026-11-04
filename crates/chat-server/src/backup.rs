@@ -26,7 +26,7 @@ use crate::{
     AppState,
     auth::{AuthDevice, Registered, create_device, db, normalize_username, parse_identity_key},
     blobs, devices,
-    error::ApiError,
+    error::{ApiError, ApiJson},
     limits::{self, ClientIp},
 };
 
@@ -99,7 +99,7 @@ pub struct SetKey {
 pub async fn set_key(
     State(state): State<AppState>,
     AuthDevice(device): AuthDevice,
-    Json(req): Json<SetKey>,
+    ApiJson(req): ApiJson<SetKey>,
 ) -> Result<StatusCode, ApiError> {
     let db = db(&state)?;
     let store = blobs::store(&state)?;
@@ -240,7 +240,7 @@ pub struct Restore {
 pub async fn restore(
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
-    Json(req): Json<Restore>,
+    ApiJson(req): ApiJson<Restore>,
 ) -> Result<Json<Registered>, ApiError> {
     let db = db(&state)?;
     let caps = &state.limits;

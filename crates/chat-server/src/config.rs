@@ -103,6 +103,10 @@ fn limits_from_env() -> anyhow::Result<Limits> {
         claims_per_hour: limit_var("CLAIMS_PER_HOUR", d.claims_per_hour)?,
         welcomes_per_day: limit_var("WELCOMES_PER_DAY", d.welcomes_per_day)?,
         sends_per_minute: limit_var("SENDS_PER_MINUTE", d.sends_per_minute)?,
+        ws_auth_failures_per_minute: limit_var(
+            "WS_AUTH_FAILURES_PER_MINUTE",
+            d.ws_auth_failures_per_minute,
+        )?,
         registrations_per_ip_per_hour: limit_var(
             "REGISTRATIONS_PER_IP_PER_HOUR",
             d.registrations_per_ip_per_hour,
