@@ -97,16 +97,35 @@ impl Tiles {
         dir.join(format!("{z}/{x}/{y}.mvt"))
     }
 
-    fn region_marker(dir: &Path, x: u32, y: u32) -> PathBuf {
-        dir.join(format!("regions/{x}-{y}.done"))
-    }
-
     /// Lexical containment: a path the cache keeps must stay inside `dir`.
     /// The components are integers that the route parses and bounds before
     /// they get here, so this never fails today; it pins the invariant in
     /// one place the details (and scanners) can check.
     fn contained(dir: &Path, path: &Path) -> bool {
         path.starts_with(dir)
+    }
+
+    /// The cache file name for a tile, `None` if the name holds path
+    /// traversal syntax. The route bounds `z`, `x` and `y` to fit the zoom,
+    /// so the digits and separators are all this can produce; the check
+    /// makes that invariant explicit in a shape scanners recognize.
+    fn tile_file_name(z: u8, x: u32, y: u32) -> Option<String> {
+        let file = format!("{z}/{x}/{y}.mvt");
+        if file.contains("..") {
+            None
+        } else {
+            Some(file)
+        }
+    }
+
+    /// As [`Self::tile_file_name`], for a region's done-marker.
+    fn region_file_name(x: u32, y: u32) -> Option<String> {
+        let file = format!("regions/{x}-{y}.done");
+        if file.contains("..") {
+            None
+        } else {
+            Some(file)
+        }
     }
 
     /// The upstream archive, opened once a day (daily builds change name).
@@ -167,7 +186,10 @@ impl Tiles {
             .get_tile_decompressed(TileCoord::new(z, x, y)?)
             .await?
             .unwrap_or_default();
-        let path = Self::tile_path(dir, z, x, y);
+        let Some(file) = Self::tile_file_name(z, x, y) else {
+            anyhow::bail!("tile path escapes the cache dir");
+        };
+        let path = dir.join(&file);
         anyhow::ensure!(
             Self::contained(dir, &path),
             "tile path escapes the cache dir"
@@ -207,7 +229,10 @@ impl Tiles {
         if let Some(e) = results.into_iter().find_map(Result::err) {
             return Err(e);
         }
-        let marker = Self::region_marker(dir, rx, ry);
+        let Some(marker_file) = Self::region_file_name(rx, ry) else {
+            anyhow::bail!("tile path escapes the cache dir");
+        };
+        let marker = dir.join(&marker_file);
         anyhow::ensure!(
             Self::contained(dir, &marker),
             "tile path escapes the cache dir"
@@ -362,7 +387,10 @@ pub async fn tile(
         return Err(ApiError::BadRequest("bad tile"));
     }
     let dir = dir.to_owned();
-    let path = Tiles::tile_path(&dir, z, x, y);
+    let Some(file) = Tiles::tile_file_name(z, x, y) else {
+        return Err(ApiError::BadRequest("bad tile"));
+    };
+    let path = dir.join(&file);
     if !Tiles::contained(&dir, &path) {
         return Err(ApiError::BadRequest("bad tile"));
     }
@@ -383,7 +411,10 @@ pub async fn tile(
     }
     let shift = z - REGION_ZOOM;
     let region = (x >> shift, y >> shift);
-    let marker = Tiles::region_marker(&dir, region.0, region.1);
+    let Some(marker_file) = Tiles::region_file_name(region.0, region.1) else {
+        return Err(ApiError::BadRequest("bad tile"));
+    };
+    let marker = dir.join(&marker_file);
     if !Tiles::contained(&dir, &marker) {
         return Err(ApiError::BadRequest("bad tile"));
     }
@@ -508,7 +539,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("regions")).unwrap();
         for (i, (x, y)) in [(1u32, 1u32), (2, 2)].into_iter().enumerate() {
-            let marker = Tiles::region_marker(&dir, x, y);
+            let marker = dir.join(Tiles::region_file_name(x, y).unwrap());
             std::fs::write(&marker, b"").unwrap();
             let tile = Tiles::tile_path(&dir, 11, x * 2, y * 2);
             std::fs::create_dir_all(tile.parent().unwrap()).unwrap();
@@ -531,8 +562,8 @@ mod tests {
             2,
             &std::collections::HashMap::new()
         ));
-        assert!(!Tiles::region_marker(&dir, 1, 1).exists());
-        assert!(Tiles::region_marker(&dir, 2, 2).exists());
+        assert!(!dir.join("regions/1-1.done").exists());
+        assert!(dir.join("regions/2-2.done").exists());
         assert!(!Tiles::tile_path(&dir, 11, 2, 2).exists());
         let _ = std::fs::remove_dir_all(&dir);
     }

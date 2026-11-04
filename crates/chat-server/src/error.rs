@@ -1,5 +1,6 @@
 use axum::{
     Json,
+    extract::rejection::JsonRejection,
     http::StatusCode,
     response::{IntoResponse, Response},
 };
@@ -12,6 +13,8 @@ pub enum ApiError {
     Forbidden(&'static str),
     NotFound(&'static str),
     Conflict(&'static str),
+    /// Body parsed, but does not have the shape the handler needs.
+    Unprocessable(&'static str),
     TooManyRequests(&'static str),
     /// A `Range` outside a blob of this many bytes.
     RangeNotSatisfiable(u64),
@@ -28,6 +31,7 @@ impl ApiError {
             Self::Forbidden(_) => StatusCode::FORBIDDEN,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Conflict(_) => StatusCode::CONFLICT,
+            Self::Unprocessable(_) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
             Self::RangeNotSatisfiable(_) => StatusCode::RANGE_NOT_SATISFIABLE,
             Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
@@ -42,6 +46,7 @@ impl ApiError {
             | Self::Unauthorized(m)
             | Self::NotFound(m)
             | Self::Conflict(m)
+            | Self::Unprocessable(m)
             | Self::TooManyRequests(m) => m,
             Self::RangeNotSatisfiable(_) => "range not satisfiable",
             Self::Unavailable => "service unavailable",
@@ -53,6 +58,19 @@ impl ApiError {
 impl From<sqlx::Error> for ApiError {
     fn from(e: sqlx::Error) -> Self {
         Self::Internal(e.into())
+    }
+}
+
+/// Malformed JSON bodies: keep the status semantics of axum's `Json`
+/// extractor (bad syntax vs a body of the wrong shape) but with a generic
+/// message: its own text quotes the request and names the expected fields.
+impl From<JsonRejection> for ApiError {
+    fn from(e: JsonRejection) -> Self {
+        tracing::debug!(error = %e, "malformed JSON request");
+        match &e {
+            JsonRejection::JsonDataError(_) => Self::Unprocessable("invalid request body"),
+            _ => Self::BadRequest("invalid request body"),
+        }
     }
 }
 
