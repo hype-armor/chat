@@ -1,9 +1,13 @@
+//! Errors returned to clients. Detail stays in the log, not the body: a
+//! rejection from the `Json` extractor would otherwise quote the request's
+//! malformed part and name the expected fields (API schema disclosure).
 use axum::{
     Json,
-    extract::rejection::JsonRejection,
+    extract::{FromRequest, Request, rejection::JsonRejection},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use serde::de::DeserializeOwned;
 
 /// Errors returned by REST handlers as `{"error": "..."}`.
 #[derive(Debug)]
@@ -13,8 +17,6 @@ pub enum ApiError {
     Forbidden(&'static str),
     NotFound(&'static str),
     Conflict(&'static str),
-    /// Body parsed, but does not have the shape the handler needs.
-    Unprocessable(&'static str),
     TooManyRequests(&'static str),
     /// A `Range` outside a blob of this many bytes.
     RangeNotSatisfiable(u64),
@@ -31,7 +33,6 @@ impl ApiError {
             Self::Forbidden(_) => StatusCode::FORBIDDEN,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Conflict(_) => StatusCode::CONFLICT,
-            Self::Unprocessable(_) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
             Self::RangeNotSatisfiable(_) => StatusCode::RANGE_NOT_SATISFIABLE,
             Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
@@ -46,7 +47,6 @@ impl ApiError {
             | Self::Unauthorized(m)
             | Self::NotFound(m)
             | Self::Conflict(m)
-            | Self::Unprocessable(m)
             | Self::TooManyRequests(m) => m,
             Self::RangeNotSatisfiable(_) => "range not satisfiable",
             Self::Unavailable => "service unavailable",
@@ -61,16 +61,27 @@ impl From<sqlx::Error> for ApiError {
     }
 }
 
-/// Malformed JSON bodies: keep the status semantics of axum's `Json`
-/// extractor (bad syntax vs a body of the wrong shape) but with a generic
-/// message: its own text quotes the request and names the expected fields.
 impl From<JsonRejection> for ApiError {
     fn from(e: JsonRejection) -> Self {
         tracing::debug!(error = %e, "malformed JSON request");
-        match &e {
-            JsonRejection::JsonDataError(_) => Self::Unprocessable("invalid request body"),
-            _ => Self::BadRequest("invalid request body"),
-        }
+        Self::BadRequest("invalid request body")
+    }
+}
+
+pub struct ApiJson<T>(pub T);
+
+impl<S, T> FromRequest<S> for ApiJson<T>
+where
+    S: Send + Sync,
+    T: DeserializeOwned,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        Json::<T>::from_request(req, state)
+            .await
+            .map(|Json(value)| Self(value))
+            .map_err(Into::into)
     }
 }
 

@@ -24,7 +24,7 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::{AuthDevice, db},
-    error::ApiError,
+    error::{ApiError, ApiJson},
     limits,
 };
 
@@ -245,7 +245,7 @@ pub struct UploadSession {
 pub async fn create_upload(
     State(state): State<AppState>,
     AuthDevice(device): AuthDevice,
-    Json(req): Json<NewUpload>,
+    ApiJson(req): ApiJson<NewUpload>,
 ) -> Result<Json<UploadSession>, ApiError> {
     if req.size == 0 || req.size > MAX_BLOB_BYTES {
         return Err(ApiError::BadRequest("attachments are 1 byte to 100 MB"));

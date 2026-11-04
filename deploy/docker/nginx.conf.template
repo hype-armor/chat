@@ -1,5 +1,7 @@
 # Rendered by the nginx image's envsubst step at container start.
 server {
+    # Do not advertise the nginx version in the Server header.
+    server_tokens off;
     listen 8080;
     root /usr/share/nginx/html;
 

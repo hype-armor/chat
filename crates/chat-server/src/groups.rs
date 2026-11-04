@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AppState,
     auth::{AuthDevice, db},
-    error::ApiError,
+    error::{ApiError, ApiJson},
 };
 
 #[derive(Deserialize)]
@@ -29,7 +29,7 @@ pub struct Epoch {
 pub async fn epoch(
     State(state): State<AppState>,
     AuthDevice(_): AuthDevice,
-    Json(req): Json<EpochQuery>,
+    ApiJson(req): ApiJson<EpochQuery>,
 ) -> Result<Json<Epoch>, ApiError> {
     let db = db(&state)?;
     let group_id = STANDARD
