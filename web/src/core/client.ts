@@ -234,6 +234,16 @@ export class CoreClient {
     expect(await this.call({ type: 'sendFile', conversationId, file, caption, media }), 'ok')
   }
 
+  /** Sets this account's profile picture; without a file, removes it. */
+  async setAvatar(file?: File) {
+    expect(await this.call({ type: 'setAvatar', file }), 'ok')
+  }
+
+  /** An account's profile picture as base64 JPEG, if it has one. */
+  async avatar(account: string): Promise<string | undefined> {
+    return expect(await this.call({ type: 'avatar', account }), 'avatar').avatar
+  }
+
   /** The decrypted file of a message. */
   async openAttachment(conversationId: string, messageId: string): Promise<Blob> {
     return expect(await this.call({ type: 'openAttachment', conversationId, messageId }), 'file').blob

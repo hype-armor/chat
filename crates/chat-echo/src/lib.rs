@@ -193,6 +193,7 @@ impl Echo {
                 &conversation_id,
                 content::Body::Profile(Profile {
                     display_name: self.name.clone(),
+                    avatar: Vec::new(),
                 }),
                 now_ms,
                 false,
@@ -322,7 +323,7 @@ mod tests {
         match alice.receive(&out[0].envelope).unwrap() {
             Event::Message { content, .. } => assert!(matches!(
                 content.body,
-                Some(content::Body::Profile(Profile { ref display_name })) if display_name == "Echo"
+                Some(content::Body::Profile(Profile { ref display_name, .. })) if display_name == "Echo"
             )),
             other => panic!("expected a profile, got {other:?}"),
         }

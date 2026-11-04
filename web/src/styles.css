@@ -1220,6 +1220,11 @@ button.link.danger {
   user-select: none;
 }
 
+/* A profile picture: cropped to the circle. */
+img.avatar {
+  object-fit: cover;
+}
+
 .who {
   flex: 1;
   min-width: 0;
@@ -1289,6 +1294,20 @@ button.icon[aria-pressed='true'] {
 .settings-identity strong,
 .settings-identity .error {
   grid-column: 1 / -1;
+}
+
+.identity-photo {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.photo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
 }
 
 .settings-group h3 {

@@ -24,9 +24,12 @@ message Text {
   string body = 1;
 }
 
-// Sent when a conversation starts so members can label each other.
+// Sent when a conversation starts so members can label each other, and
+// again when the sender changes their name or photo.
 message Profile {
   string display_name = 1;
+  // A square JPEG of the sender's photo, at most 32 KiB. Empty: no photo.
+  bytes avatar = 2;
 }
 
 // Group metadata, sent by the member who created or renamed the group.

@@ -20,6 +20,7 @@ import init, {
   sealedLength,
 } from './pkg/chat_core.js'
 import { ApiError, type Registered, api, fromBase64, toBase64 } from './api'
+import { isAvatar, prepareAvatar } from './avatar'
 import {
   type CommitOutcome,
   MAX_SEND_RETRIES,
@@ -136,7 +137,15 @@ type StoredFile = Omit<FileInfo, 'thumbnail'> & {
 /** A message as stored; `messages()` hands the UI a `ChatMessage` without keys. */
 type StoredMessage = Omit<ChatMessage, 'file'> & { file?: StoredFile }
 
-type Account = { username: string; displayName: string; accountId: string; deviceId: string; token: string }
+type Account = {
+  username: string
+  displayName: string
+  /** This account's profile picture, base64 JPEG (avatar.ts). */
+  avatar?: string
+  accountId: string
+  deviceId: string
+  token: string
+}
 
 type Conversation = {
   id: string
@@ -212,6 +221,8 @@ type State = {
   conversations: Record<string, Conversation>
   /** Account id (hex) → display name from their profile message. */
   names: Record<string, string>
+  /** Account id (hex) → base64 profile picture from their profile message. */
+  avatars: Record<string, string>
   /** Account id (hex) → username number, for contacts this user looked up. */
   usernames: Record<string, string>
   outbox: Outgoing[]
@@ -263,13 +274,18 @@ type BackupPayload = {
   version: 1
   createdAt: number
   displayName: string
-  state: Pick<State, 'conversations' | 'names' | 'usernames' | 'blocked' | 'verified' | 'keys' | 'readReceipts'>
+  avatar?: string
+  state: Pick<
+    State,
+    'conversations' | 'names' | 'avatars' | 'usernames' | 'blocked' | 'verified' | 'keys' | 'readReceipts'
+  >
   messages: Record<string, StoredMessage[]>
 }
 
 const emptyState = (): State => ({
   conversations: {},
   names: {},
+  avatars: {},
   usernames: {},
   outbox: [],
   early: [],
@@ -398,7 +414,11 @@ export class Engine {
       }))
     return {
       phase: 'ready',
-      me: { username: this.account.username, displayName: this.account.displayName || this.account.username },
+      me: {
+        account: this.myAccount(),
+        username: this.account.username,
+        displayName: this.account.displayName || this.account.username,
+      },
       connection: this.connection,
       conversations,
       alerts: this.state.alerts,
@@ -415,6 +435,45 @@ export class Engine {
           expiresAt: l.expiresAt,
         })),
     }
+  }
+
+  // ---- profile pictures ----------------------------------------------------
+
+  /**
+   * Sets this account's profile picture from a photo, or removes it when
+   * `file` is undefined. Everyone in a conversation gets it with their next
+   * profile message, and this account's other devices get it in a sync.
+   */
+  async setAvatar(file?: Blob) {
+    this.ready()
+    const bytes = file ? await prepareAvatar(file) : undefined
+    await this.exclusive(async () => {
+      this.account!.avatar = bytes ? toBase64(bytes) : undefined
+      await this.store.putJson('account', this.account)
+      for (const c of Object.values(this.state.conversations)) {
+        if (!c.self && !c.status) this.queueProfile(c.id)
+      }
+      const self = Object.values(this.state.conversations).find((c) => c.self && !c.status)
+      if (self) this.queueDeviceSync(self.id)
+      await this.persist()
+    })
+    this.emit({ type: 'avatar', account: this.myAccount() })
+    this.emitView()
+    void this.flushOutbox()
+  }
+
+  /** An account's profile picture as base64 JPEG, if it has one. */
+  avatarOf(account: string): string | undefined {
+    return account === this.myAccount() ? this.account?.avatar : this.state.avatars[account]
+  }
+
+  /** Keeps a contact's picture from their profile message; a missing or bad one removes it. */
+  private setPeerAvatar(account: string, bytes: Uint8Array | undefined) {
+    const next = bytes && isAvatar(bytes) ? toBase64(bytes) : undefined
+    if (next === this.state.avatars[account]) return
+    if (next) this.state.avatars[account] = next
+    else delete this.state.avatars[account]
+    this.emit({ type: 'avatar', account })
   }
 
   // ---- registration ------------------------------------------------------
@@ -500,12 +559,13 @@ export class Engine {
         conversations[c.id] = c
         messages[c.id] = await this.stored(c.id)
       }
-      const { names, usernames, blocked, verified, keys, readReceipts } = this.state
+      const { names, avatars, usernames, blocked, verified, keys, readReceipts } = this.state
       return {
         version: 1,
         createdAt: Date.now(),
         displayName: account.displayName,
-        state: { conversations, names, usernames, blocked, verified, keys, readReceipts },
+        avatar: account.avatar,
+        state: { conversations, names, avatars, usernames, blocked, verified, keys, readReceipts },
         messages,
       } satisfies BackupPayload
     })
@@ -533,6 +593,7 @@ export class Engine {
     await this.register(reg, '', async () => {
       const backup = await openBackup<BackupPayload>(keys.encryption, await api.downloadBackup(reg.token))
       this.account!.displayName = backup.displayName
+      this.account!.avatar = backup.avatar
       await this.store.putJson('account', this.account)
       const restored = backup.state
       for (const c of Object.values(restored.conversations)) {
@@ -885,6 +946,7 @@ export class Engine {
   private queueDeviceSync(selfId: string) {
     const sync: DeviceSync = {
       displayName: this.account!.displayName,
+      avatar: this.account!.avatar,
       names: this.state.names,
       usernames: this.state.usernames,
       blocked: this.state.blocked,
@@ -919,6 +981,12 @@ export class Engine {
     if (sync.displayName && this.account) {
       this.account.displayName = sync.displayName
       await this.store.putJson('account', this.account)
+    }
+    // The photo is always in a sync: no `avatar` means this account has none.
+    if (this.account && sync.avatar !== this.account.avatar) {
+      this.account.avatar = sync.avatar
+      await this.store.putJson('account', this.account)
+      this.emit({ type: 'avatar', account: this.myAccount() })
     }
     if (sync.blocked) this.state.blocked = sync.blocked
     this.state.names = { ...sync.names, ...this.state.names }
@@ -2706,6 +2774,7 @@ export class Engine {
       if (this.state.blocked.includes(from)) return // blocked (FR-ID-8)
       if (event.displayName !== undefined && !mine) {
         this.state.names[from] = event.displayName.slice(0, 64)
+        this.setPeerAvatar(from, event.avatar)
         this.emitView()
         // Sender names are resolved when messages are read: refresh lists.
         for (const c of Object.values(this.state.conversations)) {
@@ -2939,7 +3008,14 @@ export class Engine {
   private queueProfile(conversationId: string) {
     if (!this.account!.displayName) return // linked device still waiting for its name
     const messageId = randomId()
-    const envelope = this.core!.sendProfile(fromHex(conversationId), this.account!.displayName, Date.now(), messageId)
+    const avatar = this.account!.avatar ? fromBase64(this.account!.avatar) : new Uint8Array()
+    const envelope = this.core!.sendProfile(
+      fromHex(conversationId),
+      this.account!.displayName,
+      avatar,
+      Date.now(),
+      messageId,
+    )
     this.state.outbox.push({
       messageId: toHex(messageId),
       conversationId,

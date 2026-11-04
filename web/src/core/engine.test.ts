@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { toBase64 } from './api'
+import type { CoreEvent } from './protocol'
 import { Engine } from './engine'
 import { fromHex, makeIdentity } from './ids'
 
@@ -59,5 +61,29 @@ describe('engine routing and group metadata', () => {
       groupAdmins: fromHex(peer),
     } as Parameters<Engine['apply']>[0], '77'.repeat(16))
     expect(conv.name).toBe('Original')
+  })
+})
+
+describe('profile pictures', () => {
+  const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3])
+  it('keeps a contact’s picture until a profile without one arrives', () => {
+    const events: CoreEvent[] = []
+    const engine = new Engine((e) => events.push(e))
+    engine['setPeerAvatar'](peer, jpeg)
+    expect(engine.avatarOf(peer)).toBe(toBase64(jpeg))
+    engine['setPeerAvatar'](peer, undefined)
+    expect(engine.avatarOf(peer)).toBeUndefined()
+    expect(events).toEqual([
+      { type: 'avatar', account: peer },
+      { type: 'avatar', account: peer },
+    ])
+  })
+  it('ignores a picture that is not a JPEG, and says nothing when nothing changes', () => {
+    const events: CoreEvent[] = []
+    const engine = new Engine((e) => events.push(e))
+    engine['setPeerAvatar'](peer, new Uint8Array([0x89, 0x50, 0x4e, 0x47]))
+    engine['setPeerAvatar'](peer, undefined)
+    expect(engine.avatarOf(peer)).toBeUndefined()
+    expect(events).toEqual([])
   })
 })

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { CoreClient } from './core/client'
 import type { AppView } from './core/protocol'
 import { UpdateBanner } from './ui/Banners'
+import { CoreContext } from './ui/Avatar'
 import { Chat } from './ui/Chat'
 import { Diagnostics } from './ui/Diagnostics'
 import { Onboarding } from './ui/Onboarding'
@@ -51,7 +52,7 @@ function Running() {
   }, [core])
 
   return (
-    <>
+    <CoreContext.Provider value={core}>
       <UpdateBanner />
       <div hidden={showDiagnostics}>
         {failed && (
@@ -92,6 +93,6 @@ function Running() {
           <Diagnostics core={core} />
         </main>
       )}
-    </>
+    </CoreContext.Provider>
   )
 }

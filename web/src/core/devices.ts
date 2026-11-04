@@ -1,3 +1,6 @@
+import { isAvatar } from './avatar'
+import { fromBase64 } from './api'
+
 // Linked-device rules (ADR-0019). Pure functions, shared by the engine and tests.
 
 const LINK_PREFIX = 'chat-link:v1:'
@@ -59,6 +62,8 @@ export function memberDevicePlan(
 /** State shared between an account's devices over their self conversation. */
 export type DeviceSync = {
   displayName?: string
+  /** This account's profile picture, base64 JPEG; absent when it has none. */
+  avatar?: string
   /** Account id → display name. */
   names: Record<string, string>
   /** Account id → username number. */
@@ -75,6 +80,15 @@ const strings = (v: unknown): Record<string, string> =>
       ([k, s]) => /^[0-9a-f]{1,64}$/.test(k) && typeof s === 'string' && s.length <= 64,
     ),
   ) as Record<string, string>
+
+/** The base64 picture if it decodes to an acceptable JPEG (avatar.ts). */
+function validAvatar(b64: string): string | undefined {
+  try {
+    return isAvatar(fromBase64(b64)) ? b64 : undefined
+  } catch {
+    return undefined
+  }
+}
 
 /** Parses a `DeviceSync` from another device, dropping anything malformed. */
 export function parseDeviceSync(bytes: Uint8Array): DeviceSync | undefined {
@@ -97,6 +111,7 @@ export function parseDeviceSync(bytes: Uint8Array): DeviceSync | undefined {
   }
   return {
     displayName: typeof r.displayName === 'string' ? r.displayName.slice(0, 64) : undefined,
+    avatar: typeof r.avatar === 'string' ? validAvatar(r.avatar) : undefined,
     names: strings(r.names),
     usernames: strings(r.usernames),
     conversations,

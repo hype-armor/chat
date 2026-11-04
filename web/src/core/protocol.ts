@@ -37,7 +37,7 @@ export type AppView =
     }
   | {
       phase: 'ready'
-      me: { username: string; displayName: string }
+      me: { account: string; username: string; displayName: string }
       connection: ConnectionState
       conversations: ConversationSummary[]
       /** New devices on this account that nobody here approved (ADR-0020). */
@@ -235,6 +235,9 @@ export type CoreRequest =
   | { type: 'mapInfo' }
   | { type: 'tile'; z: number; x: number; y: number }
   | { type: 'sendFile'; conversationId: string; file: File; caption: string; media?: MediaInfo }
+  /** Sets this account's profile picture; no file removes it. */
+  | { type: 'setAvatar'; file?: File }
+  | { type: 'avatar'; account: string }
   | { type: 'openAttachment'; conversationId: string; messageId: string }
   | { type: 'startLink' }
   | { type: 'cancelLink' }
@@ -278,6 +281,8 @@ export type CoreResponseBody =
   | { type: 'conversation'; conversationId: string }
   | { type: 'messages'; messages: ChatMessage[] }
   | { type: 'file'; blob: Blob }
+  /** A profile picture as base64 JPEG, if the account has one. */
+  | { type: 'avatar'; avatar?: string }
   | { type: 'iceServers'; servers: IceServer[] }
   | { type: 'groupCallJoin'; url: string; token: string }
   | { type: 'groupCallStatus'; call?: GroupCallStatus }
@@ -305,6 +310,8 @@ export type CoreEvent =
   | { type: 'progress'; conversationId: string; messageId: string; done: number; total: number }
   /** Call signalling for the call screen (ADR-0028). */
   | { type: 'call'; signal: IncomingCallSignal }
+  /** An account's profile picture changed: re-read it with `avatar`. */
+  | { type: 'avatar'; account: string }
 
 export type RequestEnvelope = { id: number; request: CoreRequest }
 /** Encoded media streams for SFrame (ADR-0030); no reply. */

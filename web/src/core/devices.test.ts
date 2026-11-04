@@ -72,4 +72,12 @@ describe('parseDeviceSync', () => {
   it('rejects non-JSON', () => {
     expect(parseDeviceSync(new Uint8Array([0xff]))).toBeUndefined()
   })
+  it('keeps a profile picture only if it is a JPEG', () => {
+    const jpeg = btoa(String.fromCharCode(0xff, 0xd8, 0xff, 0xe0, 0, 0x10))
+    const png = btoa(String.fromCharCode(0x89, 0x50, 0x4e, 0x47))
+    expect(parseDeviceSync(encode({ avatar: jpeg }))?.avatar).toBe(jpeg)
+    expect(parseDeviceSync(encode({ avatar: png }))?.avatar).toBeUndefined()
+    expect(parseDeviceSync(encode({ avatar: 'not base64!' }))?.avatar).toBeUndefined()
+    expect(parseDeviceSync(encode({ avatar: 7 }))?.avatar).toBeUndefined()
+  })
 })
