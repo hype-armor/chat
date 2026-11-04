@@ -188,6 +188,15 @@ impl Session {
         db: &PgPool,
         token: &str,
     ) -> Result<Option<server_frame::Body>, ApiError> {
+        if !self
+            .state
+            .ws_auth
+            .allow(&self.peer, self.state.limits.ws_auth_failures_per_minute)
+        {
+            return Err(ApiError::TooManyRequests(
+                "too many failed sign-ins from your address; try again later",
+            ));
+        }
         let device = match device_for_token(db, token).await {
             Ok(Some(device)) => device,
             Ok(None) => {

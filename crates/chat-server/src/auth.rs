@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    error::ApiError,
+    error::{ApiError, ApiJson},
     invites,
     limits::{self, ClientIp},
 };
@@ -64,7 +64,7 @@ pub struct Registered {
 pub async fn register(
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
-    Json(req): Json<Register>,
+    ApiJson(req): ApiJson<Register>,
 ) -> Result<Json<Registered>, ApiError> {
     let db = db(&state)?;
     let username = normalize_username(&req.username).ok_or(ApiError::BadRequest(

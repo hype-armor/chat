@@ -7,7 +7,14 @@ metadata:
     {{- include "chat.labels" . | nindent 4 }}
   {{- $annotations := deepCopy (.Values.ingress.annotations | default dict) }}
   {{- if .Values.ingress.hsts }}
-  {{- $_ := set $annotations "traefik.ingress.kubernetes.io/router.middlewares" (printf "%s-%s-hsts@kubernetescrd" .Release.Namespace (include "chat.fullname" .)) }}
+  {{- $key := "traefik.ingress.kubernetes.io/router.middlewares" }}
+  {{- $hsts := printf "%s-%s-hsts@kubernetescrd" .Release.Namespace (include "chat.fullname" .) }}
+  {{- $configured := get $annotations $key | default "" }}
+  {{- if $configured }}
+  {{- $_ := set $annotations $key (printf "%s,%s" $configured $hsts) }}
+  {{- else }}
+  {{- $_ := set $annotations $key $hsts }}
+  {{- end }}
   {{- end }}
   {{- with $annotations }}
   annotations:

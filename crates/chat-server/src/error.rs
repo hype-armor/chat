@@ -3,10 +3,11 @@
 //! malformed part and name the expected fields (API schema disclosure).
 use axum::{
     Json,
-    extract::rejection::JsonRejection,
+    extract::{FromRequest, Request, rejection::JsonRejection},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use serde::de::DeserializeOwned;
 
 /// Errors returned by REST handlers as `{"error": "..."}`.
 #[derive(Debug)]
@@ -64,6 +65,23 @@ impl From<JsonRejection> for ApiError {
     fn from(e: JsonRejection) -> Self {
         tracing::debug!(error = %e, "malformed JSON request");
         Self::BadRequest("invalid request body")
+    }
+}
+
+pub struct ApiJson<T>(pub T);
+
+impl<S, T> FromRequest<S> for ApiJson<T>
+where
+    S: Send + Sync,
+    T: DeserializeOwned,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        Json::<T>::from_request(req, state)
+            .await
+            .map(|Json(value)| Self(value))
+            .map_err(Into::into)
     }
 }
 

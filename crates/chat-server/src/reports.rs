@@ -2,14 +2,14 @@
 //! carries only what the reporter chooses to disclose. Verifiable message
 //! franking (FR-SAF-1) comes later.
 
-use axum::{Json, extract::State, http::StatusCode};
+use axum::{extract::State, http::StatusCode};
 use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
     AppState,
     auth::{AuthDevice, db},
-    error::ApiError,
+    error::{ApiError, ApiJson},
     limits,
 };
 
@@ -42,7 +42,7 @@ pub struct Report {
 pub async fn create(
     State(state): State<AppState>,
     AuthDevice(device): AuthDevice,
-    Json(req): Json<Report>,
+    ApiJson(req): ApiJson<Report>,
 ) -> Result<StatusCode, ApiError> {
     if req.messages.len() > MAX_EVIDENCE
         || req
