@@ -16,7 +16,10 @@ export function suggestUsername(name: string): string {
     .replace(/^[^a-z]+/, '')
     .slice(0, 20)
   if (base.length < 3) return ''
-  return `${base}.${String(Math.floor(Math.random() * 100)).padStart(2, '0')}`
+  // Not key material: a friendly differing suffix per suggestion. The
+  // server still enforces uniqueness and the user can edit the name.
+  const suffix = crypto.getRandomValues(new Uint8Array(1))[0] % 100
+  return `${base}.${String(suffix).padStart(2, '0')}`
 }
 
 /** Sign-up with a username and an invite (FR-ID-1, ADR-0021). */

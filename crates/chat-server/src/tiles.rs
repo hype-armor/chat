@@ -101,6 +101,14 @@ impl Tiles {
         dir.join(format!("regions/{x}-{y}.done"))
     }
 
+    /// Lexical containment: a path the cache keeps must stay inside `dir`.
+    /// The components are integers that the route parses and bounds before
+    /// they get here, so this never fails today; it pins the invariant in
+    /// one place the details (and scanners) can check.
+    fn contained(dir: &Path, path: &Path) -> bool {
+        path.starts_with(dir)
+    }
+
     /// The upstream archive, opened once a day (daily builds change name).
     async fn reader(&self) -> anyhow::Result<Arc<Reader>> {
         let (_, template) = self.enabled().ok_or_else(|| anyhow::anyhow!("tiles off"))?;
@@ -160,6 +168,10 @@ impl Tiles {
             .await?
             .unwrap_or_default();
         let path = Self::tile_path(dir, z, x, y);
+        anyhow::ensure!(
+            Self::contained(dir, &path),
+            "tile path escapes the cache dir"
+        );
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -196,6 +208,10 @@ impl Tiles {
             return Err(e);
         }
         let marker = Self::region_marker(dir, rx, ry);
+        anyhow::ensure!(
+            Self::contained(dir, &marker),
+            "tile path escapes the cache dir"
+        );
         tokio::fs::create_dir_all(marker.parent().expect("has a parent")).await?;
         tokio::fs::write(marker, b"").await?;
         self.touch((rx, ry));
@@ -347,6 +363,9 @@ pub async fn tile(
     }
     let dir = dir.to_owned();
     let path = Tiles::tile_path(&dir, z, x, y);
+    if !Tiles::contained(&dir, &path) {
+        return Err(ApiError::BadRequest("bad tile"));
+    }
     if let Ok(data) = tokio::fs::read(&path).await {
         return Ok(tile_response(data));
     }
@@ -364,8 +383,12 @@ pub async fn tile(
     }
     let shift = z - REGION_ZOOM;
     let region = (x >> shift, y >> shift);
-    if Tiles::region_marker(&dir, region.0, region.1).exists() {
-        // Use counts as recency, so eviction drops cold areas first.
+    let marker = Tiles::region_marker(&dir, region.0, region.1);
+    if !Tiles::contained(&dir, &marker) {
+        return Err(ApiError::BadRequest("bad tile"));
+    }
+    // Use counts as recency, so eviction drops cold areas first.
+    if marker.exists() {
         tiles.touch(region);
         // Downloaded, but this tile failed then: fetch it now.
         let reader = tiles.reader().await.map_err(unavailable)?;
