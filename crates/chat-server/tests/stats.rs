@@ -42,5 +42,7 @@ async fn call_stats_are_counted_without_identity(pool: PgPool) {
     let (status, _) = server
         .post("/v1/stats/calls", None, json!({ "who": "me" }))
         .await;
-    assert_eq!(status, 422);
+    // Malformed JSON bodies answer one generic bad request (400), keeping
+    // serde's text out of the response — same doctrine as the reports test.
+    assert_eq!(status, 400);
 }

@@ -912,7 +912,7 @@ export class Engine {
   /** Applies a `DeviceSync` from another of this account's devices. */
   private async applyDeviceSync(conversationId: string, bytes: Uint8Array) {
     const sync = parseDeviceSync(bytes)
-    const conv = this.state.conversations[conversationId]
+    const conv = this.conv(conversationId)
     if (!sync || !conv) return
     conv.self = true
     conv.peers = []
@@ -975,7 +975,7 @@ export class Engine {
     // Under the lock: the read-modify-write of the message list must not
     // interleave with a delivery appending to it.
     const changed = await this.exclusive(async () => {
-      const conv = this.state.conversations[conversationId]
+      const conv = this.conv(conversationId)
       if (!conv) return false
       const list = await this.stored(conversationId)
       const unseen = list.filter((m) => m.status === 'received' && !m.seen && m.kind !== 'notice')
@@ -1399,7 +1399,7 @@ export class Engine {
    */
   async addMembers(conversationId: string, usernames: string[]) {
     const { core } = this.ready()
-    const conv = this.state.conversations[conversationId]
+    const conv = this.conv(conversationId)
     if (!conv) throw new Error('Unknown conversation')
     if (this.connection !== 'online') throw new Error('You need to be online to add people')
     if (this.state.pendingCommit) throw new Error('Still finishing an earlier group change; try again shortly')
@@ -1553,6 +1553,18 @@ export class Engine {
 
   private async stored(conversationId: string): Promise<StoredMessage[]> {
     return (await this.store.getJson<StoredMessage[]>(`messages:${conversationId}`)) ?? []
+  }
+
+  /**
+   * The conversation map entry for an id, via `Object.hasOwn` so that a
+   * `__proto__` or `constructor` key cannot resolve to `Object.prototype`
+   * (its fields look truthy and a later write would pollute it). Only used
+   * for entries before they are written back to.
+   */
+  private conv(conversationId: string): Conversation | undefined {
+    return Object.hasOwn(this.state.conversations, conversationId)
+      ? this.state.conversations[conversationId]
+      : undefined
   }
 
   private checkCanSend(conversationId: string) {
@@ -2855,7 +2867,7 @@ export class Engine {
 
   /** Applies an accepted commit; for additions, introduces us to newcomers. */
   private async finishCommit(p: PendingCommit) {
-    const conv = this.state.conversations[p.conversationId]
+    const conv = this.conv(p.conversationId)
     this.core!.confirmCommit(fromHex(p.conversationId))
     this.refreshCallKeys(p.conversationId)
     if (conv && !conv.self) conv.peers = this.peersOf(p.conversationId)
@@ -3045,7 +3057,7 @@ export class Engine {
     const list = await this.stored(conversationId)
     list.push(message)
     await this.store.putJson(`messages:${conversationId}`, list)
-    const conv = this.state.conversations[conversationId]
+    const conv = this.conv(conversationId)
     if (conv && message.kind !== 'notice') {
       conv.lastText = message.live
         ? 'Live location'
