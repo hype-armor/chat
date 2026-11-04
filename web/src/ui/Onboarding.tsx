@@ -18,7 +18,13 @@ export function suggestUsername(name: string): string {
   if (base.length < 3) return ''
   // Not key material: a friendly differing suffix per suggestion. The
   // server still enforces uniqueness and the user can edit the name.
-  const suffix = crypto.getRandomValues(new Uint8Array(1))[0] % 100
+  // Rejection sampling: 2**32 % 100 leaves 96 biased values; drop them.
+  const word = new Uint32Array(1)
+  let suffix = 0
+  do {
+    crypto.getRandomValues(word)
+    suffix = word[0] % 100
+  } while (word[0] >= 4_294_967_200)
   return `${base}.${String(suffix).padStart(2, '0')}`
 }
 
