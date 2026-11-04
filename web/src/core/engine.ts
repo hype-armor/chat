@@ -448,6 +448,7 @@ export class Engine {
     this.ready()
     const bytes = file ? await prepareAvatar(file) : undefined
     await this.exclusive(async () => {
+      if (this.state.pendingCommit) throw new Error('Still finishing an earlier group change; try again shortly')
       this.account!.avatar = bytes ? toBase64(bytes) : undefined
       await this.store.putJson('account', this.account)
       for (const c of Object.values(this.state.conversations)) {
