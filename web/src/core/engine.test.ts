@@ -99,4 +99,34 @@ describe('profile pictures', () => {
     expect(engine.avatarOf(peer)).toBeUndefined()
     expect(events).toEqual([])
   })
+  it('does not queue profiles for a blocked one-to-one contact', () => {
+    const engine = new Engine(() => {})
+    engine['state'].blocked = [peer]
+    engine['state'].conversations[conversationId] = { id: conversationId, peers: [peer], lastAt: 0 }
+    engine['queueProfile'](conversationId)
+    expect(engine['state'].outbox).toEqual([])
+  })
+  it('preserves a photo on legacy sync and applies explicitly synced photos', async () => {
+    const events: CoreEvent[] = []
+    const engine = new Engine((e) => events.push(e))
+    const ownAvatar = toBase64(jpeg)
+    engine['account'] = {
+      username: 'me',
+      displayName: 'Me',
+      avatar: ownAvatar,
+      accountId: account,
+      deviceId: device,
+      token: '',
+    }
+    engine['store'] = { putJson: async () => {} } as unknown as Engine['store']
+    engine['state'].conversations[conversationId] = { id: conversationId, peers: [], self: true, lastAt: 0 }
+    const encode = (sync: unknown) => new TextEncoder().encode(JSON.stringify(sync))
+    await engine['applyDeviceSync'](conversationId, encode({}))
+    expect(engine['account']?.avatar).toBe(ownAvatar)
+    await engine['applyDeviceSync'](conversationId, encode({ avatar: null, avatars: { [peer]: toBase64(jpeg) } }))
+    expect(engine['account']?.avatar).toBeUndefined()
+    expect(engine.avatarOf(peer)).toBe(toBase64(jpeg))
+    expect(events).toContainEqual({ type: 'avatar', account })
+    expect(events).toContainEqual({ type: 'avatar', account: peer })
+  })
 })

@@ -62,8 +62,10 @@ export function memberDevicePlan(
 /** State shared between an account's devices over their self conversation. */
 export type DeviceSync = {
   displayName?: string
-  /** This account's profile picture, base64 JPEG; absent when it has none. */
-  avatar?: string
+  /** This account's profile picture, base64 JPEG; null means none. */
+  avatar?: string | null
+  /** Contact account ids to validated base64 JPEGs. */
+  avatars?: Record<string, string>
   /** Account id → display name. */
   names: Record<string, string>
   /** Account id → username number. */
@@ -90,6 +92,30 @@ function validAvatar(b64: string): string | undefined {
   }
 }
 
+/** Keeps avatar-only device sync messages below the MLS payload limit. */
+export function avatarSyncChunks(
+  avatars: Record<string, string>,
+  maxBytes = 48 * 1024,
+): Record<string, string>[] {
+  const chunks: Record<string, string>[] = []
+  let chunk: Record<string, string> = {}
+  const size = (items: Record<string, string>) =>
+    new TextEncoder().encode(JSON.stringify({ names: {}, usernames: {}, conversations: {}, avatars: items })).byteLength
+  for (const [account, avatar] of Object.entries(avatars)) {
+    if (!/^[0-9a-f]{32}$/.test(account) || !validAvatar(avatar)) continue
+    const next = { ...chunk, [account]: avatar }
+    if (size(next) > maxBytes && Object.keys(chunk).length > 0) {
+      chunks.push(chunk)
+      chunk = { [account]: avatar }
+    } else {
+      chunk = next
+    }
+    if (size(chunk) > maxBytes) chunk = {}
+  }
+  if (Object.keys(chunk).length > 0) chunks.push(chunk)
+  return chunks
+}
+
 /** Parses a `DeviceSync` from another device, dropping anything malformed. */
 export function parseDeviceSync(bytes: Uint8Array): DeviceSync | undefined {
   let raw: unknown
@@ -109,9 +135,15 @@ export function parseDeviceSync(bytes: Uint8Array): DeviceSync | undefined {
       admins: Array.isArray(m.admins) ? m.admins.filter((a): a is string => typeof a === 'string' && /^[0-9a-f]{32}$/.test(a)) : undefined,
     }
   }
-  return {
+  const avatars: Record<string, string> = {}
+  for (const [account, avatar] of Object.entries(typeof r.avatars === 'object' && r.avatars ? r.avatars : {})) {
+    if (/^[0-9a-f]{32}$/.test(account) && typeof avatar === 'string') {
+      const valid = validAvatar(avatar)
+      if (valid) avatars[account] = valid
+    }
+  }
+  const sync: DeviceSync = {
     displayName: typeof r.displayName === 'string' ? r.displayName.slice(0, 64) : undefined,
-    avatar: typeof r.avatar === 'string' ? validAvatar(r.avatar) : undefined,
     names: strings(r.names),
     usernames: strings(r.usernames),
     conversations,
@@ -119,4 +151,8 @@ export function parseDeviceSync(bytes: Uint8Array): DeviceSync | undefined {
       ? r.blocked.filter((a): a is string => typeof a === 'string' && /^[0-9a-f]{32}$/.test(a))
       : undefined,
   }
+  if (r.avatar === null) sync.avatar = null
+  else if (typeof r.avatar === 'string') sync.avatar = validAvatar(r.avatar)
+  if (Object.keys(avatars).length > 0) sync.avatars = avatars
+  return sync
 }

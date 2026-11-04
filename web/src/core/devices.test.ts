@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { deviceHex, linkText, memberDevicePlan, parseDeviceSync, parseLinkCode } from './devices'
+import { avatarSyncChunks, deviceHex, linkText, memberDevicePlan, parseDeviceSync, parseLinkCode } from './devices'
 
 const code = 'AAECAwQFBgcICQoLDA0ODw'
 
@@ -79,5 +79,33 @@ describe('parseDeviceSync', () => {
     expect(parseDeviceSync(encode({ avatar: png }))?.avatar).toBeUndefined()
     expect(parseDeviceSync(encode({ avatar: 'not base64!' }))?.avatar).toBeUndefined()
     expect(parseDeviceSync(encode({ avatar: 7 }))?.avatar).toBeUndefined()
+  })
+  it('distinguishes an omitted avatar from an explicit removal', () => {
+    expect(parseDeviceSync(encode({}))?.avatar).toBeUndefined()
+    expect(parseDeviceSync(encode({ avatar: null }))?.avatar).toBeNull()
+  })
+  it('accepts only validated contact photos', () => {
+    const account = 'ab'.repeat(16)
+    const jpeg = btoa(String.fromCharCode(0xff, 0xd8, 0xff, 0xe0, 0, 0x10))
+    expect(parseDeviceSync(encode({ avatars: { [account]: jpeg, 'not an account': jpeg, ['cd'.repeat(16)]: 'bad' } }))?.avatars).toEqual({
+      [account]: jpeg,
+    })
+  })
+  it('splits contact photos into bounded sync payloads', () => {
+    const jpeg = btoa(String.fromCharCode(0xff, 0xd8, 0xff, 0xe0, 0, 0x10))
+    const first = 'ab'.repeat(16)
+    const second = 'cd'.repeat(16)
+    const avatars = { [first]: jpeg, [second]: jpeg }
+    const maxBytes = new TextEncoder().encode(
+      JSON.stringify({ names: {}, usernames: {}, conversations: {}, avatars: { [first]: jpeg } }),
+    ).byteLength
+    const chunks = avatarSyncChunks(avatars, maxBytes)
+    expect(chunks).toHaveLength(2)
+    for (const chunk of chunks) {
+      expect(Object.keys(chunk)).toHaveLength(1)
+      expect(
+        new TextEncoder().encode(JSON.stringify({ names: {}, usernames: {}, conversations: {}, avatars: chunk })).byteLength,
+      ).toBeLessThanOrEqual(maxBytes)
+    }
   })
 })

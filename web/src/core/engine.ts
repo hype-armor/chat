@@ -40,7 +40,15 @@ import {
   toHex,
   trySplitIdentity,
 } from './ids'
-import { type DeviceSync, deviceHex, linkText, memberDevicePlan, parseDeviceSync, parseLinkCode } from './devices'
+import {
+  type DeviceSync,
+  avatarSyncChunks,
+  deviceHex,
+  linkText,
+  memberDevicePlan,
+  parseDeviceSync,
+  parseLinkCode,
+} from './devices'
 import { applyReceipt, splitIds } from './receipts'
 import {
   MAX_ATTACHMENT_BYTES,
@@ -947,7 +955,7 @@ export class Engine {
   private queueDeviceSync(selfId: string) {
     const sync: DeviceSync = {
       displayName: this.account!.displayName,
-      avatar: this.account!.avatar,
+      avatar: this.account!.avatar ?? null,
       names: this.state.names,
       usernames: this.state.usernames,
       blocked: this.state.blocked,
@@ -957,19 +965,25 @@ export class Engine {
           .map((c) => [c.id, { name: c.name, admins: c.admins }]),
       ),
     }
-    const messageId = randomId()
-    const envelope = this.core!.sendDeviceSync(
-      fromHex(selfId),
-      new TextEncoder().encode(JSON.stringify(sync)),
-      Date.now(),
-      messageId,
-    )
-    this.state.outbox.push({
-      messageId: toHex(messageId),
-      conversationId: selfId,
-      envelope: toBase64(envelope),
-      recipients: this.recipients(selfId),
-    })
+    const queue = (state: DeviceSync) => {
+      const messageId = randomId()
+      const envelope = this.core!.sendDeviceSync(
+        fromHex(selfId),
+        new TextEncoder().encode(JSON.stringify(state)),
+        Date.now(),
+        messageId,
+      )
+      this.state.outbox.push({
+        messageId: toHex(messageId),
+        conversationId: selfId,
+        envelope: toBase64(envelope),
+        recipients: this.recipients(selfId),
+      })
+    }
+    queue(sync)
+    for (const avatars of avatarSyncChunks(this.state.avatars)) {
+      queue({ names: {}, usernames: {}, conversations: {}, avatars })
+    }
   }
 
   /** Applies a `DeviceSync` from another of this account's devices. */
@@ -983,11 +997,17 @@ export class Engine {
       this.account.displayName = sync.displayName
       await this.store.putJson('account', this.account)
     }
-    // The photo is always in a sync: no `avatar` means this account has none.
-    if (this.account && sync.avatar !== this.account.avatar) {
-      this.account.avatar = sync.avatar
+    // Older linked devices omitted `avatar`; only null explicitly removes it.
+    if (this.account && sync.avatar !== undefined && (sync.avatar ?? undefined) !== this.account.avatar) {
+      this.account.avatar = sync.avatar ?? undefined
       await this.store.putJson('account', this.account)
       this.emit({ type: 'avatar', account: this.myAccount() })
+    }
+    for (const [account, avatar] of Object.entries(sync.avatars ?? {})) {
+      if (avatar !== this.state.avatars[account]) {
+        this.state.avatars[account] = avatar
+        this.emit({ type: 'avatar', account })
+      }
     }
     if (sync.blocked) this.state.blocked = sync.blocked
     this.state.names = { ...sync.names, ...this.state.names }
@@ -3007,6 +3027,8 @@ export class Engine {
   }
 
   private queueProfile(conversationId: string) {
+    const conv = this.state.conversations[conversationId]
+    if (!conv || (conv.peers.length === 1 && !isGroupView(conv) && this.state.blocked.includes(conv.peers[0]))) return
     if (!this.account!.displayName) return // linked device still waiting for its name
     const conversation = this.state.conversations[conversationId]
     if (
