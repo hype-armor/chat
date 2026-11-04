@@ -1,5 +1,9 @@
+//! Errors returned to clients. Detail stays in the log, not the body: a
+//! rejection from the `Json` extractor would otherwise quote the request's
+//! malformed part and name the expected fields (API schema disclosure).
 use axum::{
     Json,
+    extract::rejection::JsonRejection,
     http::StatusCode,
     response::{IntoResponse, Response},
 };
@@ -53,6 +57,13 @@ impl ApiError {
 impl From<sqlx::Error> for ApiError {
     fn from(e: sqlx::Error) -> Self {
         Self::Internal(e.into())
+    }
+}
+
+impl From<JsonRejection> for ApiError {
+    fn from(e: JsonRejection) -> Self {
+        tracing::debug!(error = %e, "malformed JSON request");
+        Self::BadRequest("invalid request body")
     }
 }
 

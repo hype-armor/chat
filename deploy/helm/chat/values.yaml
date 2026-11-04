@@ -142,6 +142,9 @@ turn:
 ingress:
   enabled: true
   className: ""
+  # Send Strict-Transport-Security (one year, no subdomains) at Traefik via a
+  # Middleware. Turn off if the edge is not Traefik.
+  hsts: true
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt
   tls:

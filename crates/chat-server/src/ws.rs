@@ -12,7 +12,7 @@ use axum::{
         State, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
-    response::Response,
+    response::{IntoResponse, Response},
 };
 use chat_proto::v1::{
     AuthResult, ClientFrame, ContentType, DevicesChanged, Error, Pong, SendEnvelope, SendResult,
@@ -20,6 +20,7 @@ use chat_proto::v1::{
 };
 use prost::Message as _;
 use sqlx::PgPool;
+use std::net::IpAddr;
 use tokio::{sync::mpsc, time};
 use uuid::Uuid;
 
@@ -39,10 +40,26 @@ const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
 /// Keeps proxies (Traefik idle timeout) from closing quiet connections.
 const PING_INTERVAL: Duration = Duration::from_secs(30);
 
-pub async fn upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
+pub async fn upgrade(
+    limits::ClientIp(ip): limits::ClientIp,
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> Response {
+    // A failed `Authenticate` frame means a token lookup in the database;
+    // per client IP below `ws_auth_failures_per_minute`, refused at the
+    // upgrade itself (memory: per-replica is enough, as for sends).
+    if !state
+        .ws_auth
+        .allow(&ip, state.limits.ws_auth_failures_per_minute)
+    {
+        return ApiError::TooManyRequests(
+            "too many failed sign-ins from your address; try again later",
+        )
+        .into_response();
+    }
     ws.max_message_size(MAX_FRAME_BYTES)
         .on_upgrade(move |socket| async move {
-            if let Err(e) = Session::new(socket, state).run().await {
+            if let Err(e) = Session::new(socket, state, ip).run().await {
                 tracing::debug!(error = %e, "websocket session ended");
             }
         })
@@ -60,16 +77,19 @@ struct Authed {
 struct Session {
     socket: WebSocket,
     state: AppState,
+    /// The client address, for the failed sign-in limit.
+    peer: Option<IpAddr>,
     authed: Option<Authed>,
 }
 
 type SessionResult = Result<(), axum::Error>;
 
 impl Session {
-    fn new(socket: WebSocket, state: AppState) -> Self {
+    fn new(socket: WebSocket, state: AppState, peer: Option<IpAddr>) -> Self {
         Self {
             socket,
             state,
+            peer,
             authed: None,
         }
     }
@@ -168,9 +188,14 @@ impl Session {
         db: &PgPool,
         token: &str,
     ) -> Result<Option<server_frame::Body>, ApiError> {
-        let device = device_for_token(db, token)
-            .await?
-            .ok_or(ApiError::Unauthorized("invalid token"))?;
+        let device = match device_for_token(db, token).await {
+            Ok(Some(device)) => device,
+            Ok(None) => {
+                self.state.ws_auth.record(self.peer);
+                return Err(ApiError::Unauthorized("invalid token"));
+            }
+            Err(e) => return Err(e),
+        };
         let key_packages = keys::available(db, device).await?;
         let (registration, wake) = self.state.hub.register(device);
         self.authed = Some(Authed {
