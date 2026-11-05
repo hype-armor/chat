@@ -240,6 +240,11 @@ form {
   display: none;
 }
 
+.chat-layout.with-banner {
+  top: calc(var(--app-top, 0px) + var(--update-banner-height, 0px) + var(--live-sharing-height, 0px));
+  height: calc(var(--app-height, 100dvh) - var(--update-banner-height, 0px) - var(--live-sharing-height, 0px));
+}
+
 .sidebar {
   display: flex;
   flex-direction: column;
@@ -1199,6 +1204,11 @@ button.link.danger {
 
 /* App-wide live-location indicators (FR-LOC-6). */
 .live-sharing-indicators {
+  position: fixed;
+  top: calc(var(--app-top, 0px) + var(--update-banner-height, 0px));
+  left: 0;
+  right: 0;
+  z-index: 5;
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
@@ -1518,19 +1528,6 @@ button.conversation-title {
 }
 
 @media (max-width: 40rem) {
-  .conversation-bar {
-    flex-wrap: wrap;
-  }
-
-  .title-row,
-  .header-actions {
-    flex-basis: 100%;
-  }
-
-  .header-actions {
-    flex-wrap: wrap;
-  }
-
   .live-indicator {
     white-space: normal;
   }

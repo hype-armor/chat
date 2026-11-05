@@ -23,7 +23,7 @@ test("a removed member's late message reaches nobody", async ({ browser, browser
   // Ann removes him. (WebKit can't reload an offline page in Playwright.)
   await ben.context().setOffline(true)
   await ben.reload()
-  await expect(ben.getByRole('status')).toHaveText(/Offline|Connecting…/)
+  await expect(ben.getByRole('status', { name: 'Connection status' })).toHaveText(/Offline|Connecting…/)
   await ben.getByRole('button', { name: /Club/ }).click()
   await ben.getByLabel('Message', { exact: true }).fill('Am I still here?')
   await ben.getByRole('button', { name: 'Send' }).click()

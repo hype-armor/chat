@@ -29,7 +29,7 @@ import {
   reconnectNotifications,
   refreshSubscription,
 } from '../notifications'
-import { useVisualViewport } from './useVisualViewport'
+import { useBannerHeight, useVisualViewport } from './useVisualViewport'
 import { isIosDevice } from '../pwa'
 import { filterConversations, highlightTitle, normalizeSearch, searchUsername } from './conversationSearch'
 
@@ -96,6 +96,8 @@ export function Chat({
   useVisualViewport()
   const [selected, setSelected] = useState<string>()
   const [panel, setPanel] = useState<'chats' | 'settings' | 'chat' | 'group'>('chats')
+  const hasLiveSharing = view.liveSharing.length > 0
+  const liveSharingIndicators = useBannerHeight<HTMLDivElement>('--live-sharing-height', hasLiveSharing)
   const sidebar = useRef<HTMLElement>(null)
   const setup = useSetup()
   useEffect(() => {
@@ -129,7 +131,7 @@ export function Chat({
     <>
       <LiveSharing core={core} sharing={view.liveSharing} />
       {view.liveSharing.length > 0 && (
-        <div className="live-sharing-indicators">
+        <div className="live-sharing-indicators" ref={liveSharingIndicators}>
           {view.liveSharing.map((share) => (
             <LiveIndicator key={share.conversationId} core={core} share={share} />
           ))}
@@ -139,7 +141,7 @@ export function Chat({
       <GroupCallScreen calls={groupCalls} />
       <div
         hidden={showDiagnostics}
-        className={`chat-layout ${conversation ? 'has-selection' : ''}`}
+        className={`chat-layout ${conversation ? 'has-selection' : ''} ${hasLiveSharing ? 'with-banner' : ''}`}
       >
         <aside className="sidebar" ref={sidebar}>
           <header className="bar me">
@@ -165,7 +167,11 @@ export function Chat({
               ⚙
             </button>
           </header>
-          <div className={view.connection === 'online' ? 'visually-hidden' : 'connection'} role="status">
+          <div
+            className={view.connection === 'online' ? 'visually-hidden' : 'connection'}
+            role="status"
+            aria-label="Connection status"
+          >
             {view.connection === 'online' ? 'Connected' : view.connection === 'connecting' ? 'Connecting…' : 'Offline'}
           </div>
           {view.alerts.map((a) => (
