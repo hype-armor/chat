@@ -8,6 +8,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Prefer rustup proxies when installed. They honor rust-toolchain.toml, while
+# /usr/bin/cargo may otherwise select a system Rust without the WASM target.
+if [[ -n "${HOME:-}" && -x "$HOME/.cargo/bin/rustup" ]]; then
+  export PATH="$HOME/.cargo/bin:$PATH"
+fi
+
 profile="${1:-release}"
 cargo build --profile "$profile" --target wasm32-unknown-unknown -p chat-core --features wasm
 wasm-bindgen --target web --out-dir web/src/core/pkg \

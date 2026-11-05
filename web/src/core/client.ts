@@ -185,7 +185,7 @@ export class CoreClient {
   }
 
   /** Starts sharing a live location in one conversation (FR-LOC-2). */
-  async startLive(conversationId: string, durationMs: number, location: LocationInfo) {
+  async startLive(conversationId: string, durationMs: number | null, location: LocationInfo) {
     expect(await this.call({ type: 'startLive', conversationId, durationMs, location }), 'ok')
   }
 
@@ -213,6 +213,10 @@ export class CoreClient {
 
   async liveUpdate(location: LocationInfo) {
     expect(await this.call({ type: 'liveUpdate', location }), 'ok')
+  }
+
+  async pauseLive() {
+    expect(await this.call({ type: 'pauseLive' }), 'ok')
   }
 
   async stopLive(conversationId: string) {

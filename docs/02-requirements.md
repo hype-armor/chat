@@ -75,7 +75,7 @@ Items marked **[ASSUMPTION]** need stakeholder confirmation (see doc 09).
 | ID | Requirement | Pri |
 |----|-------------|-----|
 | FR-LOC-1 | Share current location once, as a message. | M |
-| FR-LOC-2 | Share live location for a chosen duration (15 min / 1 h / 8 h); stop any time. | M |
+| FR-LOC-2 | Share live location for 15 min / 1 h / 8 h or until stopped; stop any time. | M |
 | FR-LOC-3 | Live location visible to all members of the conversation it was shared in, and only them. | M |
 | FR-LOC-4 | Location data is E2EE; the server never sees coordinates. | M |
 | FR-LOC-5 | Map rendering must not leak viewed coordinates to a third party without consent (see doc 06). | S |

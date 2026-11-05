@@ -277,7 +277,7 @@ impl From<Location> for LocationView {
     }
 }
 
-/// A `LiveLocation` message body; `location` is absent when stopping.
+/// A `LiveLocation` body; until-stopped sessions renew their 8-hour lease.
 #[wasm_bindgen]
 #[derive(Clone)]
 pub struct LiveLocationView {
@@ -288,6 +288,8 @@ pub struct LiveLocationView {
     #[wasm_bindgen(getter_with_clone)]
     pub location: Option<LocationView>,
     pub stopped: bool,
+    #[wasm_bindgen(js_name = untilStopped)]
+    pub until_stopped: bool,
 }
 
 /// A `Location` message body.
@@ -792,8 +794,8 @@ impl CoreClient {
         )
     }
 
-    /// A live-location start or update (`point` true) or stop. Returns the
-    /// encoded `Envelope`.
+    /// A live-location start or update (`point` true) or stop. Until-stopped
+    /// sessions renew their 8-hour lease. Returns the encoded `Envelope`.
     #[wasm_bindgen(js_name = sendLiveLocation)]
     #[allow(clippy::too_many_arguments)]
     pub fn send_live_location(
@@ -801,6 +803,7 @@ impl CoreClient {
         conversation_id: &[u8],
         session_id: Vec<u8>,
         expires_at_ms: f64,
+        until_stopped: bool,
         point: bool,
         latitude: f64,
         longitude: f64,
@@ -821,6 +824,7 @@ impl CoreClient {
                 session_id,
                 expires_at_ms: expires_at_ms as u64,
                 stopped: location.is_none(),
+                until_stopped,
                 location,
             }),
             message_id,
@@ -957,6 +961,7 @@ impl CoreClient {
                             expires_at_ms: l.expires_at_ms as f64,
                             location: l.location.map(Into::into),
                             stopped: l.stopped,
+                            until_stopped: l.until_stopped,
                         })
                     }
                     Some(content::Body::Receipt(r)) => {

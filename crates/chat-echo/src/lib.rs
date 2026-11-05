@@ -398,6 +398,7 @@ mod tests {
                 expires_at_ms: 900_000,
                 location: lat.map(point),
                 stopped: lat.is_none(),
+                until_stopped: true,
             })
         };
         let mut session = None;
@@ -414,6 +415,7 @@ mod tests {
             assert_eq!(*session.get_or_insert(l.session_id.clone()), l.session_id);
             assert_eq!(l.location.as_ref().map(|p| p.latitude), lat);
             assert_eq!(l.stopped, lat.is_none());
+            assert!(l.until_stopped);
         }
     }
 

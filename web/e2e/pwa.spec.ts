@@ -222,28 +222,23 @@ test.describe('setup reminders and Settings', () => {
       (root) => root.style.getPropertyValue('--safe-bottom'),
     )).toBe('')
 
-    // A wrapped live-location banner must leave room for the whole conversation.
+    // The live-location indicator sits in the conversation header; the layout stays full height.
     await page.context().grantPermissions(['geolocation'])
     await page.context().setGeolocation({ latitude: 48.8584, longitude: 2.2945 })
     await page.getByRole('button', { name: 'Add attachment' }).click()
     await page.getByRole('menuitem', { name: 'Location', exact: true }).click()
     await page.getByRole('dialog', { name: 'Share this location?' }).getByRole('button', { name: '15 min' }).click()
-    const banner = page.getByRole('status', { name: 'Sharing live location' })
-    await expect(banner).toBeVisible()
-    const bannerHeight = (await banner.boundingBox())!.height
-    expect(bannerHeight).toBeGreaterThan(44)
+    const indicator = page.getByRole('status', { name: 'Sharing live location' })
+    await expect(indicator).toBeVisible()
+    await expect(page.locator('.live-banner')).toHaveCount(0)
     await input.fill('Typing while sharing live location')
     await page.getByRole('button', { name: 'Send', exact: true }).click()
     await expect(messages(page).last()).toContainText('Typing while sharing live location')
     await changeViewport(500, 344, 'resize')
-    await expectConversationFits(344, 500, bannerHeight)
-    await expect.poll(async () => (await banner.boundingBox())!.y).toBe(344)
-    await banner.getByRole('button', { name: 'Stop' }).click()
-    await expect(banner).toBeHidden()
+    await expectConversationFits(344, 500)
+    await indicator.getByRole('button', { name: 'Stop' }).click()
+    await expect(indicator).toBeHidden()
     await input.focus()
     await expectConversationFits(344, 500)
-    await expect.poll(() => page.locator('html').evaluate(
-      (root) => root.style.getPropertyValue('--live-banner-height'),
-    )).toBe('')
   })
 })

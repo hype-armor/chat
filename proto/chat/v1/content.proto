@@ -96,11 +96,14 @@ message Location {
 message LiveLocation {
   // 16 random bytes naming the session.
   bytes session_id = 1;
-  // When sharing ends on its own (sender's clock).
+  // When sharing ends on its own, or its renewable lease ends, on sender's clock.
   uint64 expires_at_ms = 2;
   // Absent in a stop message.
   Location location = 3;
   bool stopped = 4;
+  // Until-stopped shares renew this lease on each update. A quiet session
+  // expires after 8 hours.
+  bool until_stopped = 5;
 }
 
 // Call signalling (FR-CALL-1, ADR-0028), end-to-end encrypted like any
