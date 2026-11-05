@@ -117,6 +117,7 @@ export function Chat({
   )
   calls.relayOnly = view.relayCalls
   const conversation = view.conversations.find((c) => c.id === selected)
+  const share = view.liveSharing.find((s) => s.conversationId === conversation?.id)
   const select = (id: string) => {
     setPanel('chats')
     setSelected(id)
@@ -130,6 +131,11 @@ export function Chat({
       <LiveSharing core={core} sharing={view.liveSharing} />
       <CallScreen calls={calls} />
       <GroupCallScreen calls={groupCalls} />
+      {showDiagnostics && share && (
+        <div className="diagnostics-live-sharing">
+          <LiveIndicator core={core} share={share} />
+        </div>
+      )}
       <div
         hidden={showDiagnostics}
         className={`chat-layout ${conversation ? 'has-selection' : ''}`}
@@ -258,7 +264,7 @@ export function Chat({
             verification={conversation.verification}
             blocked={conversation.blocked ?? false}
             request={conversation.request}
-            share={view.liveSharing.find((s) => s.conversationId === conversation.id)}
+            share={share}
             onBack={() => setSelected(undefined)}
           />
         ) : (

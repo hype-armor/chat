@@ -1211,6 +1211,12 @@ button.link.danger {
   white-space: nowrap;
 }
 
+.diagnostics-live-sharing {
+  display: flex;
+  justify-content: center;
+  padding: 0.75rem;
+}
+
 .live-dot {
   margin-inline-start: 0.25rem;
 }
