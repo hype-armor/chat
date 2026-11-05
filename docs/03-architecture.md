@@ -117,8 +117,10 @@ flowchart LR
 2. Client sends envelope to Gateway → Delivery Service.
 3. Delivery Service durably stores one queue entry per recipient device, acks
    sender.
-4. For each recipient device: if connected, push over its live connection;
-   otherwise send a Web Push message.
+4. For each recipient device, wake every live WebSocket and send a
+   content-free Web Push for each non-silent envelope. A mobile PWA can be
+   suspended while its WebSocket still appears open. Its service worker must
+   display every push, including on Safari.
 5. Recipient fetches, decrypts, acks; Delivery Service deletes its entry.
 
 ### 5.2 Send media
