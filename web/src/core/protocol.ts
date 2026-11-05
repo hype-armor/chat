@@ -52,7 +52,7 @@ export type AppView =
       backup?: { lastAt?: number }
       media: MediaSettings
       /** This device's live-location sessions (FR-LOC-6 indicator). */
-      liveSharing: { conversationId: string; title: string; expiresAt: number }[]
+      liveSharing: { conversationId: string; title: string; expiresAt: number; untilStopped: boolean }[]
     }
 
 /** When attachments download by themselves (FR-MED-6, ADR-0025). */
@@ -145,6 +145,10 @@ export type LocationInfo = {
 export type LiveInfo = {
   sessionId: string
   expiresAt: number
+  /** This session continues until stopped, with an 8-hour inactivity lease. */
+  untilStopped?: boolean
+  /** True only when the sender sent an explicit stop. */
+  stopped?: boolean
   /** Latest point; gone once the session ends. */
   latest?: LocationInfo & { at: number }
   ended: boolean
@@ -224,8 +228,9 @@ export type CoreRequest =
   | { type: 'messages'; conversationId: string }
   | { type: 'sendText'; conversationId: string; text: string }
   | { type: 'sendLocation'; conversationId: string; location: LocationInfo }
-  | { type: 'startLive'; conversationId: string; durationMs: number; location: LocationInfo }
+  | { type: 'startLive'; conversationId: string; durationMs: number | null; location: LocationInfo }
   | { type: 'liveUpdate'; location: LocationInfo }
+  | { type: 'pauseLive' }
   | { type: 'stopLive'; conversationId: string }
   | { type: 'iceServers' }
   | { type: 'callSignal'; conversationId: string; signal: CallSignal }
