@@ -318,11 +318,10 @@ async fn send_envelope(
         state.hub.devices_changed(removed);
         let silent = send.silent;
         for device in recipients.iter().chain(&welcome_recipients) {
-            if !state.hub.wake(device)
-                && !silent
-                && let Some(push) = state.push.clone()
-            {
-                // Offline: a content-free Web Push makes it reconnect.
+            state.hub.wake(device);
+            if !silent && let Some(push) = state.push.clone() {
+                // A backgrounded iOS PWA can keep its WebSocket open while
+                // JavaScript is suspended. Push even when a session exists.
                 let (db, device) = (db.clone(), *device);
                 tokio::spawn(async move { push.notify(&db, device).await });
             }
