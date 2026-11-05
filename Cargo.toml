@@ -8,8 +8,19 @@ license = "AGPL-3.0-or-later"
 repository = "https://github.com/hype-armor/chat"
 rust-version = "1.88"
 
+# Keep local and test build artifacts from consuming excessive disk space.
+[profile.dev]
+debug = 0
+incremental = false
+
+[profile.test]
+debug = 0
+incremental = false
+
 [profile.release]
-lto = true
+# LTO stays off until the first production release. Set `lto = true`
+# again before that release.
+lto = false
 codegen-units = 1
 strip = true
 
