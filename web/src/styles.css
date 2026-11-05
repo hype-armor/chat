@@ -1509,6 +1509,25 @@ button.conversation-title {
   white-space: nowrap;
 }
 
+@media (max-width: 40rem) {
+  .conversation-bar {
+    flex-wrap: wrap;
+  }
+
+  .title-row,
+  .header-actions {
+    flex-basis: 100%;
+  }
+
+  .header-actions {
+    flex-wrap: wrap;
+  }
+
+  .live-indicator {
+    white-space: normal;
+  }
+}
+
 .menu {
   position: relative;
 }
