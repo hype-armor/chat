@@ -7,12 +7,12 @@
 | Mode | Behaviour |
 |------|-----------|
 | One-shot | Single location message `{lat, lon, accuracy, timestamp, optional place label}` |
-| Live | Sender's device publishes updates for a chosen duration; recipients see a moving pin |
+| Live | Sender's device publishes updates for 15 min, 1 h, 8 h or until stopped; recipients see a moving pin |
 
 ## 2. Live location design
 
-- A live session is started by an E2EE **control message**
-  `{session_id, expires_at, update_interval}` in the conversation.
+- A live session is started by an E2EE message with `{session_id,
+  expires_at, until_stopped}`. Later E2EE messages move the point.
 - Updates are ordinary E2EE application messages, delivered like any
   other: **not** coalesced or dropped by the server (ADR-0027). Dropping
   MLS messages leaves ratchet gaps that can stop a sender's later messages
@@ -20,17 +20,30 @@
   of movement, with a 60 s heartbeat), never while offline, and without
   Web Push. A phone coming back online catches up and discards the stale
   points.
-- Clients keep only the latest point (no trail) and
-  discard data when the session ends.
-- Stop = control message `{session_id, stopped}`; also auto-stop at
-  expiry, on leaving the group, or on removal from the group.
+- Clients keep only the latest point (no trail) and discard it when the
+  session ends.
+- Timed sessions expire at their selected end. An until-stopped session
+  renews its 8-hour expiry on every update. Recipients discard its point
+  after 8 hours without an update.
+- The sender keeps an until-stopped session across reloads. It resumes when
+  the app opens and obtains a location fix. Resuming keeps the session id
+  and updates its original card, even after its lease expired. An explicit
+  stop stays final. Each share posts only 1 card in the conversation.
+- The contact details view also shows active live-location cards above
+  safety-number verification. Clicking the contact name or photo opens it.
+  The cards update in place and disappear when sharing stops or expires.
+- Stop = control message `{session_id, stopped}`. Sessions also expire at
+  their end, or when the sender leaves or is removed from the group.
 - Update cadence: 10 s floor, 20 m movement threshold, 60 s heartbeat
-  (ADR-0027).
+  (ADR-0027). An 8-hour session sends at most 2,880 small updates; an
+  until-stopped session can send more over time.
 - **Web limitation:** browsers stop `watchPosition` when the tab/PWA is in
   the background or the screen is off. Live sharing from the web only
-  updates while the app is open; the UI must say so ("Sharing pauses when
-  you leave the app"), and recipients see a "last updated" time. Continuous
-  background sharing arrives with native wrappers.
+  updates while the app is visible; the UI must say so ("Sharing pauses
+  when the app is closed or in the background"), and recipients see a
+  "last updated" time. For an until-stopped share, recipients remove the
+  last point after 8 hours without an update. Continuous background sharing
+  arrives with native wrappers.
 
 ## 3. Privacy
 
