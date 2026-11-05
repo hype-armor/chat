@@ -5,10 +5,14 @@
 // generic notification.
 
 import type { CoreClient } from './core/client'
+import { isInstalled, isIosDevice } from './pwa'
 
-export type NotificationState = 'unsupported' | 'default' | 'granted' | 'denied'
+export type NotificationState = 'unsupported' | 'install-required' | 'default' | 'granted' | 'denied'
 
 export function notificationState(): NotificationState {
+  if (isIosDevice(navigator.userAgent, navigator.platform, navigator.maxTouchPoints) && !isInstalled()) {
+    return 'install-required'
+  }
   if (!('Notification' in window) || !('PushManager' in window) || !('serviceWorker' in navigator)) {
     return 'unsupported'
   }
@@ -21,30 +25,60 @@ export function base64UrlToBytes(value: string): Uint8Array<ArrayBuffer> {
   return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
 }
 
-/** Subscribes (or refreshes the subscription) and registers it with the server. */
-async function subscribe(core: CoreClient) {
-  const registration = await navigator.serviceWorker.ready
-  const subscription =
-    (await registration.pushManager.getSubscription()) ??
-    (await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: base64UrlToBytes(await core.pushKey()),
-    }))
-  await core.enablePush(subscription.toJSON())
+export type PushSetup = {
+  registration: ServiceWorkerRegistration
+  applicationServerKey: Uint8Array<ArrayBuffer>
 }
 
-/** Asks for permission (call from a click) and subscribes if granted. */
-export async function enableNotifications(core: CoreClient): Promise<NotificationState> {
+/** Load browser and server data before the user grants permission. */
+export async function preparePush(core: CoreClient): Promise<PushSetup> {
+  const current = await navigator.serviceWorker.getRegistration()
+  if (!current) throw new Error('Chat needs a service worker. Reload the installed app and try again.')
+  const [registration, key] = await Promise.all([navigator.serviceWorker.ready, core.pushKey()])
+  return { registration, applicationServerKey: base64UrlToBytes(key) }
+}
+
+/** Ask from a tap, then subscribe without another network or worker wait. */
+export async function enableNotifications(core: CoreClient, setup: PushSetup): Promise<NotificationState> {
+  const state = notificationState()
+  if (state === 'unsupported' || state === 'install-required') return state
+
   const permission = await Notification.requestPermission()
-  if (permission === 'granted') await subscribe(core)
+  if (permission === 'granted') await reconnectNotifications(core, setup)
   return permission
 }
 
-/** On start: keep an already-granted subscription registered (they rotate). */
+/** True if the subscription was made with this server's VAPID public key. */
+export function usesApplicationKey(subscription: PushSubscription, key: Uint8Array): boolean {
+  const current = subscription.options.applicationServerKey
+  if (!current) return false
+  const bytes = new Uint8Array(current)
+  return bytes.length === key.length && bytes.every((b, i) => b === key[i])
+}
+
+/**
+ * Gets a subscription that the server can push to. A subscription made with an
+ * older VAPID key is replaced: the server can't use it, and re-sending it fails.
+ */
+async function currentSubscription(setup: PushSetup): Promise<PushSubscription> {
+  const { registration, applicationServerKey } = setup
+  const existing = await registration.pushManager.getSubscription()
+  if (existing && usesApplicationKey(existing, applicationServerKey)) return existing
+  await existing?.unsubscribe()
+  return registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey })
+}
+
+/** Tap-driven: subscribes again even when permission was already granted. */
+export async function reconnectNotifications(core: CoreClient, setup: PushSetup): Promise<void> {
+  const subscription = await currentSubscription(setup)
+  await core.enablePush(subscription.toJSON())
+}
+
+/** On start: keep a granted subscription registered, without prompting. */
 export async function refreshSubscription(core: CoreClient) {
   if (notificationState() !== 'granted') return
   try {
-    await subscribe(core)
+    await reconnectNotifications(core, await preparePush(core))
   } catch (e) {
     console.warn('push subscription refresh failed', e)
   }

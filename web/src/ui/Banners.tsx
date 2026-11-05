@@ -46,7 +46,11 @@ export function useSetup() {
   }, [])
   useEffect(() => onInstallPromptChange(() => setPromptAvailable(canPromptInstall())), [])
   const installed = isInstalled()
-  const hint = installHint({ installed, promptAvailable, iosSafari: isIosSafari(navigator.userAgent) })
+  const hint = installHint({
+    installed,
+    promptAvailable,
+    iosSafari: isIosSafari(navigator.userAgent, navigator.platform, navigator.maxTouchPoints),
+  })
   const run = async (action: () => Promise<unknown>) => {
     setBusy(true)
     setError(undefined)

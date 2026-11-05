@@ -42,3 +42,4 @@ revisited; do it with a new ADR that supersedes the old one.
 | [0033](0033-map-areas-on-demand.md) | Map areas downloaded when first shared | Accepted |
 | [0034](0034-identity-binding.md) | Bind MLS identities to account and device | Accepted |
 | [0035](0035-membership-mirroring.md) | Mirror group membership changes to the server | Accepted |
+| [0036](0036-visible-web-push-for-pwas.md) | Show Web Push for suspended and active PWAs | Accepted |

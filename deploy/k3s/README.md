@@ -103,7 +103,8 @@ helm upgrade --install cnpg cnpg/cloudnative-pg -n cnpg-system --create-namespac
 
 ```sh
 kubectl create namespace chat
-# Web Push key (keep it stable: changing it invalidates subscriptions)
+# Web Push key (keep it stable: changing it invalidates subscriptions).
+# Set server.vapid.subject to a monitored mailto: address or HTTPS URL.
 kubectl -n chat create secret generic chat-vapid \
   --from-literal=private-key="$(docker run --rm ghcr.io/hype-armor/chat-server:dev generate-vapid-key | sed -n 's/^CHAT_VAPID_PRIVATE_KEY=//p')"
 kubectl apply -n chat -f deploy/k8s/postgres-cluster.yaml
