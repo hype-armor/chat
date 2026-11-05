@@ -65,9 +65,10 @@ whether a P2P call is end-to-end encrypted.
   "always relay" privacy setting (FR-CALL-9) are checklist item 2.
 - Each signal is a queued message: a device offline during a call gets
   the offer and the hang-up later and only logs a missed call.
-- Web Push coalesces wake-ups per device (30 s), so a call shortly after
-  another message may not wake a sleeping phone. Revisit with a call-
-  specific push if missed calls show up in metrics (item 8).
+- Web Push displays generic activity notices and coalesces them per device
+  for 30 s. A call soon after another message may not create a second alert,
+  but its encrypted offer stays queued. Revisit with a call-specific push if
+  missed calls show up in metrics (item 8).
 - The worker's call log is in memory: reloading the page mid-call loses
   that call's notice on this device.
 

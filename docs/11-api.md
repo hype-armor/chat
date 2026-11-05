@@ -138,10 +138,10 @@ deliveries have `request_id = 0`.
      days. Its recipients become members.
    - A commit that adds members sets `welcome` and `welcome_recipients`; the
      server accepts commit and welcome in one transaction.
-   - `silent: true` sends no Web Push to offline recipients. The web client
-     uses it for delivery and read receipts, which are ordinary encrypted
-     MLS messages to the conversation; the server learns only that the
-     envelope is silent.
+   - `silent: true` sends no Web Push to any recipient. The web client uses
+     it for delivery and read receipts, which are ordinary encrypted MLS
+     messages to the conversation; the server learns only that the envelope
+     is silent.
    - Limits: ciphertext ≤ 128 KiB, ids ≤ 64 bytes, ≤ 500 recipients, frame
      ≤ 256 KiB, and 100 MiB of envelopes per device per day (see *Abuse
      limits*). Attachments go to blob storage (Phase 2), not the socket.
@@ -169,13 +169,18 @@ it is now, under the same message id. A request that gets no answer within
 | `POST /v1/push/subscription` | ✓ | `PushSubscription.toJSON()` (`{endpoint, keys: {p256dh, auth}}`, HTTPS endpoint) → `204` |
 | `POST /v1/push/unsubscribe` | ✓ | → `204` |
 
-When an envelope is queued for a device with no open WebSocket, the server
-sends that device's push service an **empty** push (no payload, VAPID-signed,
-TTL 1 day, urgency high), at most once per 30 s per device. The service
-worker shows a generic "New message" notification; opening the app connects
-and fetches the queue. A `404`/`410` from the push service deletes the
-subscription. Configure `CHAT_VAPID_PRIVATE_KEY` (from
-`chat-server generate-vapid-key`) and `CHAT_VAPID_SUBJECT`.
+For each non-silent queued envelope, the server wakes every live WebSocket
+and also sends an **empty** push (no payload, VAPID-signed, TTL 1 day,
+urgency high). It does this even when a socket appears open, because iOS can
+suspend a PWA while preserving its socket. Pushes are coalesced to at most 1
+per 30 s per device. The service worker displays a generic notification for
+every push, as Safari requires. Opening it connects to the app, which fetches
+the queue. A `404`/`410` from the push service deletes the subscription.
+Configure a stable `CHAT_VAPID_PRIVATE_KEY` (from
+`chat-server generate-vapid-key`) and a valid `CHAT_VAPID_SUBJECT` contact.
+Apple requires a URL or `mailto:` subject and does not expect a new VAPID JWT
+more than once per hour. Keep the key stable: changing it invalidates existing
+subscriptions.
 
 The server sends only to a known push service, by default `fcm.googleapis.com`
 and the subdomains of `push.services.mozilla.com`, `notify.windows.com` and
