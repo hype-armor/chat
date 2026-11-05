@@ -1,5 +1,5 @@
 import { type Browser, expect, test } from '@playwright/test'
-import { messages, openChat, randomUsername, startChat } from './support'
+import { messages, openChat, openSettings, randomUsername, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -127,7 +127,7 @@ test('live location follows the sender and is gone when they stop (FR-LOC-2/3/6)
   await alice.getByRole('dialog', { name: 'Share this location?' }).getByRole('button', { name: '15 min' }).click()
   await expect(alice.getByLabel('Message', { exact: true })).toBeFocused()
   // The indicator stays up while sharing (FR-LOC-6).
-  const indicator = alice.getByRole('status', { name: 'Sharing live location' })
+  const indicator = alice.getByRole('status', { name: /Sharing live location/ })
   await expect(indicator).toContainText(/Sharing live location · 15 min left/)
 
   await openChat(bob, /Alice/)
@@ -149,6 +149,38 @@ test('live location follows the sender and is gone when they stop (FR-LOC-2/3/6)
   await expect(messages(alice).getByTestId('live-location')).toHaveText('📍 Live location ended')
 })
 
+test('live-location controls remain available across conversations and Settings (FR-LOC-6)', async ({ browser }) => {
+  const bobUsername = randomUsername()
+  const carolUsername = randomUsername()
+  const alice = await signUp(browser, 'Alice', randomUsername(), new Set(), [])
+  await signUp(browser, 'Bob', bobUsername, new Set(), [])
+  await signUp(browser, 'Carol', carolUsername, new Set(), [])
+  await startChat(alice, bobUsername)
+
+  await alice.getByRole('button', { name: 'Add attachment' }).click()
+  await alice.getByRole('menuitem', { name: 'Location', exact: true }).click()
+  await alice.getByRole('dialog', { name: 'Share this location?' }).getByRole('button', { name: '15 min' }).click()
+  const indicators = alice.getByRole('status', { name: /Sharing live location/ })
+  const bobIndicator = indicators.filter({ hasText: 'Bob' })
+  await expect(bobIndicator).toBeVisible()
+
+  await startChat(alice, carolUsername)
+  await expect(alice.getByLabel('Message', { exact: true })).toBeVisible()
+  await alice.getByRole('button', { name: 'Add attachment' }).click()
+  await alice.getByRole('menuitem', { name: 'Location', exact: true }).click()
+  await alice.getByRole('dialog', { name: 'Share this location?' }).getByRole('button', { name: '15 min' }).click()
+  const carolIndicator = indicators.filter({ hasText: 'Carol' })
+  await expect(indicators).toHaveCount(2)
+  await expect(carolIndicator).toBeVisible()
+
+  await openSettings(alice)
+  await expect(indicators).toHaveCount(2)
+  await carolIndicator.getByRole('button', { name: 'Stop' }).click()
+  await expect(carolIndicator).toBeHidden()
+  await bobIndicator.getByRole('button', { name: 'Stop' }).click()
+  await expect(indicators).toHaveCount(0)
+})
+
 test('until-stopped location sharing continues until the sender stops it (FR-LOC-2/3/6)', async ({ browser }) => {
   test.setTimeout(90_000)
   const bobUsername = randomUsername()
@@ -163,7 +195,7 @@ test('until-stopped location sharing continues until the sender stops it (FR-LOC
   await expect(preview).toContainText('Recipients remove the last point after 8 hours without an update.')
   await preview.getByRole('button', { name: 'Until stopped' }).click()
 
-  const indicator = alice.getByRole('status', { name: 'Sharing live location' })
+  const indicator = alice.getByRole('status', { name: /Sharing live location/ })
   await expect(indicator).toContainText(/Sharing live location · until stopped/)
   await expect(indicator).toHaveAttribute('title', 'Sharing pauses when the app is closed or in the background.')
 

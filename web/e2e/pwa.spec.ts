@@ -228,10 +228,9 @@ test.describe('setup reminders and Settings', () => {
     await page.getByRole('button', { name: 'Add attachment' }).click()
     await page.getByRole('menuitem', { name: 'Location', exact: true }).click()
     await page.getByRole('dialog', { name: 'Share this location?' }).getByRole('button', { name: '15 min' }).click()
-    const banner = page.getByRole('status', { name: 'Sharing live location' })
-    await expect(banner).toBeVisible()
-    const bannerHeight = (await banner.boundingBox())!.height
-    expect(bannerHeight).toBeGreaterThan(44)
+    const indicator = page.getByRole('status', { name: /Sharing live location/ })
+    await expect(indicator).toBeVisible()
+    await expect(page.locator('.live-banner')).toHaveCount(0)
     await input.fill('Typing while sharing live location')
     await page.getByRole('button', { name: 'Send', exact: true }).click()
     await expect(messages(page).last()).toContainText('Typing while sharing live location')

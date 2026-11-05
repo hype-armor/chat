@@ -92,10 +92,10 @@ export function LiveIndicator({ core, share }: { core: CoreClient; share: LiveSh
     <span
       className="live-indicator"
       role="status"
-      aria-label="Sharing live location"
+      aria-label={`Sharing live location in ${share.title}`}
       title="Sharing pauses when the app is closed or in the background."
     >
-      📍 Sharing live location · {share.untilStopped ? 'until stopped' : remaining(share.expiresAt, now)}
+      📍 {share.title}: Sharing live location · {share.untilStopped ? 'until stopped' : remaining(share.expiresAt, now)}
       <button type="button" className="link small" onClick={() => void core.stopLive(share.conversationId)}>
         Stop
       </button>

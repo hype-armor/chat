@@ -1197,7 +1197,15 @@ button.link.danger {
   white-space: nowrap;
 }
 
-/* Live-location indicator inside a conversation header (FR-LOC-6). */
+/* App-wide live-location indicators (FR-LOC-6). */
+.live-sharing-indicators {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+}
+
 .live-indicator {
   display: inline-flex;
   align-items: center;

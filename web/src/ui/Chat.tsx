@@ -117,7 +117,6 @@ export function Chat({
   )
   calls.relayOnly = view.relayCalls
   const conversation = view.conversations.find((c) => c.id === selected)
-  const share = view.liveSharing.find((s) => s.conversationId === conversation?.id)
   const select = (id: string) => {
     setPanel('chats')
     setSelected(id)
@@ -129,13 +128,15 @@ export function Chat({
   return (
     <>
       <LiveSharing core={core} sharing={view.liveSharing} />
-      <CallScreen calls={calls} />
-      <GroupCallScreen calls={groupCalls} />
-      {showDiagnostics && share && (
-        <div className="diagnostics-live-sharing">
-          <LiveIndicator core={core} share={share} />
+      {view.liveSharing.length > 0 && (
+        <div className="live-sharing-indicators">
+          {view.liveSharing.map((share) => (
+            <LiveIndicator key={share.conversationId} core={core} share={share} />
+          ))}
         </div>
       )}
+      <CallScreen calls={calls} />
+      <GroupCallScreen calls={groupCalls} />
       <div
         hidden={showDiagnostics}
         className={`chat-layout ${conversation ? 'has-selection' : ''}`}
@@ -264,7 +265,6 @@ export function Chat({
             verification={conversation.verification}
             blocked={conversation.blocked ?? false}
             request={conversation.request}
-            share={share}
             onBack={() => setSelected(undefined)}
           />
         ) : (
@@ -1111,7 +1111,6 @@ function Conversation({
   verification,
   blocked,
   request,
-  share,
   onBack,
 }: {
   core: CoreClient
@@ -1127,7 +1126,6 @@ function Conversation({
   verification?: ConversationSummary['verification']
   blocked: boolean
   request: boolean
-  share?: LiveShare
   onBack: () => void
 }) {
   const [panel, updatePanel] = useState<'add' | 'info' | 'verify' | 'report'>()
@@ -1360,7 +1358,6 @@ function Conversation({
           </button>
         </div>
         <div className="header-actions">
-          {share && <LiveIndicator core={core} share={share} />}
           {isGroup && active && !request && (
             <>
               <button
