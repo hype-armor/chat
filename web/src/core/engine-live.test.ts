@@ -41,7 +41,7 @@ function fixture(from: string) {
   engine['recipients'] = () => []
   engine['flushOutbox'] = vi.fn(async () => {})
   engine['scheduleLiveSweep'] = vi.fn()
-  const stored = () => structuredClone(values.get(`messages:${conversationId}`)) as ChatMessage[]
+  const stored = () => structuredClone(values.get(`messages:${conversationId}`)) as Parameters<Engine['encode']>[2][]
   return { engine, stored, sendLiveLocation }
 }
 
