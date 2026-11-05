@@ -2792,17 +2792,7 @@ export class Engine {
       await this.observeKeysIn(conversationId)
       this.refreshCallKeys(conversationId)
       if (conv.self) return
-      const removedAccounts = conv.peers.filter((p) => !peers.includes(p))
-      if (removedAccounts.length > 0) {
-        const list = await this.stored(conversationId)
-        const removedIds = list
-          .filter((m) => removedAccounts.includes(m.from) && m.live && !m.live.ended)
-          .map((m) => m.id)
-        for (const messageId of removedIds) await this.endLiveMessage(conversationId, messageId, true)
-        this.state.liveSeen = this.state.liveSeen.filter(
-          (l) => l.conversationId !== conversationId || !removedIds.includes(l.messageId),
-        )
-      }
+      await this.endRemovedPeerLiveLocations(conversationId, conv.peers, peers)
       // Introduce ourselves to anyone new.
       if (peers.some((p) => !conv.peers.includes(p))) this.queueProfile(conversationId)
       conv.peers = peers
@@ -3073,7 +3063,11 @@ export class Engine {
     const conv = this.conv(p.conversationId)
     this.core!.confirmCommit(fromHex(p.conversationId))
     this.refreshCallKeys(p.conversationId)
-    if (conv && !conv.self) conv.peers = this.peersOf(p.conversationId)
+    if (conv && !conv.self) {
+      const peers = this.peersOf(p.conversationId)
+      await this.endRemovedPeerLiveLocations(p.conversationId, conv.peers, peers)
+      conv.peers = peers
+    }
     if (conv) await this.observeKeysIn(p.conversationId)
     if (!this.core!.hasPendingProposals(fromHex(p.conversationId))) delete this.state.leaving[p.conversationId]
     if (p.invitees && conv?.self) {
@@ -3088,6 +3082,19 @@ export class Engine {
     this.state.pendingCommit = undefined
     await this.persist()
     this.emitView()
+  }
+
+  private async endRemovedPeerLiveLocations(conversationId: string, previousPeers: string[], peers: string[]) {
+    const removedAccounts = previousPeers.filter((p) => !peers.includes(p))
+    if (removedAccounts.length === 0) return
+    const list = await this.stored(conversationId)
+    const removedIds = list
+      .filter((m) => removedAccounts.includes(m.from) && m.live && !m.live.ended)
+      .map((m) => m.id)
+    for (const messageId of removedIds) await this.endLiveMessage(conversationId, messageId, true)
+    this.state.liveSeen = this.state.liveSeen.filter(
+      (l) => l.conversationId !== conversationId || !removedIds.includes(l.messageId),
+    )
   }
 
   /** Settles a commit whose server answer was lost (see `PendingCommit`). */
