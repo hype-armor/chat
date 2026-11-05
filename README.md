@@ -76,6 +76,28 @@ CHAT_HOST=192.168.1.20 docker compose -f deploy/compose/docker-compose.yml --pro
 # then open https://192.168.1.20:8443, and create invites for that address
 ```
 
+### iPhone and iPad notifications
+
+Web Push needs iOS or iPadOS 16.4 or later, a trusted HTTPS origin, and a
+Home Screen app. For local testing, install and trust Caddy's certificate on
+the iPhone. Open the site in Safari, tap **Share → Add to Home Screen**, then
+launch Chat from the new icon. In Chat, open **Settings → Notifications & privacy → Notifications**
+and enable notifications. Allow the system prompt. If Chat shows a new-version
+banner, tap **Update now** first. In iOS **Settings → Notifications → Chat**,
+enable **Notification Center** and **Lock Screen**. Chat shows a generic
+notification. It does not send message text or sender
+identity to Apple.
+
+The server needs a stable `CHAT_VAPID_PRIVATE_KEY` and a valid
+`CHAT_VAPID_SUBJECT` contact. Generate a key once with
+`cargo run -p chat-server -- generate-vapid-key`; store the private key as a
+secret and keep it unchanged. Set the subject to a monitored `mailto:` address
+or HTTPS contact URL. Configure both before the first subscription. Allow
+outbound HTTPS to `*.push.apple.com`. An unset private key creates a temporary
+key, so subscriptions stop working after a server restart. Changing the key
+invalidates existing subscriptions. For Docker Compose, export both variables
+before starting the stack. For k3s, see [`deploy/k3s/README.md`](deploy/k3s/README.md).
+
 ### Map tiles
 
 Maps download by themselves (ADR-0033): the first time a location in an
