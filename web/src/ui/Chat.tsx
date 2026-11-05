@@ -11,7 +11,7 @@ import { Attachment } from './Attachment'
 import { Recorder } from './Recorder'
 import { Media } from './Media'
 import { LocationCard, ShareLocation } from './Location'
-import { LiveBanner, LiveCard } from './Live'
+import { ContactLiveLocations, LiveCard, LiveIndicator, LiveSharing, type LiveShare } from './Live'
 import { CallScreen } from './Call'
 import { CallController } from './calls'
 import { GroupCallScreen, useGroupCall } from './GroupCall'
@@ -20,8 +20,17 @@ import { probeClip } from './media'
 import type { MediaInfo } from '../core/protocol'
 import { BlockedList, DeleteAccount, ReportForm } from './Safety'
 import { VerificationBadge, Verify } from './Verify'
-import { type NotificationState, enableNotifications, notificationState, refreshSubscription } from '../notifications'
+import {
+  type NotificationState,
+  type PushSetup,
+  enableNotifications,
+  notificationState,
+  preparePush,
+  reconnectNotifications,
+  refreshSubscription,
+} from '../notifications'
 import { useVisualViewport } from './useVisualViewport'
+import { isIosDevice } from '../pwa'
 import { filterConversations, highlightTitle, normalizeSearch, searchUsername } from './conversationSearch'
 
 type Ready = Extract<AppView, { phase: 'ready' }>
@@ -89,6 +98,9 @@ export function Chat({
   const [panel, setPanel] = useState<'chats' | 'settings' | 'chat' | 'group'>('chats')
   const sidebar = useRef<HTMLElement>(null)
   const setup = useSetup()
+  useEffect(() => {
+    void refreshSubscription(core)
+  }, [core])
   const [calls] = useState(() => new CallController(core))
   const [groupCalls] = useState(() => {
     const g = new GroupCallController(core)
@@ -115,12 +127,12 @@ export function Chat({
   }
   return (
     <>
-      <LiveBanner core={core} sharing={view.liveSharing} />
+      <LiveSharing core={core} sharing={view.liveSharing} />
       <CallScreen calls={calls} />
       <GroupCallScreen calls={groupCalls} />
       <div
         hidden={showDiagnostics}
-        className={`chat-layout ${conversation ? 'has-selection' : ''} ${view.liveSharing.length > 0 ? 'with-banner' : ''}`}
+        className={`chat-layout ${conversation ? 'has-selection' : ''}`}
       >
         <aside className="sidebar" ref={sidebar}>
           <header className="bar me">
@@ -225,6 +237,7 @@ export function Chat({
                 onSelect={select}
                 onNewChat={() => setPanel('chat')}
                 onInvite={() => setPanel('settings')}
+                sharing={view.liveSharing}
               />
             </>
           )}
@@ -245,6 +258,7 @@ export function Chat({
             verification={conversation.verification}
             blocked={conversation.blocked ?? false}
             request={conversation.request}
+            share={view.liveSharing.find((s) => s.conversationId === conversation.id)}
             onBack={() => setSelected(undefined)}
           />
         ) : (
@@ -393,6 +407,7 @@ function ConversationBrowser({
   onSelect,
   onNewChat,
   onInvite,
+  sharing,
 }: {
   core: CoreClient
   conversations: ConversationSummary[]
@@ -400,6 +415,7 @@ function ConversationBrowser({
   onSelect: (id: string) => void
   onNewChat: () => void
   onInvite: () => void
+  sharing: LiveShare[]
 }) {
   const [search, setQuery] = useState('')
   const showSearch = conversations.length >= 6
@@ -484,11 +500,11 @@ function ConversationBrowser({
         <details key={filtering ? 'filtered' : 'all'} className="message-requests" open={filtering ? true : undefined}>
           <summary>Message requests ({requests.length})</summary>
           <nav aria-label="Requests">
-            <ConversationList conversations={requests} selected={selected} onSelect={onSelect} query={query} />
+            <ConversationList conversations={requests} selected={selected} onSelect={onSelect} query={query} sharing={sharing} />
           </nav>
         </details>
       )}
-      <ConversationList conversations={accepted} selected={selected} onSelect={onSelect} query={query} />
+      <ConversationList conversations={accepted} selected={selected} onSelect={onSelect} query={query} sharing={sharing} />
       {filtering && results.length === 0 ? (
         <div className="empty search-empty">
           <p className="muted" role="status">No chats match "{query.trim()}"</p>
@@ -518,11 +534,13 @@ function ConversationList({
   selected,
   onSelect,
   query,
+  sharing,
 }: {
   conversations: ConversationSummary[]
   selected?: string
   onSelect: (id: string) => void
   query: string
+  sharing: LiveShare[]
 }) {
   return (
     <ul className="conversations">
@@ -533,6 +551,11 @@ function ConversationList({
             <span className="title">
               {highlightTitle(c.title, query).map((part, index) =>
                 part.match ? <mark key={index}>{part.text}</mark> : part.text,
+              )}
+              {sharing.some((s) => s.conversationId === c.id) && (
+                <span className="live-dot" role="img" aria-label="Sharing live location">
+                  📍
+                </span>
               )}
               {c.unread > 0 && (
                 <span className="badge small unread" aria-label={`${c.unread} unread`}>
@@ -618,11 +641,48 @@ function Privacy({
 
 function NotificationToggle({ core }: { core: CoreClient }) {
   const [state, setState] = useState<NotificationState>(notificationState)
+  const iosDevice = isIosDevice(navigator.userAgent, navigator.platform, navigator.maxTouchPoints)
+  const [pushSetup, setPushSetup] = useState<PushSetup>()
+  const [preparing, setPreparing] = useState(false)
+  const [prepareError, setPrepareError] = useState<string>()
   const { busy, error, run } = useAction()
 
   useEffect(() => {
-    void refreshSubscription(core)
-  }, [core])
+    if (state !== 'default') return
+    let active = true
+    setPreparing(true)
+    void preparePush(core)
+      .then((setup) => {
+        if (active) {
+          setPushSetup(setup)
+          setPrepareError(undefined)
+        }
+      })
+      .catch((e: unknown) => {
+        if (active) setPrepareError(e instanceof Error ? e.message : String(e))
+      })
+      .finally(() => {
+        if (active) setPreparing(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [core, state])
+
+  const retryPreparation = () =>
+    run(async () => {
+      setPreparing(true)
+      setPrepareError(undefined)
+      try {
+        const setup = await preparePush(core)
+        setPushSetup(setup)
+      } catch (e) {
+        setPrepareError(e instanceof Error ? e.message : String(e))
+        throw e
+      } finally {
+        setPreparing(false)
+      }
+    })
 
   return (
     <details className="devices">
@@ -632,24 +692,67 @@ function NotificationToggle({ core }: { core: CoreClient }) {
           {state === 'granted' ? 'Enabled'
             : state === 'denied' ? 'Blocked'
             : state === 'unsupported' ? 'Unavailable'
+            : state === 'install-required' ? 'Install required'
             : 'Not enabled'}
         </span>
       </summary>
       {state === 'granted' ? (
-        <p className="muted small">Notifications are enabled.</p>
+        <>
+          <p className="muted small">
+            Notifications are enabled.
+            {iosDevice && ' Enable Lock Screen and Notification Center in iOS Settings → Notifications → Chat.'}
+          </p>
+          <button
+            type="button"
+            className="link"
+            disabled={busy}
+            onClick={() => run(async () => reconnectNotifications(core, await preparePush(core)))}
+          >
+            Reconnect notifications
+          </button>
+        </>
       ) : state === 'unsupported' ? (
         <p className="muted small">Notifications are not supported by this browser.</p>
+      ) : state === 'install-required' ? (
+        <p className="muted small">
+          On iPhone or iPad, add Chat to the Home Screen in Safari, then open it from the new icon. Notifications need iOS or iPadOS 16.4 or later.
+        </p>
       ) : state === 'denied' ? (
-        <p className="muted small">Notifications are blocked in your browser settings.</p>
+        <p className="muted small">
+          {iosDevice
+            ? 'Notifications are blocked. Change this in iOS Settings → Notifications → Chat.'
+            : 'Notifications are blocked in your browser settings.'}
+        </p>
+      ) : prepareError ? (
+        <>
+          <p className="error" role="alert">
+            {prepareError}
+          </p>
+          <button type="button" className="link" disabled={busy || preparing} onClick={retryPreparation}>
+            Retry notification setup
+          </button>
+        </>
       ) : (
-        <button
-          type="button"
-          className="link"
-          disabled={busy}
-          onClick={() => run(async () => setState(await enableNotifications(core)))}
-        >
-          Enable notifications
-        </button>
+        <>
+          <button
+            type="button"
+            className="link"
+            disabled={busy || preparing || !pushSetup}
+            onClick={() =>
+              run(async () => {
+                if (!pushSetup) throw new Error('Notification setup is not ready yet.')
+                setState(await enableNotifications(core, pushSetup))
+              })
+            }
+          >
+            Enable notifications
+          </button>
+          {preparing && (
+            <p className="muted small" role="status">
+              Preparing notifications…
+            </p>
+          )}
+        </>
       )}
       {error && (
         <p role="alert" className="error">
@@ -701,6 +804,7 @@ function NewChat({ core, onStarted }: { core: CoreClient; onStarted: (id: string
 
 function GroupInfo({
   core,
+  messages,
   id,
   title,
   amAdmin,
@@ -711,6 +815,7 @@ function GroupInfo({
   onAdded,
 }: {
   core: CoreClient
+  messages: ChatMessage[]
   id: string
   title: string
   amAdmin: boolean
@@ -800,6 +905,9 @@ function GroupInfo({
       {verifying && (
         <div>
           <button ref={verifyBack} type="button" className="link" onClick={() => setVerifying(undefined)}>← Members</button>
+          {active && !verifying.blocked && (
+            <ContactLiveLocations core={core} conversationId={id} account={verifying.account} messages={messages} />
+          )}
           <Verify
             key={verifying.account}
             core={core}
@@ -997,6 +1105,7 @@ function Conversation({
   verification,
   blocked,
   request,
+  share,
   onBack,
 }: {
   core: CoreClient
@@ -1012,6 +1121,7 @@ function Conversation({
   verification?: ConversationSummary['verification']
   blocked: boolean
   request: boolean
+  share?: LiveShare
   onBack: () => void
 }) {
   const [panel, updatePanel] = useState<'add' | 'info' | 'verify' | 'report'>()
@@ -1244,6 +1354,7 @@ function Conversation({
           </button>
         </div>
         <div className="header-actions">
+          {share && <LiveIndicator core={core} share={share} />}
           {isGroup && active && !request && (
             <>
               <button
@@ -1522,6 +1633,7 @@ function Conversation({
             <GroupInfo
               key={detailsVersion}
               core={core}
+              messages={messages}
               id={id}
               title={title}
               amAdmin={amAdmin && active}
@@ -1553,14 +1665,19 @@ function Conversation({
                   }}
                 />
               ) : peer && (
-                <Verify
-                  core={core}
-                  conversationId={id}
-                  account={peer}
-                  name={title}
-                  status={verification}
-                  onDone={() => setPanel(undefined)}
-                />
+                <>
+                  {active && !blocked && !request && (
+                    <ContactLiveLocations core={core} conversationId={id} account={peer} messages={messages} />
+                  )}
+                  <Verify
+                    core={core}
+                    conversationId={id}
+                    account={peer}
+                    name={title}
+                    status={verification}
+                    onDone={() => setPanel(undefined)}
+                  />
+                </>
               )}
               {peer && (
                 <div className="details-danger">

@@ -59,6 +59,9 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
     case 'liveUpdate':
       await engine.liveUpdate(request.location)
       return { type: 'ok' }
+    case 'pauseLive':
+      engine.pauseLive()
+      return { type: 'ok' }
     case 'stopLive':
       await engine.stopLive(request.conversationId)
       return { type: 'ok' }
