@@ -95,6 +95,22 @@ describe('one card per live share', () => {
     expect(sendLiveLocation.mock.calls[0]?.[1]).toEqual(fromHex(sessionId))
   })
 
+  it('encodes an until-stopped retry against its renewed lease timestamp', () => {
+    const { engine, stored, sendLiveLocation } = fixture('me')
+    const message = stored()[0]
+    message.live = {
+      sessionId,
+      expiresAt: now + MAX_LIVE_DURATION_MS,
+      untilStopped: true,
+      latest: { ...point, at: now },
+      ended: false,
+    }
+
+    engine['encode'](engine['core']!, conversationId, message)
+
+    expect(sendLiveLocation.mock.calls[0]?.[8]).toBe(now)
+  })
+
   it('renews the receiver card and its expiry without adding an unread message', async () => {
     const { engine, stored } = fixture(peer)
     await engine['applyLive'](conversationId, peer, false, '77'.repeat(16), now, {
