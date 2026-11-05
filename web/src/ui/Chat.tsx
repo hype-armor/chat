@@ -20,7 +20,13 @@ import { probeClip } from './media'
 import type { MediaInfo } from '../core/protocol'
 import { BlockedList, DeleteAccount, ReportForm } from './Safety'
 import { VerificationBadge, Verify } from './Verify'
-import { type NotificationState, enableNotifications, notificationState, refreshSubscription } from '../notifications'
+import {
+  type NotificationState,
+  enableNotifications,
+  notificationState,
+  preparePush,
+  refreshSubscription,
+} from '../notifications'
 import { useVisualViewport } from './useVisualViewport'
 import { filterConversations, highlightTitle, normalizeSearch, searchUsername } from './conversationSearch'
 
@@ -646,7 +652,7 @@ function NotificationToggle({ core }: { core: CoreClient }) {
           type="button"
           className="link"
           disabled={busy}
-          onClick={() => run(async () => setState(await enableNotifications(core)))}
+          onClick={() => run(async () => setState(await enableNotifications(core, await preparePush(core))))}
         >
           Enable notifications
         </button>
