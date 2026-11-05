@@ -2379,7 +2379,7 @@ export class Engine {
         p?.latitude ?? 0,
         p?.longitude ?? 0,
         p?.accuracyM ?? 0,
-        m.sentAt,
+        m.live.untilStopped === true ? m.live.expiresAt - MAX_LIVE_DURATION_MS : m.sentAt,
         id,
       )
     }
