@@ -240,6 +240,11 @@ form {
   display: none;
 }
 
+.chat-layout.with-banner {
+  top: calc(var(--app-top, 0px) + var(--update-banner-height, 0px) + var(--live-sharing-height, 0px));
+  height: calc(var(--app-height, 100dvh) - var(--update-banner-height, 0px) - var(--live-sharing-height, 0px));
+}
+
 .sidebar {
   display: flex;
   flex-direction: column;
@@ -437,6 +442,17 @@ form {
 .conversation-details .member-name .badge {
   margin-left: 0;
   white-space: nowrap;
+}
+
+.contact-live-location {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.contact-live-location .map {
+  width: 100%;
 }
 
 .details-members {
@@ -1176,7 +1192,7 @@ button.link.danger {
 
 .share-location .live-choices {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.5rem;
 }
 
@@ -1186,25 +1202,41 @@ button.link.danger {
   white-space: nowrap;
 }
 
-.live-banner {
+/* App-wide live-location indicators (FR-LOC-6). */
+.live-sharing-indicators {
   position: fixed;
+  top: calc(var(--app-top, 0px) + var(--update-banner-height, 0px));
   left: 0;
   right: 0;
-  top: calc(var(--app-top, 0px) + var(--update-banner-height, 0px));
+  z-index: 5;
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 0.25rem 1rem;
-  min-height: 2.75rem;
-  padding: 0.25rem 1rem;
-  background: #fff4d6;
-  color: #5c4400;
-  border-bottom: 1px solid #f0d58a;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
 }
 
-.chat-layout.with-banner {
-  top: calc(var(--app-top, 0px) + var(--update-banner-height, 0px) + var(--live-banner-height, 2.75rem));
-  height: calc(var(--app-height, 100dvh) - var(--update-banner-height, 0px) - var(--live-banner-height, 2.75rem));
+.live-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 100%;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  background: #fff4d6;
+  color: #5c4400;
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+
+.diagnostics-live-sharing {
+  display: flex;
+  justify-content: center;
+  padding: 0.75rem;
+}
+
+.live-dot {
+  margin-inline-start: 0.25rem;
 }
 
 /* ---- UI polish (2026-10-30) ---------------------------------------------- */
@@ -1218,6 +1250,11 @@ button.link.danger {
   font-weight: 600;
   line-height: 1;
   user-select: none;
+}
+
+/* A profile picture: cropped to the circle. */
+img.avatar {
+  object-fit: cover;
 }
 
 .who {
@@ -1289,6 +1326,20 @@ button.icon[aria-pressed='true'] {
 .settings-identity strong,
 .settings-identity .error {
   grid-column: 1 / -1;
+}
+
+.identity-photo {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.photo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
 }
 
 .settings-group h3 {
@@ -1474,6 +1525,12 @@ button.conversation-title {
   flex: none;
   gap: 0.125rem;
   white-space: nowrap;
+}
+
+@media (max-width: 40rem) {
+  .live-indicator {
+    white-space: normal;
+  }
 }
 
 .menu {

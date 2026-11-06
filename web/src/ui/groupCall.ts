@@ -45,6 +45,39 @@ function randomCallId(): string {
   return [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+/**
+ * The call ids this page uses. The SFrame keys of a call come from its call id
+ * and the MLS epoch, and a new key state starts its frame counter at 0, so one
+ * call id must keep one key state (audit M10). A call that starts here takes an
+ * id this page has not used yet; a rejoin keeps the id of the call it rejoins,
+ * so the core keeps the keys and the counter it already has.
+ */
+export class CallIds {
+  private readonly used = new Set<string>()
+
+  constructor(private readonly random: () => string = randomCallId) {}
+
+  /** An id for a call that starts here, never one this page has used. */
+  start(): string {
+    let id = this.random()
+    // A source that repeats must not hand out an id that already has keys.
+    if (this.used.has(id)) id = randomCallId()
+    this.used.add(id)
+    return id
+  }
+
+  /** The id a join runs under: the call already has it, so its keys stay. */
+  rejoin(offered: string): string {
+    this.used.add(offered)
+    return offered
+  }
+
+  /** Whether this page has joined a call with this id. */
+  joined(id: string): boolean {
+    return this.used.has(id)
+  }
+}
+
 const NO_FRAME_ENCRYPTION =
   "This browser can't encrypt call media end to end, so calls are off. Use an up-to-date Chrome, Firefox or Safari."
 
@@ -56,6 +89,7 @@ export class GroupCallController {
   private names: Record<string, string> = {}
   private timer?: ReturnType<typeof setTimeout>
   private unsubscribe: () => void
+  private readonly callIds = new CallIds()
   /** Another call (1:1) is running here. */
   otherBusy: () => boolean = () => false
 
@@ -86,7 +120,7 @@ export class GroupCallController {
   /** Starts a call in a group: tells the members, then joins its room. */
   async start(conversationId: string, title: string, video: boolean) {
     if (this.busy || this.otherBusy()) throw new Error("You're already in a call")
-    const callId = randomCallId()
+    const callId = this.callIds.start()
     this.show({ conversationId, callId, title, video, phase: 'joining' })
     try {
       if (!canEncryptCalls()) throw new Error(NO_FRAME_ENCRYPTION)
@@ -99,8 +133,11 @@ export class GroupCallController {
   }
 
   /** Joins a call already going in a group. */
-  async join(conversationId: string, callId: string, title: string, video: boolean) {
+  async join(conversationId: string, offered: string, title: string, video: boolean) {
     if (this.busy || this.otherBusy()) throw new Error("You're already in a call")
+    // The call id stays: its keys and their frame counter stay in the core
+    // worker too (audit M10).
+    const callId = this.callIds.rejoin(offered)
     this.show({ conversationId, callId, title, video, phase: 'joining' })
     try {
       if (!canEncryptCalls()) throw new Error(NO_FRAME_ENCRYPTION)

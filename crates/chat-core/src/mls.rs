@@ -17,6 +17,34 @@ pub const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_
 /// membership change (and delivered after it) still decrypt. A small
 /// forward-secrecy trade-off: those few epochs' keys live a little longer.
 const MAX_PAST_EPOCHS: usize = 5;
+/// Lower bounds on serialized sizes, checked before the MLS library parses
+/// bytes that came from the server (see `Device::parse_key_package`).
+const MIN_KEY_PACKAGE_BYTES: usize = 128;
+const MIN_WELCOME_BYTES: usize = 64;
+/// An MLS identity: 16-byte account id then 16-byte device id.
+pub const IDENTITY_LEN: usize = 32;
+
+/// A key package together with the identity its owner must have (audit H1).
+///
+/// The key directory hands out packages that their uploader chose, so the
+/// caller states who it expects and MLS learns nothing from the package
+/// itself: without this check any user could carry another account's id.
+pub struct JoinPackage<'a> {
+    pub identity: &'a [u8],
+    pub key_package: &'a [u8],
+}
+
+impl<'a> JoinPackage<'a> {
+    /// The package `device` published, with the identity that device must
+    /// have. Test and benchmark helper; the client passes the identity it
+    /// expects from the directory.
+    pub fn of(device: &'a Device, key_package: &'a [u8]) -> Self {
+        Self {
+            identity: device.identity(),
+            key_package,
+        }
+    }
+}
 
 /// Exporter label for group-call frame keys (docs/05-media-and-calling.md §4).
 const CALL_KEY_LABEL: &str = "chat call sframe";
@@ -154,7 +182,35 @@ impl Device {
             .map_err(mls_err)
     }
 
+    /// The identity inside a key package, checked for length only; used to
+    /// pre-check a claimed package before it is staged into a group.
+    pub fn key_package_identity(&self, bytes: &[u8]) -> Result<Vec<u8>> {
+        let package = self.parse_key_package(bytes)?;
+        Ok(credential_identity(package.leaf_node().credential()).to_vec())
+    }
+
+    /// Parses a package and refuses it unless it carries `join.identity`
+    /// (audit H1: the package owner chooses the identity bytes).
+    fn accept_key_package(&self, join: &JoinPackage<'_>) -> Result<KeyPackage> {
+        // The equality check is the fix; the 32-byte shape of that identity is
+        // enforced where identities are made (the browser: `makeIdentity`, and
+        // the WASM boundary). Native tests and the echo bot may use shorter
+        // ids, and they state the expected one explicitly too.
+        let package = self.parse_key_package(join.key_package)?;
+        if credential_identity(package.leaf_node().credential()) != join.identity {
+            return Err(Error::Malformed("key package identity mismatch"));
+        }
+        Ok(package)
+    }
+
     fn parse_key_package(&self, bytes: &[u8]) -> Result<KeyPackage> {
+        // Checked before the library sees the bytes: libcrux 0.0.7 panics on
+        // buffers shorter than the hybrid key types it decodes
+        // (RUSTSEC-2026-0331, RUSTSEC-2026-0124), and these bytes come from
+        // the key directory. A real package is well over 500 bytes.
+        if bytes.len() < MIN_KEY_PACKAGE_BYTES {
+            return Err(Error::Malformed("key package too short"));
+        }
         KeyPackageIn::tls_deserialize_exact(bytes)
             .map_err(mls_err)?
             .validate(self.provider.crypto(), ProtocolVersion::Mls10)
@@ -214,6 +270,11 @@ impl Conversation {
     }
 
     pub fn join(device: &Device, welcome: &[u8]) -> Result<Self> {
+        // Same reason as `parse_key_package`: a welcome is attacker-supplied
+        // bytes that reach the HPKE/KEM code.
+        if welcome.len() < MIN_WELCOME_BYTES {
+            return Err(Error::Malformed("welcome too short"));
+        }
         let MlsMessageBodyIn::Welcome(welcome) = MlsMessageIn::tls_deserialize_exact(welcome)
             .map_err(mls_err)?
             .extract()
@@ -271,9 +332,9 @@ impl Conversation {
     pub fn add_members(
         &mut self,
         device: &Device,
-        key_packages: &[&[u8]],
+        joins: &[JoinPackage<'_>],
     ) -> Result<MembershipChange> {
-        let change = self.stage_add_members(device, key_packages)?;
+        let change = self.stage_add_members(device, joins)?;
         self.merge_pending_commit(device)?;
         Ok(change)
     }
@@ -285,11 +346,11 @@ impl Conversation {
     pub fn stage_add_members(
         &mut self,
         device: &Device,
-        key_packages: &[&[u8]],
+        joins: &[JoinPackage<'_>],
     ) -> Result<MembershipChange> {
-        let key_packages = key_packages
+        let key_packages = joins
             .iter()
-            .map(|kp| device.parse_key_package(kp))
+            .map(|join| device.accept_key_package(join))
             .collect::<Result<Vec<_>>>()?;
         let (commit, welcome, _group_info) = self
             .group
@@ -449,6 +510,73 @@ impl Conversation {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_package_must_carry_the_identity_its_owner_was_asked_for() {
+        // Audit H1: the key directory hands out packages that their uploader
+        // chose, so a package can carry any identity bytes. Staging an add
+        // refuses it unless the identity is the one the caller expected.
+        let alice = Device::new(b"alice").unwrap();
+        let mallory = Device::new(b"mallory").unwrap();
+        let mut conversation = Conversation::create(&alice).unwrap();
+        let package = mallory.key_package().unwrap();
+
+        // Claiming to be Carol.
+        let forged = JoinPackage {
+            identity: b"carol",
+            key_package: &package,
+        };
+        assert!(conversation.add_members(&alice, &[forged]).is_err());
+        assert_eq!(conversation.member_count(), 1);
+
+        // The same package with Mallory's real identity is accepted.
+        assert_eq!(
+            mallory.key_package_identity(&package).unwrap(),
+            mallory.identity()
+        );
+        conversation
+            .add_members(&alice, &[JoinPackage::of(&mallory, &package)])
+            .unwrap();
+        assert_eq!(conversation.member_count(), 2);
+    }
+
+    #[test]
+    fn short_server_bytes_are_rejected_before_the_library_sees_them() {
+        // Key packages, welcomes and their HPKE/KEM contents come from the
+        // server. Too-short buffers must be an error, never a panic in the
+        // dependency's decode paths (RUSTSEC-2026-0331, -0124).
+        let alice = Device::new(b"alice").unwrap();
+        let mut conversation = Conversation::create(&alice).unwrap();
+        let nobody = Device::new(b"nobody").unwrap();
+        let empty: &[u8] = &[];
+        let short: &[u8] = &[0u8; 16];
+        let almost: &[u8] = &[1u8; 127];
+        assert!(
+            conversation
+                .stage_add_members(&alice, &[JoinPackage::of(&nobody, empty)])
+                .is_err()
+        );
+        assert!(
+            conversation
+                .stage_add_members(&alice, &[JoinPackage::of(&nobody, short)])
+                .is_err()
+        );
+        assert!(
+            conversation
+                .add_members(&alice, &[JoinPackage::of(&nobody, almost)])
+                .is_err()
+        );
+        assert!(Conversation::join(&alice, &[]).is_err());
+        assert!(Conversation::join(&alice, &[0u8; 63]).is_err());
+        // A real package and welcome still work.
+        let bob = Device::new(b"bob").unwrap();
+        let package = bob.key_package().unwrap();
+        assert!(package.len() > MIN_KEY_PACKAGE_BYTES);
+        let change = conversation
+            .add_members(&alice, &[JoinPackage::of(&bob, &package)])
+            .unwrap();
+        assert!(Conversation::join(&bob, &change.welcome).is_ok());
+    }
+
     fn app(sender: &[u8], data: &[u8]) -> Received {
         Received::Application {
             sender: sender.to_vec(),
@@ -460,8 +588,9 @@ mod tests {
         let alice = Device::new(b"alice").unwrap();
         let bob = Device::new(b"bob").unwrap();
         let mut a = Conversation::create(&alice).unwrap();
+        let bob_package = bob.key_package().unwrap();
         let change = a
-            .add_members(&alice, &[&bob.key_package().unwrap()])
+            .add_members(&alice, &[JoinPackage::of(&bob, &bob_package)])
             .unwrap();
         let b = Conversation::join(&bob, &change.welcome).unwrap();
         (alice, a, bob, b)
@@ -506,10 +635,14 @@ mod tests {
             .map(|i| Device::new(format!("m{i}").as_bytes()).unwrap())
             .collect();
         let kps: Vec<Vec<u8>> = others.iter().map(|d| d.key_package().unwrap()).collect();
-        let kp_refs: Vec<&[u8]> = kps.iter().map(Vec::as_slice).collect();
+        let joins: Vec<JoinPackage<'_>> = others
+            .iter()
+            .zip(&kps)
+            .map(|(device, package)| JoinPackage::of(device, package))
+            .collect();
 
         let mut conv = Conversation::create(&creator).unwrap();
-        let change = conv.add_members(&creator, &kp_refs).unwrap();
+        let change = conv.add_members(&creator, &joins).unwrap();
         assert_eq!(conv.member_count(), 50);
 
         let mut last = Conversation::join(&others[48], &change.welcome).unwrap();
@@ -549,7 +682,8 @@ mod tests {
         let epoch = a.epoch();
 
         // Rejected by the delivery service: discard, nothing changes.
-        a.stage_add_members(&alice, &[&carol.key_package().unwrap()])
+        let carol_package = carol.key_package().unwrap();
+        a.stage_add_members(&alice, &[JoinPackage::of(&carol, &carol_package)])
             .unwrap();
         assert!(a.has_pending_commit());
         a.clear_pending_commit(&alice).unwrap();
@@ -558,7 +692,7 @@ mod tests {
 
         // Accepted: merge locally; Bob applies the same commit.
         let change = a
-            .stage_add_members(&alice, &[&carol.key_package().unwrap()])
+            .stage_add_members(&alice, &[JoinPackage::of(&carol, &carol_package)])
             .unwrap();
         a.merge_pending_commit(&alice).unwrap();
         assert_eq!(
@@ -596,8 +730,12 @@ mod tests {
             .iter()
             .map(|d| d.key_package().unwrap())
             .collect();
-        let refs: Vec<&[u8]> = kps.iter().map(Vec::as_slice).collect();
-        let change = a.add_members(&alice, &refs).unwrap();
+        let joins: Vec<JoinPackage<'_>> = [&bob, &bob2, &carol]
+            .iter()
+            .zip(&kps)
+            .map(|(device, package)| JoinPackage::of(device, package))
+            .collect();
+        let change = a.add_members(&alice, &joins).unwrap();
         let mut b = Conversation::join(&bob, &change.welcome).unwrap();
         let mut c = Conversation::join(&carol, &change.welcome).unwrap();
 

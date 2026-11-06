@@ -129,11 +129,45 @@ async fn offline_devices_get_one_content_free_push(pool: PgPool) {
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(service.count(), 1);
 
-    // A connected device is woken over its socket instead.
+    // A connected device is woken over its socket as well.
     let mut bob_ws = server.connect(&bob_token).await;
     send(&mut alice, bob).await;
     bob_ws.request(client_frame::Body::Ping(Ping {})).await;
     assert_eq!(service.count(), 1);
+}
+
+#[sqlx::test]
+async fn connected_devices_also_get_a_content_free_push(pool: PgPool) {
+    let (service, base) = FakePushService::start().await;
+    let push = PushSender::generate("mailto:test@example.com".into(), true).unwrap();
+    let server = TestServer::start_with_push(pool, Some(push)).await;
+    let (alice_dev, alice_token) = server.register("u5550006111.10").await;
+    let (bob, bob_token) = server.register("u5550006112.10").await;
+    server.admit(b"g", &[alice_dev, bob]).await;
+    let sub =
+        json!({ "endpoint": format!("{base}/push/bob"), "keys": { "p256dh": "P", "auth": "A" } });
+    let (status, _) = server
+        .post("/v1/push/subscription", Some(&bob_token), sub)
+        .await;
+    assert_eq!(status, 204);
+
+    let mut alice = server.connect(&alice_token).await;
+    let mut bob_ws = server.connect(&bob_token).await;
+    send(&mut alice, bob).await;
+
+    let delivered = bob_ws
+        .next_frame(Duration::from_secs(5))
+        .await
+        .expect("connected recipient gets the queued envelope");
+    assert!(matches!(
+        delivered.body,
+        Some(server_frame::Body::Deliver(_))
+    ));
+    assert!(
+        eventually(|| service.count() == 1).await,
+        "a connected but possibly suspended PWA also gets a push"
+    );
+    assert_eq!(service.requests.lock().unwrap()[0]["content-length"], "0");
 }
 
 #[sqlx::test]
@@ -183,8 +217,15 @@ async fn subscription_validation(pool: PgPool) {
         .post("/v1/push/subscription", Some(&token), http)
         .await;
     assert_eq!(status, 400);
-    let https =
+    // Only known push services are accepted (audit M5): the endpoint is
+    // attacker-chosen data the server would otherwise fetch.
+    let unknown =
         json!({ "endpoint": "https://push.example.com/x", "keys": { "p256dh": "k", "auth": "a" } });
+    let (status, _) = server
+        .post("/v1/push/subscription", Some(&token), unknown)
+        .await;
+    assert_eq!(status, 400);
+    let https = json!({ "endpoint": "https://fcm.googleapis.com/fcm/send/x", "keys": { "p256dh": "k", "auth": "a" } });
     let (status, _) = server
         .post("/v1/push/subscription", Some(&token), https.clone())
         .await;

@@ -5,7 +5,7 @@ use std::time::Duration;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use chat_core::{
     envelope,
-    mls::{Conversation, Device, Received},
+    mls::{Conversation, Device, JoinPackage, Received},
 };
 use chat_proto::{
     PROTOCOL_VERSION,
@@ -144,7 +144,9 @@ async fn two_users_exchange_an_encrypted_message(pool: PgPool) {
 
     // Alice creates the conversation and sends a welcome plus a message.
     let mut alice_conv = Conversation::create(&alice).unwrap();
-    let change = alice_conv.add_members(&alice, &[&bob_kp]).unwrap();
+    let change = alice_conv
+        .add_members(&alice, &[JoinPackage::of(&bob, &bob_kp)])
+        .unwrap();
     let welcome = Envelope {
         version: PROTOCOL_VERSION,
         conversation_id: alice_conv.id(),

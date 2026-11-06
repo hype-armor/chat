@@ -152,6 +152,7 @@ async fn commit_and_welcome_are_accepted_together(pool: PgPool) {
         welcome: Some(envelope(b"group", ContentType::Welcome, 0)),
         welcome_recipients: ids(&[carol]),
         silent: false,
+        members: Vec::new(),
     };
     // Without a claim the whole send fails, and the epoch doesn't advance.
     assert_eq!(send(&mut alice_ws, with_welcome(commit(1))).await, Err(403));
@@ -183,6 +184,7 @@ async fn commit_and_welcome_are_accepted_together(pool: PgPool) {
         welcome: Some(envelope(b"group", ContentType::Welcome, 0)),
         welcome_recipients: ids(&[carol]),
         silent: false,
+        members: Vec::new(),
     };
     assert_eq!(send(&mut alice_ws, bad).await, Err(400));
 }

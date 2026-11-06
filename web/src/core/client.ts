@@ -185,7 +185,7 @@ export class CoreClient {
   }
 
   /** Starts sharing a live location in one conversation (FR-LOC-2). */
-  async startLive(conversationId: string, durationMs: number, location: LocationInfo) {
+  async startLive(conversationId: string, durationMs: number | null, location: LocationInfo) {
     expect(await this.call({ type: 'startLive', conversationId, durationMs, location }), 'ok')
   }
 
@@ -215,6 +215,10 @@ export class CoreClient {
     expect(await this.call({ type: 'liveUpdate', location }), 'ok')
   }
 
+  async pauseLive() {
+    expect(await this.call({ type: 'pauseLive' }), 'ok')
+  }
+
   async stopLive(conversationId: string) {
     expect(await this.call({ type: 'stopLive', conversationId }), 'ok')
   }
@@ -232,6 +236,16 @@ export class CoreClient {
   /** Sends a photo or file; `caption` may be empty. */
   async sendFile(conversationId: string, file: File, caption: string, media?: MediaInfo) {
     expect(await this.call({ type: 'sendFile', conversationId, file, caption, media }), 'ok')
+  }
+
+  /** Sets this account's profile picture; without a file, removes it. */
+  async setAvatar(file?: File) {
+    expect(await this.call({ type: 'setAvatar', file }), 'ok')
+  }
+
+  /** An account's profile picture as base64 JPEG, if it has one. */
+  async avatar(account: string): Promise<string | undefined> {
+    return expect(await this.call({ type: 'avatar', account }), 'avatar').avatar
   }
 
   /** The decrypted file of a message. */

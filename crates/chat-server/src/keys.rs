@@ -10,13 +10,19 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::{AuthDevice, db, normalize_username},
-    error::ApiError,
+    error::{ApiError, ApiJson},
     limits,
 };
 
 const MAX_KEY_PACKAGE_BYTES: usize = 4096;
 const MAX_UPLOAD: usize = 100;
 const MAX_STORED_PER_DEVICE: i64 = 200;
+/// Open leases one device may hold at a target device: a stranger must not be
+/// able to take every package a person published.
+const MAX_LEASES_PER_DEVICE: i64 = 3;
+/// How long a claim holds a package before the hourly cleanup frees it. A
+/// welcome consumes the package before that.
+pub const LEASE_MINUTES: i32 = 15;
 const MAX_CLAIM: usize = 200;
 const KEY_PACKAGE_TTL_DAYS: i32 = 30;
 /// Packages expiring sooner than this don't count as available.
@@ -26,7 +32,8 @@ const KEY_PACKAGE_MARGIN_DAYS: i32 = 3;
 pub async fn available(db: &sqlx::PgPool, device: Uuid) -> Result<u32, ApiError> {
     let (n,): (i64,) = sqlx::query_as(
         "SELECT count(*) FROM key_packages
-         WHERE device_id = $1 AND expires_at > now() + make_interval(days => $2)",
+         WHERE device_id = $1 AND claimed_by IS NULL
+           AND expires_at > now() + make_interval(days => $2)",
     )
     .bind(device)
     .bind(KEY_PACKAGE_MARGIN_DAYS)
@@ -59,7 +66,7 @@ pub struct Upload {
 pub async fn upload(
     State(state): State<AppState>,
     AuthDevice(device): AuthDevice,
-    Json(req): Json<Upload>,
+    ApiJson(req): ApiJson<Upload>,
 ) -> Result<StatusCode, ApiError> {
     let db = db(&state)?;
     if req.key_packages.is_empty() || req.key_packages.len() > MAX_UPLOAD {
@@ -116,7 +123,7 @@ pub struct Claimed {
 pub async fn claim(
     State(state): State<AppState>,
     AuthDevice(claimer): AuthDevice,
-    Json(req): Json<Claim>,
+    ApiJson(req): ApiJson<Claim>,
 ) -> Result<Json<Claimed>, ApiError> {
     let db = db(&state)?;
     if req.device_ids.is_empty() || req.device_ids.len() > MAX_CLAIM {
@@ -126,17 +133,29 @@ pub async fn claim(
     let key = format!("claim:{claimer}");
     limits::take(db, &key, amount, state.limits.claims_per_hour, limits::HOUR).await?;
     let rows: Vec<(Uuid, Vec<u8>)> = sqlx::query_as(
-        // Oldest unexpired package per device; SKIP LOCKED lets concurrent
-        // claims for the same device each take a different package.
-        "DELETE FROM key_packages k USING (
+        // Oldest free package per device, leased rather than deleted: a claim
+        // that never becomes a welcome must not use up someone's packages
+        // (audit finding M3). A lease is released by the hourly cleanup after
+        // LEASE_MINUTES, or consumed when a welcome is accepted.
+        // SKIP LOCKED lets concurrent claims for one device take different
+        // packages, and MAX_LEASES_PER_DEVICE stops one caller draining a
+        // target device.
+        "UPDATE key_packages k SET claimed_by = $1, claimed_at = now()
+         FROM (
              SELECT (SELECT key_package_id FROM key_packages
-                     WHERE device_id = d AND expires_at > now()
+                     WHERE device_id = d AND claimed_by IS NULL
+                       AND expires_at > now()
                      ORDER BY key_package_id LIMIT 1 FOR UPDATE SKIP LOCKED) AS id
-             FROM UNNEST($1::uuid[]) AS d) pick
+             FROM UNNEST($2::uuid[]) AS d
+             WHERE (SELECT count(*) FROM key_packages leased
+                    WHERE leased.device_id = d AND leased.claimed_by = $1) < $3
+         ) pick
          WHERE k.key_package_id = pick.id
          RETURNING k.device_id, k.key_package",
     )
+    .bind(claimer)
     .bind(&req.device_ids)
+    .bind(MAX_LEASES_PER_DEVICE)
     .fetch_all(db)
     .await?;
     // Remember who claimed whose keys: welcomes may only go to these devices
@@ -173,7 +192,7 @@ pub struct Account {
 pub async fn lookup(
     State(state): State<AppState>,
     AuthDevice(device): AuthDevice,
-    Json(req): Json<Lookup>,
+    ApiJson(req): ApiJson<Lookup>,
 ) -> Result<Json<Account>, ApiError> {
     let db = db(&state)?;
     let username = normalize_username(&req.username)

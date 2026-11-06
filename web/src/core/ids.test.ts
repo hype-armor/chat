@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { RecentIds, fromHex, makeIdentity, splitIdentity, toHex, uuidToBytes } from './ids'
+import { RecentIds, fromHex, makeIdentity, splitIdentity, toHex, trySplitIdentity, uuidToBytes } from './ids'
 
 describe('ids', () => {
   it('round-trips hex', () => {
@@ -7,6 +7,19 @@ describe('ids', () => {
     expect(toHex(bytes)).toBe('0001feff')
     expect(fromHex('0001feff')).toEqual(bytes)
     expect(() => fromHex('zz')).toThrow()
+  })
+
+  it('skips identities that are not account and device', () => {
+    // A member added by a misbehaving client can carry any identity bytes.
+    // Routing must skip it instead of throwing, or the whole group stops
+    // sending (audit H1).
+    expect(trySplitIdentity(new Uint8Array(0))).toBeUndefined()
+    expect(trySplitIdentity(new Uint8Array(31))).toBeUndefined()
+    expect(trySplitIdentity(new Uint8Array(33))).toBeUndefined()
+    const split = trySplitIdentity(new Uint8Array(32).fill(7))
+    expect(split?.account).toHaveLength(32)
+    expect(split?.deviceId).toHaveLength(32)
+    expect(() => splitIdentity(new Uint8Array(31))).toThrow()
   })
 
   it('builds and splits identities', () => {

@@ -1,11 +1,17 @@
 // Helpers for the messaging end-to-end tests (real chat-server).
-import { randomInt } from 'node:crypto'
 import { type Browser, type Page, expect } from '@playwright/test'
 
-/** A fresh username for each test run, e.g. `u4821937.55`. */
+/**
+ * A fresh username for each test run, e.g. `u4821937.55`. Uses random bytes
+ * rather than `Math.random`: a username names an account, and static analysis
+ * cannot tell a test helper from production code
+ * (CodeQL `js/insecure-randomness`).
+ */
 export function randomUsername(): string {
-  const digits = (n: number) => String(randomInt(10 ** n)).padStart(n, '0')
-  return `u${digits(7)}.${digits(2)}`
+  const bytes = crypto.getRandomValues(new Uint8Array(9))
+  const digits = (from: number, count: number) =>
+    Array.from(bytes.slice(from, from + count), (b) => String(b % 10)).join('')
+  return `u${digits(0, 7)}.${digits(7, 2)}`
 }
 
 /** Signs up in a new browser context (the e2e server allows open sign-up). */

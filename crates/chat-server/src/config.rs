@@ -17,6 +17,9 @@ pub struct Config {
     pub vapid_private_key: Option<String>,
     /// `CHAT_VAPID_SUBJECT`: contact for push services, e.g. `mailto:ops@example.com`.
     pub vapid_subject: String,
+    /// `CHAT_PUSH_HOSTS`: push service hosts the server may send to
+    /// (comma separated; empty keeps the browser vendors' defaults).
+    pub push_hosts: Vec<String>,
     /// `CHAT_METRICS_BIND`, default `0.0.0.0:9090`; empty disables the
     /// Prometheus endpoint. Not routed by the ingress.
     pub metrics_bind: Option<SocketAddr>,
@@ -88,6 +91,7 @@ impl Config {
             },
             vapid_subject: std::env::var("CHAT_VAPID_SUBJECT")
                 .unwrap_or_else(|_| "mailto:admin@localhost".to_owned()),
+            push_hosts: list_var("CHAT_PUSH_HOSTS"),
         })
     }
 }
@@ -99,6 +103,10 @@ fn limits_from_env() -> anyhow::Result<Limits> {
         claims_per_hour: limit_var("CLAIMS_PER_HOUR", d.claims_per_hour)?,
         welcomes_per_day: limit_var("WELCOMES_PER_DAY", d.welcomes_per_day)?,
         sends_per_minute: limit_var("SENDS_PER_MINUTE", d.sends_per_minute)?,
+        ws_auth_failures_per_minute: limit_var(
+            "WS_AUTH_FAILURES_PER_MINUTE",
+            d.ws_auth_failures_per_minute,
+        )?,
         registrations_per_ip_per_hour: limit_var(
             "REGISTRATIONS_PER_IP_PER_HOUR",
             d.registrations_per_ip_per_hour,
@@ -117,6 +125,19 @@ fn limits_from_env() -> anyhow::Result<Limits> {
             "RESTORES_PER_ACCOUNT_PER_DAY",
             d.restores_per_account_per_day,
         )?,
+        restore_failures_per_day: limit_var(
+            "RESTORE_FAILURES_PER_DAY",
+            d.restore_failures_per_day,
+        )?,
+        send_mb_per_day: limit_var("SEND_MB_PER_DAY", d.send_mb_per_day)?,
+        queue_rows_per_device: limit_var("QUEUE_ROWS_PER_DEVICE", d.queue_rows_per_device)?,
+        blob_mb_per_account: limit_var("BLOB_MB_PER_ACCOUNT", d.blob_mb_per_account)?,
+        turn_credentials_per_day: limit_var(
+            "TURN_CREDENTIALS_PER_DAY",
+            d.turn_credentials_per_day,
+        )?,
+        tile_areas_per_hour: limit_var("TILE_AREAS_PER_HOUR", d.tile_areas_per_hour)?,
+        tile_reads_per_minute: limit_var("TILE_READS_PER_MINUTE", d.tile_reads_per_minute)?,
         trust_proxy_headers: std::env::var("CHAT_TRUST_PROXY_HEADERS").is_ok_and(|v| v == "true"),
     })
 }

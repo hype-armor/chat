@@ -193,6 +193,7 @@ impl Echo {
                 &conversation_id,
                 content::Body::Profile(Profile {
                     display_name: self.name.clone(),
+                    avatar: Vec::new(),
                 }),
                 now_ms,
                 false,
@@ -292,7 +293,7 @@ fn call_body(call_id: &[u8], kind: call::Kind, sdp: String, to_device: Vec<u8>) 
 
 #[cfg(test)]
 mod tests {
-    use chat_core::mls::Device;
+    use chat_core::mls::{Device, JoinPackage};
     use chat_proto::v1::{Attachment, Location, Text};
 
     use super::*;
@@ -306,7 +307,15 @@ mod tests {
         let mut alice = Client::new(Device::new(&identity(1, 1)).unwrap());
         let mut echo = Echo::new(Client::new(Device::new(&identity(2, 2)).unwrap()), "Echo");
         let kp = echo.client().key_packages(1).unwrap().remove(0);
-        let started = alice.start_conversation(&[&kp], vec![9]).unwrap();
+        let started = alice
+            .start_conversation(
+                &[JoinPackage {
+                    identity: &identity(2, 2),
+                    key_package: &kp,
+                }],
+                vec![9],
+            )
+            .unwrap();
         let out = echo.handle(&started.welcome, 1).unwrap();
         // Joining: the bot introduces itself, to Alice's device only.
         assert_eq!(out.len(), 1);
@@ -314,7 +323,7 @@ mod tests {
         match alice.receive(&out[0].envelope).unwrap() {
             Event::Message { content, .. } => assert!(matches!(
                 content.body,
-                Some(content::Body::Profile(Profile { ref display_name })) if display_name == "Echo"
+                Some(content::Body::Profile(Profile { ref display_name, .. })) if display_name == "Echo"
             )),
             other => panic!("expected a profile, got {other:?}"),
         }
@@ -390,6 +399,7 @@ mod tests {
                 expires_at_ms: 900_000,
                 location: lat.map(point),
                 stopped: lat.is_none(),
+                until_stopped: true,
             })
         };
         let mut session = None;
@@ -406,6 +416,7 @@ mod tests {
             assert_eq!(*session.get_or_insert(l.session_id.clone()), l.session_id);
             assert_eq!(l.location.as_ref().map(|p| p.latitude), lat);
             assert_eq!(l.stopped, lat.is_none());
+            assert!(l.until_stopped);
         }
     }
 

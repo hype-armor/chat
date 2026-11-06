@@ -9,10 +9,11 @@ import { isApple, mapsAppLink } from './mapsLink'
 
 const APPLE = typeof navigator !== 'undefined' && isApple(navigator.userAgent, navigator.maxTouchPoints ?? 0)
 
-const LIVE_CHOICES: [string, number][] = [
-  ['15 min', 15 * 60_000],
-  ['1 hour', 60 * 60_000],
-  ['8 hours', 8 * 60 * 60_000],
+const LIVE_CHOICES: { label: string; durationMs: number | null }[] = [
+  { label: '15 min', durationMs: 15 * 60_000 },
+  { label: '1 hour', durationMs: 60 * 60_000 },
+  { label: '8 hours', durationMs: 8 * 60 * 60_000 },
+  { label: 'Until stopped', durationMs: null },
 ]
 
 export function formatCoordinates(l: LocationInfo): string {
@@ -102,7 +103,7 @@ export function ShareLocation({
     }
   }
 
-  const live = async (location: LocationInfo, durationMs: number) => {
+  const live = async (location: LocationInfo, durationMs: number | null) => {
     close()
     onSend()
     try {
@@ -128,12 +129,16 @@ export function ShareLocation({
             </button>
             <h3 className="small">Share live location for</h3>
             <div className="live-choices" role="group" aria-label="Share live location for">
-              {LIVE_CHOICES.map(([label, ms]) => (
-                <button key={ms} type="button" className="secondary" onClick={() => void live(state, ms)}>
+              {LIVE_CHOICES.map(({ label, durationMs }) => (
+                <button key={label} type="button" className="secondary" onClick={() => void live(state, durationMs)}>
                   {label}
                 </button>
               ))}
             </div>
+            <p className="small muted">
+              Live sharing pauses when this app is closed or in the background.
+              Recipients remove the last point after 8 hours without an update.
+            </p>
             <button type="button" className="link" onClick={close}>
               Cancel
             </button>

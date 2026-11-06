@@ -58,14 +58,16 @@ pub fn decode(bytes: &[u8]) -> Result<Envelope> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mls::JoinPackage;
 
     #[test]
     fn seal_encode_decode_open() {
         let alice = Device::new(b"alice").unwrap();
         let bob = Device::new(b"bob").unwrap();
         let mut a = Conversation::create(&alice).unwrap();
+        let bob_package = bob.key_package().unwrap();
         let change = a
-            .add_members(&alice, &[&bob.key_package().unwrap()])
+            .add_members(&alice, &[JoinPackage::of(&bob, &bob_package)])
             .unwrap();
         let mut b = Conversation::join(&bob, &change.welcome).unwrap();
 

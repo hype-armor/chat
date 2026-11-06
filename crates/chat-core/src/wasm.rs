@@ -12,7 +12,7 @@ use wasm_bindgen::prelude::*;
 use crate::{
     attachment::{Opener, Sealer},
     client::{Client, Event},
-    mls::{Conversation, Device, PendingDevice, Received},
+    mls::{Conversation, Device, IDENTITY_LEN, JoinPackage, PendingDevice, Received},
 };
 
 fn js_err(e: crate::Error) -> JsError {
@@ -31,8 +31,9 @@ pub fn self_test() -> Result<bool, JsError> {
     let alice = Device::new(b"alice").map_err(js_err)?;
     let bob = Device::new(b"bob").map_err(js_err)?;
     let mut a = Conversation::create(&alice).map_err(js_err)?;
+    let bob_package = bob.key_package().map_err(js_err)?;
     let change = a
-        .add_members(&alice, &[&bob.key_package().map_err(js_err)?])
+        .add_members(&alice, &[JoinPackage::of(&bob, &bob_package)])
         .map_err(js_err)?;
     let mut b = Conversation::join(&bob, &change.welcome).map_err(js_err)?;
     let ct = a.encrypt(&alice, b"ping").map_err(js_err)?;
@@ -67,7 +68,12 @@ impl GroupBench {
         let refs: Vec<&[u8]> = kps.iter().map(Vec::as_slice).collect();
         let mut conv = Conversation::create(&creator).map_err(js_err)?;
         if !refs.is_empty() {
-            conv.add_members(&creator, &refs).map_err(js_err)?;
+            let joins = others
+                .iter()
+                .zip(&kps)
+                .map(|(device, package)| JoinPackage::of(device, package))
+                .collect::<Vec<_>>();
+            conv.add_members(&creator, &joins).map_err(js_err)?;
         }
         Ok(GroupBench { creator, conv })
     }
@@ -95,6 +101,34 @@ fn bytes_array(items: impl IntoIterator<Item = Vec<u8>>) -> Array {
 
 fn array_bytes(array: &Array) -> Vec<Vec<u8>> {
     array.iter().map(|v| Uint8Array::new(&v).to_vec()).collect()
+}
+
+/// Pairs `identities` with `key_packages` (audit H1: the caller states which
+/// account and device each package must belong to).
+fn join_packages<'a>(
+    identities: &'a [Vec<u8>],
+    key_packages: &'a [Vec<u8>],
+) -> Result<Vec<JoinPackage<'a>>, JsError> {
+    if identities.len() != key_packages.len() {
+        return Err(JsError::new(
+            "identities and key packages must have the same length",
+        ));
+    }
+    for identity in identities {
+        if identity.len() != IDENTITY_LEN {
+            return Err(JsError::new(
+                "an identity is 16 bytes of account id then 16 bytes of device id",
+            ));
+        }
+    }
+    Ok(identities
+        .iter()
+        .zip(key_packages)
+        .map(|(identity, key_package)| JoinPackage {
+            identity,
+            key_package,
+        })
+        .collect())
 }
 
 /// A signing key awaiting registration: send `publicKey` to the server,
@@ -190,6 +224,9 @@ pub struct EventView {
     pub text: Option<String>,
     #[wasm_bindgen(getter_with_clone, js_name = displayName)]
     pub display_name: Option<String>,
+    /// A `Profile`'s photo (JPEG), if the sender has one.
+    #[wasm_bindgen(getter_with_clone)]
+    pub avatar: Option<Vec<u8>>,
     #[wasm_bindgen(getter_with_clone, js_name = groupName)]
     pub group_name: Option<String>,
     /// Admin account ids from a `GroupInfo`, 16 bytes each, concatenated.
@@ -243,7 +280,7 @@ impl From<Location> for LocationView {
     }
 }
 
-/// A `LiveLocation` message body; `location` is absent when stopping.
+/// A `LiveLocation` body; until-stopped sessions renew their 8-hour lease.
 #[wasm_bindgen]
 #[derive(Clone)]
 pub struct LiveLocationView {
@@ -254,6 +291,8 @@ pub struct LiveLocationView {
     #[wasm_bindgen(getter_with_clone)]
     pub location: Option<LocationView>,
     pub stopped: bool,
+    #[wasm_bindgen(js_name = untilStopped)]
+    pub until_stopped: bool,
 }
 
 /// A `Location` message body.
@@ -277,6 +316,7 @@ impl EventView {
             sent_at_ms: 0.0,
             text: None,
             display_name: None,
+            avatar: None,
             group_name: None,
             group_admins: Vec::new(),
             device_sync: None,
@@ -521,6 +561,13 @@ impl CoreClient {
         ))
     }
 
+    /// The identity a key package claims, so the worker can check it against
+    /// the device it asked the directory for before staging an add (H1).
+    #[wasm_bindgen(js_name = keyPackageIdentity)]
+    pub fn key_package_identity(&self, key_package: &[u8]) -> Result<Vec<u8>, JsError> {
+        self.inner.key_package_identity(key_package).map_err(js_err)
+    }
+
     #[wasm_bindgen(js_name = conversationIds)]
     pub fn conversation_ids(&self) -> Array {
         bytes_array(self.inner.conversation_ids())
@@ -559,19 +606,23 @@ impl CoreClient {
             .collect())
     }
 
+    /// `identities`: one 32-byte `account ‖ device` id per key package, in
+    /// the same order. A package whose identity differs is refused.
     #[wasm_bindgen(js_name = addMembers)]
     pub fn add_members(
         &mut self,
         conversation_id: &[u8],
+        identities: &Array,
         key_packages: &Array,
         commit_id: Vec<u8>,
         welcome_id: Vec<u8>,
     ) -> Result<AddedView, JsError> {
+        let identities = array_bytes(identities);
         let kps = array_bytes(key_packages);
-        let refs: Vec<&[u8]> = kps.iter().map(Vec::as_slice).collect();
+        let joins = join_packages(&identities, &kps)?;
         let added = self
             .inner
-            .add_members(conversation_id, &refs, commit_id, welcome_id)
+            .add_members(conversation_id, &joins, commit_id, welcome_id)
             .map_err(js_err)?;
         Ok(AddedView {
             commit_hash: added.commit_hash,
@@ -665,17 +716,21 @@ impl CoreClient {
             .map_err(js_err)
     }
 
+    /// `identities`: one 32-byte `account ‖ device` id per key package, in
+    /// the same order (audit H1).
     #[wasm_bindgen(js_name = startConversation)]
     pub fn start_conversation(
         &mut self,
+        identities: &Array,
         key_packages: &Array,
         message_id: Vec<u8>,
     ) -> Result<StartedView, JsError> {
+        let identities = array_bytes(identities);
         let kps = array_bytes(key_packages);
-        let refs: Vec<&[u8]> = kps.iter().map(Vec::as_slice).collect();
+        let joins = join_packages(&identities, &kps)?;
         let started = self
             .inner
-            .start_conversation(&refs, message_id)
+            .start_conversation(&joins, message_id)
             .map_err(js_err)?;
         Ok(StartedView {
             conversation_id: started.conversation_id,
@@ -743,8 +798,8 @@ impl CoreClient {
         )
     }
 
-    /// A live-location start or update (`point` true) or stop. Returns the
-    /// encoded `Envelope`.
+    /// A live-location start or update (`point` true) or stop. Until-stopped
+    /// sessions renew their 8-hour lease. Returns the encoded `Envelope`.
     #[wasm_bindgen(js_name = sendLiveLocation)]
     #[allow(clippy::too_many_arguments)]
     pub fn send_live_location(
@@ -752,6 +807,7 @@ impl CoreClient {
         conversation_id: &[u8],
         session_id: Vec<u8>,
         expires_at_ms: f64,
+        until_stopped: bool,
         point: bool,
         latitude: f64,
         longitude: f64,
@@ -772,6 +828,7 @@ impl CoreClient {
                 session_id,
                 expires_at_ms: expires_at_ms as u64,
                 stopped: location.is_none(),
+                until_stopped,
                 location,
             }),
             message_id,
@@ -815,13 +872,17 @@ impl CoreClient {
         &mut self,
         conversation_id: &[u8],
         display_name: String,
+        avatar: Vec<u8>,
         sent_at_ms: f64,
         message_id: Vec<u8>,
     ) -> Result<Vec<u8>, JsError> {
         self.send(
             conversation_id,
             sent_at_ms,
-            content::Body::Profile(Profile { display_name }),
+            content::Body::Profile(Profile {
+                display_name,
+                avatar,
+            }),
             message_id,
         )
     }
@@ -883,7 +944,10 @@ impl CoreClient {
                 view.sent_at_ms = content.sent_at_ms as f64;
                 match content.body {
                     Some(content::Body::Text(t)) => view.text = Some(t.body),
-                    Some(content::Body::Profile(p)) => view.display_name = Some(p.display_name),
+                    Some(content::Body::Profile(p)) => {
+                        view.display_name = Some(p.display_name);
+                        view.avatar = Some(p.avatar).filter(|a| !a.is_empty());
+                    }
                     Some(content::Body::GroupInfo(g)) => {
                         view.group_name = Some(g.name);
                         view.group_admins = g.admins.concat();
@@ -908,6 +972,7 @@ impl CoreClient {
                             expires_at_ms: l.expires_at_ms as f64,
                             location: l.location.map(Into::into),
                             stopped: l.stopped,
+                            until_stopped: l.until_stopped,
                         })
                     }
                     Some(content::Body::Receipt(r)) => {
@@ -977,18 +1042,22 @@ pub fn encode_authenticate(request_id: u32, token: String) -> Vec<u8> {
     )
 }
 
+/// `members`: for a commit that changes membership, the devices that are
+/// members afterwards (ADR-0035); empty for every other frame.
 #[wasm_bindgen(js_name = encodeSend)]
 pub fn encode_send(
     request_id: u32,
     envelope: &[u8],
     recipients: &Array,
     silent: bool,
+    members: &Array,
 ) -> Result<Vec<u8>, JsError> {
     let envelope = Envelope::decode(envelope).map_err(|e| JsError::new(&e.to_string()))?;
     let send = SendEnvelope {
         envelope: Some(envelope),
         recipient_devices: array_bytes(recipients),
         silent,
+        members: array_bytes(members),
         ..Default::default()
     };
     Ok(client_frame(request_id, client_frame::Body::Send(send)))
@@ -1003,6 +1072,7 @@ pub fn encode_send_with_welcome(
     recipients: &Array,
     welcome: &[u8],
     welcome_recipients: &Array,
+    members: &Array,
 ) -> Result<Vec<u8>, JsError> {
     let decode = |bytes: &[u8]| Envelope::decode(bytes).map_err(|e| JsError::new(&e.to_string()));
     let send = SendEnvelope {
@@ -1011,6 +1081,7 @@ pub fn encode_send_with_welcome(
         welcome: Some(decode(welcome)?),
         welcome_recipients: array_bytes(welcome_recipients),
         silent: false,
+        members: array_bytes(members),
     };
     Ok(client_frame(request_id, client_frame::Body::Send(send)))
 }

@@ -6,7 +6,6 @@ import type { CoreClient } from '../core/client'
 import type { ChatMessage, LiveInfo } from '../core/protocol'
 import { formatCoordinates } from './Location'
 import { MapView } from './MapView'
-import { useBannerHeight } from './useVisualViewport'
 
 function remaining(expiresAt: number, now: number): string {
   const minutes = Math.max(0, Math.ceil((expiresAt - now) / 60_000))
@@ -23,48 +22,116 @@ function useNow(everyMs: number): number {
   return Date.now()
 }
 
-/** The persistent indicator while this device shares (FR-LOC-6). */
-export function LiveBanner({
+/** One live-location share from this device (FR-LOC-6). */
+export type LiveShare = { conversationId: string; title: string; expiresAt: number; untilStopped: boolean }
+
+/** Keeps sharing running while this device has active shares. It draws nothing. */
+export function LiveSharing({
   core,
   sharing,
 }: {
   core: CoreClient
-  sharing: { conversationId: string; title: string; expiresAt: number }[]
+  sharing: LiveShare[]
 }) {
-  const now = useNow(30_000)
   const active = sharing.length > 0
-  const banner = useBannerHeight<HTMLDivElement>('--live-banner-height', active)
 
   useEffect(() => {
-    if (!active || !navigator.geolocation) return
-    const watch = navigator.geolocation.watchPosition(
-      (p) =>
-        void core
-          .liveUpdate({
-            latitude: p.coords.latitude,
-            longitude: p.coords.longitude,
-            accuracyM: Math.round(p.coords.accuracy),
-          })
-          .catch((e) => console.warn('live update failed', e)),
-      (e) => console.warn('location unavailable', e.message),
-      { enableHighAccuracy: true, maximumAge: 10_000 },
-    )
-    return () => navigator.geolocation.clearWatch(watch)
+    if (!active) return
+    if (!navigator.geolocation) {
+      void core.pauseLive().catch((e) => console.warn('pausing live location failed', e))
+      return
+    }
+
+    let watch: number | undefined
+    const pause = () => {
+      if (watch !== undefined) {
+        navigator.geolocation.clearWatch(watch)
+        watch = undefined
+      }
+      void core.pauseLive().catch((e) => console.warn('pausing live location failed', e))
+    }
+    const start = () => {
+      if (watch !== undefined || document.visibilityState !== 'visible') return
+      watch = navigator.geolocation.watchPosition(
+        (p) => {
+          if (document.visibilityState !== 'visible') return
+          void core
+            .liveUpdate({
+              latitude: p.coords.latitude,
+              longitude: p.coords.longitude,
+              accuracyM: Math.round(p.coords.accuracy),
+            })
+            .catch((e) => console.warn('live update failed', e))
+        },
+        (e) => {
+          console.warn('location unavailable', e.message)
+          void core.pauseLive().catch((error) => console.warn('pausing live location failed', error))
+        },
+        { enableHighAccuracy: true, maximumAge: 10_000 },
+      )
+    }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') start()
+      else pause()
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    onVisibilityChange()
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      pause()
+    }
   }, [core, active])
 
-  if (!active) return null
+  return null
+}
+
+/** The FR-LOC-6 indicator in one conversation: time left and a Stop action. */
+export function LiveIndicator({ core, share }: { core: CoreClient; share: LiveShare }) {
+  const now = useNow(30_000)
   return (
-    <div className="live-banner" ref={banner} role="status" aria-label="Sharing live location">
-      {sharing.map((s) => (
-        <span key={s.conversationId}>
-          📍 Sharing live location with {s.title} · {remaining(s.expiresAt, now)}{' '}
-          <button type="button" className="link" onClick={() => void core.stopLive(s.conversationId)}>
-            Stop
-          </button>
-        </span>
+    <span
+      className="live-indicator"
+      role="status"
+      aria-label={`Sharing live location in ${share.title}`}
+      title="Sharing pauses when the app is closed or in the background."
+    >
+      📍 {share.title}: Sharing live location · {share.untilStopped ? 'until stopped' : remaining(share.expiresAt, now)}
+      <button type="button" className="link small" onClick={() => void core.stopLive(share.conversationId)}>
+        Stop
+      </button>
+    </span>
+  )
+}
+
+/** Active shares from this contact in this conversation only; never one-shot or expired points. */
+export function contactLiveLocations(messages: ChatMessage[], account: string, now: number): ChatMessage[] {
+  return messages.filter((m) =>
+    m.from === account && m.live && !m.live.ended && !m.live.stopped && m.live.latest && m.live.expiresAt > now,
+  )
+}
+
+/** The contact-name/avatar details view keeps live locations above verification. */
+export function ContactLiveLocations({
+  core,
+  conversationId,
+  account,
+  messages,
+}: {
+  core: CoreClient
+  conversationId: string
+  account: string
+  messages: ChatMessage[]
+}) {
+  const now = useNow(15_000)
+  const locations = contactLiveLocations(messages, account, now)
+  if (locations.length === 0) return null
+  return (
+    <section aria-label="Contact live location" className="contact-live-location">
+      <h3>Live location</h3>
+      {locations.map((message) => (
+        <LiveCard key={message.id} core={core} conversationId={conversationId} message={message} live={message.live!} />
       ))}
-      <span className="small">Sharing pauses while the app is closed.</span>
-    </div>
+    </section>
   )
 }
 
@@ -82,7 +149,7 @@ export function LiveCard({
 }) {
   const now = useNow(15_000)
   const [map, setMap] = useState(true)
-  if (live.ended || !live.latest) {
+  if (live.ended || live.stopped || live.expiresAt <= now || !live.latest) {
     return (
       <div className="location" data-testid="live-location">
         <span>📍 Live location ended</span>
@@ -91,9 +158,10 @@ export function LiveCard({
   }
   const ago = Math.max(0, Math.round((now - live.latest.at) / 60_000))
   const until = new Date(live.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const duration = live.untilStopped ? 'until stopped' : `until ${until}`
   return (
     <div className="location" data-testid="live-location">
-      <span>📍 Live location · until {until}</span>
+      <span>📍 Live location · {duration}</span>
       <span className="small muted">
         {formatCoordinates(live.latest)} · ±{live.latest.accuracyM} m · updated{' '}
         {ago === 0 ? 'just now' : `${ago} min ago`}

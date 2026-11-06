@@ -82,13 +82,34 @@ membership changes deferred until online).
 | Technique | Protects | Priority |
 |-----------|---------|---------|
 | Sealed-sender style anonymous delivery tokens | Sender identity from server | S |
-| Encrypted group state (membership, name, avatar inside MLS) | Group membership from server | S |
+| Encrypted group state (name, avatar and member list inside MLS) | Group names, avatars and member lists from the server. **Not** membership: the server holds the device set of each conversation (§4.1) | S |
 | Content-free push notifications | Content from Apple/Google | M |
 | Padding message sizes to buckets | Message length leakage | S |
 | Contact lookup by exact username only, strictly rate-limited; no search, directory or address-book upload (ADR-0021). The server holds no phone numbers or emails. | Social graph | M |
 | Username never transmitted in offline mode or shown to strangers | Identity of offline users | M |
 | Delete delivery records on ack | Historical metadata | M |
 | Optional IP-hiding relay for calls | User IP from call peer | S |
+
+### 4.1 What the server stores
+
+Group content is encrypted, but some metadata is unavoidable. The server
+keeps:
+
+- `conversation_members`: which device belongs to which conversation. The
+  server needs it to accept a send and to fan it out (ADR-0017). It learns
+  each conversation's devices, not the group's name or who its members are.
+- `group_epochs`: for each conversation, the current epoch and the hash of
+  the last accepted commit, so it accepts exactly one commit per epoch.
+- `queued_envelopes`: one row per recipient device, deleted on ack or after
+  30 days (FR-MSG-9).
+- Each device's coarse last-seen **day**, its push subscription, and
+  `rate_limits` windows, which expire within two days.
+- Attachment size and expiry, and for a report the reporter's device id and
+  the disclosed messages, for 90 days.
+
+Sealed sender would remove the first of these. It is not implemented
+(doc 11), so the server can tell which devices took part in a conversation,
+but not what they said.
 
 ## 5. At-rest security
 - Local database (SQLite-WASM on OPFS) encrypted at page level, with the

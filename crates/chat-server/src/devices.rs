@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::{AuthDevice, Registered, create_device, db, parse_identity_key},
-    error::ApiError,
+    error::{ApiError, ApiJson},
     limits::{self, ClientIp},
 };
 
@@ -64,7 +64,7 @@ pub struct Code {
 pub async fn approve(
     State(state): State<AppState>,
     AuthDevice(device): AuthDevice,
-    Json(req): Json<Code>,
+    ApiJson(req): ApiJson<Code>,
 ) -> Result<StatusCode, ApiError> {
     let db = db(&state)?;
     let row: Option<(Option<Uuid>,)> = sqlx::query_as(
@@ -104,7 +104,7 @@ pub struct LinkStatus {
 pub async fn status(
     State(state): State<AppState>,
     AuthDevice(device): AuthDevice,
-    Json(req): Json<Code>,
+    ApiJson(req): ApiJson<Code>,
 ) -> Result<Json<LinkStatus>, ApiError> {
     let row: Option<(Option<Uuid>,)> = sqlx::query_as(
         "SELECT l.device_id FROM link_requests l
@@ -130,7 +130,7 @@ pub struct Complete {
 /// a phone verification (`409` until then).
 pub async fn complete(
     State(state): State<AppState>,
-    Json(req): Json<Complete>,
+    ApiJson(req): ApiJson<Complete>,
 ) -> Result<Json<Registered>, ApiError> {
     let identity_key = parse_identity_key(&req.identity_key)?;
     let hash = link_hash(&req.code)?;
@@ -212,7 +212,7 @@ pub struct Remove {
 pub async fn remove(
     State(state): State<AppState>,
     AuthDevice(device): AuthDevice,
-    Json(req): Json<Remove>,
+    ApiJson(req): ApiJson<Remove>,
 ) -> Result<StatusCode, ApiError> {
     if req.device_id == device {
         return Err(ApiError::BadRequest(
@@ -257,7 +257,7 @@ pub struct AccountDevices {
 pub async fn of(
     State(state): State<AppState>,
     AuthDevice(device): AuthDevice,
-    Json(req): Json<DevicesOf>,
+    ApiJson(req): ApiJson<DevicesOf>,
 ) -> Result<Json<AccountDevices>, ApiError> {
     if req.account_ids.is_empty() || req.account_ids.len() > MAX_ACCOUNTS {
         return Err(ApiError::BadRequest("ask for 1 to 200 accounts"));
