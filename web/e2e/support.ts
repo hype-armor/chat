@@ -59,6 +59,7 @@ export async function conversationAction(page: Page, action: string) {
 }
 
 export const conversationDetails = (page: Page) => page.getByRole('complementary', { name: 'Conversation details' })
+  .or(page.getByRole('dialog', { name: 'Conversation details' }))
 
 export async function closeDetails(page: Page) {
   const panel = conversationDetails(page)

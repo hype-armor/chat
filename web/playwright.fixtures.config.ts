@@ -4,7 +4,7 @@ import { defineConfig, devices } from '@playwright/test'
 process.env.E2E_UI_FIXTURES = '1'
 export default defineConfig({
   testDir: 'e2e',
-  testMatch: ['message-interactions.spec.ts', 'fixture-scroll.spec.ts'],
+  testMatch: ['message-interactions.spec.ts', 'fixture-scroll.spec.ts', 'responsive-details.spec.ts'],
   workers: 1,
   use: { baseURL: 'http://127.0.0.1:14173' },
   projects: [

@@ -65,9 +65,11 @@ test('conversation menu supports keyboard, dismissal, actions and a 320px header
   await expect(alice.locator('.conversation-title')).toHaveAccessibleDescription(/Verified$/)
   await alice.setViewportSize({ width: 320, height: 640 })
   await expectSingleRow(alice)
-  await expect(alice.getByRole('button', { name: 'Voice call', exact: true })).toBeVisible()
-  await expect(alice.getByRole('button', { name: 'Video call', exact: true })).toBeVisible()
+  await expect(alice.getByRole('button', { name: 'Voice call', exact: true })).toBeHidden()
+  await expect(alice.getByRole('button', { name: 'Video call', exact: true })).toBeHidden()
   await trigger.click()
+  await expect(menu.getByRole('menuitem', { name: 'Voice call', exact: true })).toBeVisible()
+  await expect(menu.getByRole('menuitem', { name: 'Video call', exact: true })).toBeVisible()
   const bounds = await menu.boundingBox()
   expect(bounds!.x).toBeGreaterThanOrEqual(0)
   expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(320)
@@ -100,7 +102,7 @@ test('group title opens info and the menu keeps group actions on one row', async
   await expect(ann.getByRole('button', { name: 'Back to conversation' })).toBeFocused()
   await closeDetails(ann)
   await ann.getByRole('button', { name: 'Conversation menu' }).click()
-  await expect(ann.getByRole('menuitem')).toHaveText(['Group info', 'Add people'])
+  await expect(ann.getByRole('menuitem')).toHaveText(['Group voice call', 'Group video call', 'Group info', 'Add people'])
   await ann.getByRole('menuitem', { name: 'Add people', exact: true }).click()
   await expect(ann.getByRole('menu')).toBeHidden()
   await expect(ann.getByLabel('Usernames to add')).toBeVisible()
@@ -179,15 +181,15 @@ test('details stay beside messages on desktop and replace them on phones without
   await title.click()
   await expect.poll(() => viewport.evaluate((el) => el.scrollTop)).toBe(0)
   await ann.setViewportSize({ width: 641, height: 720 })
-  await expect(composer).toBeVisible()
+  await expect(panel).toHaveAttribute('role', 'dialog')
+  await expect(panel).toHaveAttribute('aria-modal', 'true')
+  await expect(ann.locator('.conversation')).toHaveAttribute('inert')
   const compactMessageBounds = (await viewport.boundingBox())!
   const compactPanelBounds = (await panel.boundingBox())!
-  expect(compactMessageBounds.x + compactMessageBounds.width).toBeLessThanOrEqual(compactPanelBounds.x)
-  const menuBounds = (await ann.getByRole('button', { name: 'Conversation menu' }).boundingBox())!
-  expect(menuBounds.x + menuBounds.width).toBeLessThanOrEqual(compactPanelBounds.x)
-  const composerBounds = (await composer.boundingBox())!
+  // At this width the sheet covers the conversation instead of squeezing it.
+  expect(compactMessageBounds.x + compactMessageBounds.width).toBeCloseTo(compactPanelBounds.x + compactPanelBounds.width, 0)
+  const composerBounds = (await ann.locator('.composer textarea').boundingBox())!
   expect(composerBounds.width).toBeGreaterThan(60)
-  expect(composerBounds.x + composerBounds.width).toBeLessThanOrEqual(compactPanelBounds.x)
   await expect.poll(() => panel.locator('.details-content').evaluate((el) => el.scrollWidth - el.clientWidth)).toBe(0)
   await closeDetails(ann)
   await ann.setViewportSize({ width: 320, height: 640 })

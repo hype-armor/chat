@@ -1,7 +1,22 @@
 import { expect, test } from './fixtures'
-import { messages, randomUsername, signUp, startChat } from './support'
+import { conversationAction, messages, randomUsername, signUp, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
+
+test('a 320px header can start a voice call from its menu with the echo bot', async ({ browser, browserName }) => {
+  test.skip(browserName === 'webkit', 'fake microphone is not configured for WebKit')
+  const alice = await signUp(browser, 'Alice', randomUsername())
+  await alice.setViewportSize({ width: 320, height: 640 })
+  await startChat(alice, 'echo.00')
+  await expect(alice.getByRole('heading', { name: 'Echo (test bot)' })).toBeVisible({ timeout: 15_000 })
+  // The echo bot is local to the isolated E2E services, never a live deployment.
+  await conversationAction(alice, 'Voice call')
+  const call = alice.getByRole('dialog', { name: 'Call with Echo (test bot)', exact: true })
+  await expect(call).toBeVisible()
+  await expect(call.locator('.call-status')).toHaveText(/^\d+:\d\d$/, { timeout: 30_000 })
+  await call.getByRole('button', { name: 'Hang up', exact: true }).click()
+  await expect(call).toBeHidden()
+})
 
 test('the echo bot sends back text and photos, end to end encrypted', async ({ browser }) => {
   const alice = await signUp(browser, 'Alice', randomUsername())

@@ -9,6 +9,8 @@ import '../styles.css'
 const params = new URLSearchParams(location.search)
 const name = params.get('name') ?? 'Alice'
 const remote = name === 'Alice' ? 'Bob' : 'Alice'
+const isGroup = params.get('group') === '1'
+const title = params.get('title') ?? remote
 const room = params.get('room') ?? 'fixture'
 const channel = new BroadcastChannel(`interaction-fixture-${room}`)
 const subscribers = new Set<(event: unknown) => void>()
@@ -57,6 +59,15 @@ const core = {
   typing: async () => typists(),
   setTypingIndicators: async () => {},
   avatar: async () => undefined,
+  members: async () => [
+    { account: name, name, isMe: true, isAdmin: true, blocked: false },
+    { account: remote, name: remote, isMe: false, isAdmin: false, blocked: false },
+  ],
+  groupCallStatus: async () => undefined,
+  // Keep fixture calls at setup. These tests make no media or transport claim.
+  iceServers: () => new Promise(() => {}),
+  callSignal: () => new Promise(() => {}),
+  recordCall: () => {},
   avatarPhoto: async () => undefined,
   pushStatus: async () => ({ enabled: false }),
   mapInfo: () => new Promise((_resolve, reject) => {
@@ -80,7 +91,7 @@ const core = {
 } as unknown as CoreClient
 const view: Extract<AppView, { phase: 'ready' }> = {
   phase: 'ready', me: { account: name, username: name, displayName: name }, connection: 'online',
-  conversations: [{ id: 'chat', title: remote, isGroup: false, amAdmin: false, status: 'active', memberCount: 2, peer: remote, request: false, unread: 0, lastAt: Date.now() }],
+  conversations: [{ id: 'chat', title, isGroup, amAdmin: isGroup, status: 'active', memberCount: 2, peer: isGroup ? undefined : remote, request: false, unread: 0, lastAt: Date.now() }],
   alerts: [], readReceipts: true, typingIndicators: true, relayCalls: true, callStats: false,
   media: { photos: 'never', audio: 'never', video: 'never', files: 'never', quality: 'standard' }, liveSharing: [],
 }
