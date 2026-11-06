@@ -3084,17 +3084,25 @@ export class Engine {
     this.emitView()
   }
 
+  /**
+   * A removed member's live locations leave the chat: their cards are
+   * dropped, not shown as ended, and no points are kept.
+   */
   private async endRemovedPeerLiveLocations(conversationId: string, previousPeers: string[], peers: string[]) {
     const removedAccounts = previousPeers.filter((p) => !peers.includes(p))
     if (removedAccounts.length === 0) return
     const list = await this.stored(conversationId)
-    const removedIds = list
-      .filter((m) => removedAccounts.includes(m.from) && m.live && !m.live.ended)
-      .map((m) => m.id)
-    for (const messageId of removedIds) await this.endLiveMessage(conversationId, messageId, true)
-    this.state.liveSeen = this.state.liveSeen.filter(
-      (l) => l.conversationId !== conversationId || !removedIds.includes(l.messageId),
+    const removedIds = new Set(
+      list.filter((m) => removedAccounts.includes(m.from) && m.live).map((m) => m.id),
     )
+    if (removedIds.size === 0) return
+    // Callers already hold the engine lock (`exclusive` is not re-entrant).
+    const kept = list.filter((m) => !removedIds.has(m.id))
+    await this.store.putJson(`messages:${conversationId}`, kept)
+    this.state.liveSeen = this.state.liveSeen.filter(
+      (l) => l.conversationId !== conversationId || !removedIds.has(l.messageId),
+    )
+    this.emit({ type: 'messages', conversationId })
   }
 
   /** Settles a commit whose server answer was lost (see `PendingCommit`). */
