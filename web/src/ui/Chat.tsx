@@ -30,6 +30,10 @@ import {
   refreshSubscription,
 } from '../notifications'
 import { useBannerHeight, useVisualViewport } from './useVisualViewport'
+import { MessageText } from './MessageText'
+import { useMessageScroll } from './useMessageScroll'
+import { ReplyPreview, quoteMessage, useRemoteTyping, useSendTyping } from './messageInteractions'
+import type { ReplyPreview as ReplyQuote } from '../core/protocol'
 import { isIosDevice } from '../pwa'
 import { filterConversations, highlightTitle, normalizeSearch, searchUsername } from './conversationSearch'
 
@@ -271,6 +275,7 @@ export function Chat({
             verification={conversation.verification}
             blocked={conversation.blocked ?? false}
             request={conversation.request}
+            typingIndicators={view.typingIndicators}
             onBack={() => setSelected(undefined)}
           />
         ) : (
@@ -1117,6 +1122,7 @@ function Conversation({
   verification,
   blocked,
   request,
+  typingIndicators,
   onBack,
 }: {
   core: CoreClient
@@ -1132,6 +1138,7 @@ function Conversation({
   verification?: ConversationSummary['verification']
   blocked: boolean
   request: boolean
+  typingIndicators: boolean
   onBack: () => void
 }) {
   const [panel, updatePanel] = useState<'add' | 'info' | 'verify' | 'report'>()
@@ -1176,29 +1183,33 @@ function Conversation({
   }, [panelOpen, detailsVersion])
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [draft, setDraft] = useState('')
+  const [replyTo, setReplyTo] = useState<ReplyQuote>()
+  const draftVersion = useRef(0)
+  const [failedDrafts, setFailedDrafts] = useState<Array<{ version: number; text: string; quote?: ReplyQuote; error: string }>>([])
+  const editDraft = (text: string) => {
+    draftVersion.current++
+    setDraft(text)
+  }
+  const editReply = (quote: ReplyQuote | undefined) => {
+    draftVersion.current++
+    setReplyTo(quote)
+  }
+  const typingEnabled = typingIndicators
+  const [composerFocused, setComposerFocused] = useState(false)
+  const [typingError, setTypingError] = useState('')
+  const typingNames = useRemoteTyping(core, id, typingEnabled && active && !blocked && !request)
+  useSendTyping(core, id, draft, typingEnabled && active && !blocked && !request, composerFocused)
   const [attaching, setAttaching] = useState(false)
   const [attachError, setAttachError] = useState<string>()
-  const viewport = useRef<HTMLDivElement>(null)
-  const content = useRef<HTMLOListElement>(null)
-  const atBottom = useRef(true)
-  const lastScrollTop = useRef(0)
-  const viewportSize = useRef({ width: 0, height: 0 })
-  const previousMessages = useRef<ChatMessage[]>([])
-  const [newMessages, setNewMessages] = useState(false)
+  const { viewport, content, onScroll, capture, scrollToBottom, newMessages } = useMessageScroll(messages, panelOpen)
   const picker = useRef<HTMLInputElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const [recording, setRecording] = useState(false)
   const wasRecording = useRef(false)
   const setPanel = useCallback((next: typeof panel) => {
-    const list = viewport.current
-    // Capture pending user scrolling before a panel change reflows the messages.
-    if (list) {
-      atBottom.current = list.scrollHeight - list.scrollTop - list.clientHeight <= 80
-      lastScrollTop.current = list.scrollTop
-      viewportSize.current = { width: list.clientWidth, height: list.clientHeight }
-    }
+    capture()
     updatePanel(next)
-  }, [])
+  }, [capture])
   const menuItems: MenuItem[] = [
     ...(isGroup ? [{ label: 'Group info', onSelect: () => openPanel('info') }] : []),
     ...(peer ? [{ label: 'Verify safety number', onSelect: () => openPanel('verify') }] : []),
@@ -1207,40 +1218,18 @@ function Conversation({
     ...(peer && !blocked ? [{ label: 'Block', onSelect: () => void core.block(peer), danger: true }] : []),
   ]
 
-  const scrollToBottom = useCallback(() => {
-    atBottom.current = true
-    setNewMessages(false)
-    if (viewport.current) {
-      viewport.current.scrollTop = viewport.current.scrollHeight
-      lastScrollTop.current = viewport.current.scrollTop
-    }
-  }, [])
-
-  const onScroll = useCallback(() => {
-    const list = viewport.current
-    if (!list) return
-    // Reflow can move the browser's scroll anchor; it isn't a user scroll.
-    if (list.clientWidth !== viewportSize.current.width || list.clientHeight !== viewportSize.current.height) {
-      viewportSize.current = { width: list.clientWidth, height: list.clientHeight }
-      if (atBottom.current) scrollToBottom()
-      else lastScrollTop.current = list.scrollTop
-      return
-    }
-    // A queued event from our own scroll must not unpin newly grown content.
-    if (list.scrollTop === lastScrollTop.current) return
-    lastScrollTop.current = list.scrollTop
-    atBottom.current = list.scrollHeight - list.scrollTop - list.clientHeight <= 80
-    if (atBottom.current) setNewMessages(false)
-  }, [scrollToBottom])
-
-  useLayoutEffect(() => {
-    // Consume this resize before a later scroll can race its ResizeObserver.
-    onScroll()
-  }, [panelOpen, onScroll])
-
   useEffect(() => {
     let live = true
-    const load = () => core.messages(id).then((m) => live && setMessages(m))
+    let latest = 0
+    const load = async () => {
+      const version = ++latest
+      try {
+        const next = await core.messages(id)
+        if (live && version === latest) { capture(); setMessages(next) }
+      } catch (error) {
+        if (live) setAttachError(error instanceof Error ? error.message : 'Could not load messages')
+      }
+    }
     load()
     const unsubscribe = core.subscribe((e) => {
       if (e.type === 'messages' && e.conversationId === id) load()
@@ -1249,7 +1238,7 @@ function Conversation({
       live = false
       unsubscribe()
     }
-  }, [core, id])
+  }, [core, id, capture])
 
   // Seen while visible: read receipts go out (FR-MSG-5).
   useEffect(() => {
@@ -1259,29 +1248,6 @@ function Conversation({
     document.addEventListener('visibilitychange', mark)
     return () => document.removeEventListener('visibilitychange', mark)
   }, [core, id, messages, request])
-
-  useLayoutEffect(() => {
-    onScroll()
-    const previousIds = new Set(previousMessages.current.map((m) => m.id))
-    const added = messages.filter((m) => !previousIds.has(m.id))
-    previousMessages.current = messages
-    if (atBottom.current || added.some((m) => m.from === 'me')) {
-      scrollToBottom()
-    } else if (added.length > 0) {
-      setNewMessages(true)
-    }
-  }, [messages, onScroll, scrollToBottom])
-
-  useLayoutEffect(() => {
-    const observer = new ResizeObserver(() => {
-      onScroll()
-      if (atBottom.current) scrollToBottom()
-    })
-    // The list grows with loaded media; the viewport can shrink as panels open.
-    observer.observe(content.current!)
-    observer.observe(viewport.current!)
-    return () => observer.disconnect()
-  }, [onScroll, scrollToBottom])
 
   useLayoutEffect(() => {
     const input = composer.current
@@ -1309,13 +1275,29 @@ function Conversation({
   const send = async () => {
     const text = draft.trim()
     if (!text) return
+    const quote = replyTo
+    const originalDraft = draft
+    const submittedVersion = ++draftVersion.current
     setDraft('')
+    setReplyTo(undefined)
+    setAttachError(undefined)
     // Keyboard activation unmounts the focused Send button; pointer sends keep focus here.
     composer.current?.focus({ preventScroll: true })
     try {
-      await core.sendText(id, text)
+      scrollToBottom()
+      await core.sendText(id, text, quote?.messageId)
+      scrollToBottom()
     } catch (e) {
-      setAttachError(e instanceof Error ? e.message : String(e))
+      const error = e instanceof Error ? e.message : String(e)
+      if (draftVersion.current === submittedVersion) {
+        // Restore the submitted pair only while this submission still owns the composer.
+        draftVersion.current++
+        setDraft(originalDraft)
+        setReplyTo(quote)
+      } else {
+        setFailedDrafts((current) => [...current, { version: submittedVersion, text: originalDraft, quote, error }])
+      }
+      setAttachError(error)
     }
   }
 
@@ -1323,12 +1305,18 @@ function Conversation({
   const attach = async (file: File | undefined, recorded?: MediaInfo) => {
     if (picker.current) picker.current.value = ''
     if (!file) return
+    if (replyTo) {
+      setAttachError('Send or cancel your text reply before attaching a file.')
+      return
+    }
     setAttaching(true)
     setAttachError(undefined)
     try {
       const media = recorded ?? (await probeClip(file).catch(() => undefined))
+      scrollToBottom()
       await core.sendFile(id, file, draft.trim(), media)
-      setDraft('')
+      scrollToBottom()
+      editDraft('')
     } catch (e) {
       setAttachError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -1475,7 +1463,12 @@ function Conversation({
                   )}
                   {m.location && <LocationCard core={core} location={m.location} />}
                   {m.live && <LiveCard core={core} conversationId={id} message={m} live={m.live} />}
-                  {m.text && <span className="text">{m.text}</span>}
+                  {m.reply && <ReplyPreview quote={m.reply} />}
+                  {m.text && <MessageText text={m.text} />}
+                  {active && !blocked && !request && <button type="button" className="link small message-reply" aria-label={`Reply to ${m.from === 'me' ? 'your message' : m.fromName ?? title}`} onClick={() => {
+                    editReply(quoteMessage(m))
+                    composer.current?.focus({ preventScroll: true })
+                  }}>Reply</button>}
                   <span className={last || m.status === 'failed' ? 'meta small' : 'visually-hidden'}>
                     <time
                       className={last ? undefined : 'visually-hidden'}
@@ -1539,6 +1532,38 @@ function Conversation({
         }}
         hidden={!active || blocked || request}
       >
+        <div className="failed-drafts" hidden={failedDrafts.length === 0}>
+        {failedDrafts.map((failed) => <section className="failed-draft" aria-label="Failed draft" key={failed.version}>
+          <strong>Message was not sent</strong>
+          <p role="alert">{failed.error}</p>
+          {failed.quote && <ReplyPreview quote={failed.quote} />}
+          <p className="failed-draft-text">{failed.text}</p>
+          <p className="small">Send or clear your current draft before restoring this message.</p>
+          <button type="button" className="link small" disabled={draft !== '' || !!replyTo || recording || attaching} onClick={() => {
+            draftVersion.current++
+            setDraft(failed.text)
+            setReplyTo(failed.quote)
+            setFailedDrafts((current) => current.filter((item) => item.version !== failed.version))
+            composer.current?.focus({ preventScroll: true })
+          }}>Restore failed draft</button>
+          <button type="button" className="link small" onClick={() => setFailedDrafts((current) => current.filter((item) => item.version !== failed.version))}>Discard failed draft</button>
+        </section>)}
+        </div>
+        {replyTo && <ReplyPreview quote={replyTo} cancel={() => {
+          editReply(undefined)
+          composer.current?.focus({ preventScroll: true })
+        }} />}
+        <div className="typing-controls">
+          <span role="status" aria-live="polite">{typingNames.length > 0 ? `${typingNames.join(', ')} ${typingNames.length === 1 ? 'is' : 'are'} typing…` : ''}</span>
+          <label className="small"><input type="checkbox" checked={typingEnabled} onChange={(e) => {
+            const enabled = e.target.checked
+            setTypingError('')
+            void core.setTypingIndicators(enabled).catch((error: unknown) => {
+              setTypingError(error instanceof Error ? error.message : 'Could not change typing indicators')
+            })
+          }} /> Typing indicators</label>
+          {typingError && <span role="alert">{typingError}</span>}
+        </div>
         <div className="composer-row">
           <input
             ref={picker}
@@ -1551,7 +1576,10 @@ function Conversation({
             core={core}
             conversationId={id}
             onError={setAttachError}
-            onSend={() => composer.current?.focus({ preventScroll: true })}
+            onSend={() => {
+              scrollToBottom()
+              composer.current?.focus({ preventScroll: true })
+            }}
             trigger={(locate) =>
               recording ? null : attaching ? (
                 <span className="small" role="status">Attaching…</span>
@@ -1560,8 +1588,14 @@ function Conversation({
                   triggerLabel="Add attachment"
                   triggerContent="+"
                   items={[
-                    { label: 'Photo or file', onSelect: () => picker.current?.click() },
-                    { label: 'Location', onSelect: locate },
+                    { label: 'Photo or file', onSelect: () => {
+                      if (replyTo) setAttachError('Send or cancel your text reply before attaching a file.')
+                      else picker.current?.click()
+                    } },
+                    { label: 'Location', onSelect: () => {
+                      if (replyTo) setAttachError('Send or cancel your text reply before sharing a location.')
+                      else locate()
+                    } },
                   ]}
                 />
               )
@@ -1576,7 +1610,9 @@ function Conversation({
             rows={1}
             hidden={recording}
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onFocus={() => setComposerFocused(true)}
+            onBlur={() => setComposerFocused(false)}
+            onChange={(e) => editDraft(e.target.value)}
             onKeyDown={(e) => {
               if (
                 e.key === 'Enter' && !e.shiftKey &&
@@ -1598,7 +1634,7 @@ function Conversation({
           )}
           <Recorder
             hidden={draft.length > 0}
-            disabled={attaching}
+            disabled={attaching || !!replyTo}
             onRecordingChange={setRecording}
             onRecorded={(file, media) => void attach(file, media)}
             onError={setAttachError}

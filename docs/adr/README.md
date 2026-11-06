@@ -44,3 +44,4 @@ revisited; do it with a new ADR that supersedes the old one.
 | [0035](0035-membership-mirroring.md) | Mirror group membership changes to the server | Accepted |
 | [0036](0036-visible-web-push-for-pwas.md) | Show Web Push for suspended and active PWAs | Accepted |
 | [0037](0037-live-location-until-stopped.md) | Until-stopped live location uses renewable leases | Accepted |
+| [0038](0038-encrypted-replies-and-typing.md) | Quoted replies and transient typing inside MLS content | Accepted |

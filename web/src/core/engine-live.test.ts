@@ -126,6 +126,34 @@ describe('one card per live share', () => {
     expect(engine['state'].liveSeen).toEqual([{ conversationId, messageId, expiresAt: now + MAX_LIVE_DURATION_MS }])
   })
 
+  it.each(['me', peer])('keeps the immutable original hash when %s renews a live share', async (from) => {
+    const { engine, stored } = fixture(from)
+    const originalHash = 'aa'.repeat(32)
+    const updateHash = 'bb'.repeat(32)
+    const original = stored()[0]
+    original.contentHash = originalHash
+    await engine['store'].putJson(`messages:${conversationId}`, [original])
+    if (from === 'me') {
+      engine['connection'] = 'online'
+      Object.defineProperty(engine['core'], 'lastSentContentHash', { value: fromHex(updateHash) })
+      engine['state'].live.push({
+        sessionId, conversationId, messageId, expiresAt: now - 1000, untilStopped: true,
+        lastSentAt: now - MAX_LIVE_DURATION_MS - 1000,
+      })
+      await engine.liveUpdate(point)
+    } else {
+      await engine['applyLive'](conversationId, peer, false, '77'.repeat(16), now, {
+        sessionId: fromHex(sessionId), expiresAtMs: now + MAX_LIVE_DURATION_MS, untilStopped: true,
+        stopped: false, location: { ...point, label: '', free: () => {} },
+      } as Parameters<Engine['applyLive']>[5], { contentHash: updateHash })
+    }
+    expect(stored()).toHaveLength(1)
+    expect(stored()[0].contentHash).toBe(originalHash)
+    const reply = { id: '88'.repeat(16), from: 'me', text: 'Reply', sentAt: now, status: 'sent' as const, replyTo: messageId, replyToHash: originalHash }
+    await engine['store'].putJson(`messages:${conversationId}`, [...stored(), reply])
+    expect((await engine.messages(conversationId))[1].reply).toMatchObject({ text: 'Live location' })
+  })
+
   it('never reopens a card after an explicit stop', async () => {
     const { engine, stored } = fixture(peer)
     const view = {

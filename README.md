@@ -56,6 +56,22 @@ two-user messaging tests against a real server). The preview server applies the 
 headers from `deploy/docker/security-headers.inc.template`, so e2e tests
 catch CSP regressions.
 
+For isolated UI interaction tests without a database or chat server:
+
+```sh
+pnpm --filter web exec playwright test --config playwright.fixtures.config.ts
+# Include Firefox and WebKit:
+PW_ALL_BROWSERS=1 pnpm --filter web exec playwright test --config playwright.fixtures.config.ts
+```
+
+These fixtures render the real chat UI but replace transport and storage.
+They cover link actions, quoted replies, typing lifecycle, failed drafts,
+and scroll anchoring. Worker and MLS tests separately verify encrypted
+reply references and typing events. The fixtures do not verify production
+CSP, real server delivery, native share sheets, or physical phone keyboards.
+See the [interaction comparison](docs/ui-feature-comparison.md) and
+[ADR-0038](docs/adr/0038-encrypted-replies-and-typing.md).
+
 Full stack with PostgreSQL, Valkey, SeaweedFS (S3) and LiveKit:
 
 ```sh

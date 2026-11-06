@@ -123,6 +123,29 @@ flowchart LR
    display every push, including on Safari.
 5. Recipient fetches, decrypts, acks; Delivery Service deletes its entry.
 
+### 5.1.1 Quoted replies and typing indicators
+
+Quoted replies carry an optional original-message identifier and content
+hash inside the MLS-encrypted content. The hash binds the original content
+to its authenticated MLS sender. The core worker resolves a bounded quote
+preview from the same conversation's local history and verifies this hash.
+It does not trust an outer envelope identifier alone, a claimed author, or
+a sender-supplied quote snapshot. It does not fetch missing attachments.
+Missing or unverifiable originals show an unavailable placeholder. Reply
+references remain attached during offline sends and retries.
+
+Typing indicators also travel inside MLS-encrypted content. The worker
+uses the authenticated sender identity, throttles updates, rejects expired
+events, and combines devices into one displayed account. Typing events
+never become history entries, unread messages, receipts, notifications, or
+persistent outbox retries. MLS state still persists after encryption and
+decryption. A setting disables sending and displaying indicators.
+
+These features add no plaintext server fields or new server API. The
+existing silent-envelope transport carries typing events without Web Push.
+Recipients must still reject delayed events because the transport can queue
+encrypted envelopes. See ADR-0038 for the protocol and compatibility rules.
+
 ### 5.2 Send media
 
 1. Client generates random key K, encrypts the file (STREAM over

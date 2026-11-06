@@ -31,6 +31,29 @@ describe('CoreClient', () => {
     await expect(bench).resolves.toMatchObject({ members: 50 })
   })
 
+  it('uses reference-only reply requests and boolean-only typing requests', async () => {
+    const worker = new FakeWorker()
+    const client = new CoreClient(worker)
+    const sending = client.sendText('conversation', 'Reply body', '11'.repeat(16))
+    const typing = client.setTyping('conversation', true)
+    const disabling = client.setTypingIndicators(false)
+    expect(worker.sent.map((e) => e.request)).toEqual([
+      { type: 'sendText', conversationId: 'conversation', text: 'Reply body', replyTo: '11'.repeat(16) },
+      { type: 'setTyping', conversationId: 'conversation', active: true },
+      { type: 'setTypingIndicators', on: false },
+    ])
+    for (const { id } of worker.sent) worker.reply({ id, body: { type: 'ok' } })
+    await Promise.all([sending, typing, disabling])
+    const initial = client.typing('conversation')
+    const typists = [{ account: 'authenticated-account', name: 'Alex' }]
+    worker.reply({ id: worker.sent.at(-1)!.id, body: { type: 'typing', typists } })
+    await expect(initial).resolves.toEqual(typists)
+    const seen: CoreEvent[] = []
+    client.subscribe((event) => seen.push(event))
+    worker.reply({ id: 0, event: { type: 'typing', conversationId: 'conversation', typists } })
+    expect(seen).toEqual([{ type: 'typing', conversationId: 'conversation', typists }])
+  })
+
   it('rejects with the worker error message', async () => {
     const worker = new FakeWorker()
     const client = new CoreClient(worker)
