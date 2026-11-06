@@ -61,6 +61,65 @@ test('an off-screen clipping ancestor does not hide a layout defect', async ({ p
   ]))
 })
 
+for (const [borderLeft, borderRight] of [[0, 0], [12, 20]]) {
+  for (const origin of ['top left', 'center'] as const) {
+    test(`scaled clipping uses viewport coordinates: borders ${borderLeft}/${borderRight}, origin ${origin}`, async ({ page }) => {
+      await page.setViewportSize({ width: 320, height: 640 })
+      const left = origin === 'center' ? -(600 + borderLeft + borderRight) / 4 : 0
+      await page.setContent(`<!doctype html>
+        <div style="position: fixed; left: ${left}px; top: 0; width: 600px; height: 80px;
+          overflow: hidden; transform: scale(.5); transform-origin: ${origin};
+          border-left: ${borderLeft}px solid; border-right: ${borderRight}px solid">
+          <div id="scaled-child" style="width: 800px; height: 80px"></div>
+        </div>
+      `)
+      const contentRight = (borderLeft + 600) / 2
+      const borderBoxRight = (borderLeft + 600 + borderRight) / 2
+      const box = (await page.locator('#scaled-child').boundingBox())!
+      // The child box exceeds the viewport, but its painted content does not.
+      expect(box.x + box.width).toBeGreaterThan(320)
+      expect(await page.locator('body').evaluate((body, x) =>
+        body.ownerDocument.elementFromPoint(x, 30)?.id, contentRight - 1)).toBe('scaled-child')
+      expect(await page.locator('body').evaluate((body, x) =>
+        body.ownerDocument.elementFromPoint(x, 30)?.id, borderBoxRight + 1)).not.toBe('scaled-child')
+      expect(await layoutReport(page)).toEqual([])
+    })
+  }
+
+  test(`scaled clipping still reports visible overflow: borders ${borderLeft}/${borderRight}`, async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 640 })
+    await page.setContent(`<!doctype html>
+      <div style="position: fixed; left: 0; top: 0; width: 200px; height: 40px;
+        overflow: hidden; transform: scale(2); transform-origin: top left;
+        border-left: ${borderLeft}px solid; border-right: ${borderRight}px solid">
+        <div id="scaled-child" style="width: 300px; height: 40px"></div>
+      </div>
+    `)
+    expect(await page.locator('body').evaluate((body) =>
+      body.ownerDocument.elementFromPoint(319, 30)?.id)).toBe('scaled-child')
+    expect(await layoutReport(page)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ problem: 'off-screen content', element: expect.stringContaining('#scaled-child ') }),
+    ]))
+  })
+}
+
+test('clipping uses the combined scale of nested containers', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 640 })
+  await page.setContent(`<!doctype html>
+    <div style="position: fixed; left: 0; top: 0; width: 600px; height: 160px;
+      transform: scale(.5); transform-origin: top left; overflow: hidden">
+      <div style="width: 600px; height: 160px; transform: scale(.5); transform-origin: top left; overflow: hidden">
+        <div id="scaled-child" style="width: 1600px; height: 160px"></div>
+      </div>
+    </div>
+  `)
+  expect(await page.locator('body').evaluate((body) =>
+    body.ownerDocument.elementFromPoint(149, 20)?.id)).toBe('scaled-child')
+  expect(await page.locator('body').evaluate((body) =>
+    body.ownerDocument.elementFromPoint(151, 20)?.id)).not.toBe('scaled-child')
+  expect(await layoutReport(page)).toEqual([])
+})
+
 for (const position of ['fixed', 'absolute'] as const) {
   for (const wrapper of ['static', 'relative'] as const) {
     if (position === 'absolute' && wrapper === 'relative') continue

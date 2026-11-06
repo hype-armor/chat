@@ -62,8 +62,11 @@ export async function layoutReport(page: Page, chat = false) {
           positioned = null
           if (ancestorStyle.overflowX !== 'visible') {
             const bounds = ancestor.getBoundingClientRect()
-            left = Math.max(left, bounds.left + ancestor.clientLeft)
-            right = Math.min(right, bounds.left + ancestor.clientLeft + ancestor.clientWidth)
+            // Client geometry is untransformed. Convert it with the border-box
+            // scale so borders and nested, axis-aligned scales share viewport units.
+            const scaleX = ancestor.offsetWidth ? bounds.width / ancestor.offsetWidth : 1
+            left = Math.max(left, bounds.left + ancestor.clientLeft * scaleX)
+            right = Math.min(right, bounds.left + (ancestor.clientLeft + ancestor.clientWidth) * scaleX)
           }
         }
         if (ancestor.matches(':modal')) break
