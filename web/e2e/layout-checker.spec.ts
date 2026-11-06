@@ -221,7 +221,7 @@ test('reports modal overflow beyond an outer clipping ancestor', async ({ page }
       </dialog>
     </div>
   `)
-  await page.locator('dialog').evaluate((dialog) => dialog.showModal())
+  await page.locator('dialog').evaluate((dialog) => (dialog as HTMLDialogElement).showModal())
   const report = await layoutReport(page)
   for (const id of ['#modal ', '#modal-child ']) {
     expect(report).toEqual(expect.arrayContaining([
@@ -239,7 +239,7 @@ test('preserves clipping inside a modal dialog', async ({ page }) => {
       </dialog>
     </div>
   `)
-  await page.locator('dialog').evaluate((dialog) => dialog.showModal())
+  await page.locator('dialog').evaluate((dialog) => (dialog as HTMLDialogElement).showModal())
   expect(await layoutReport(page)).toEqual([])
   // Clipping ancestors within the dialog also remain effective.
   await page.locator('dialog').evaluate((dialog) => {
@@ -256,7 +256,7 @@ test('disappearing overflow dialogs fail with their last geometry and screen lab
   `)
   const dialog = page.locator('dialog')
   await dialog.evaluate((element) => {
-    element.showModal()
+    (element as HTMLDialogElement).showModal()
     const measure = element.getBoundingClientRect.bind(element)
     element.getBoundingClientRect = () => {
       element.dataset.measured = 'true'
@@ -276,7 +276,7 @@ test('disappearing overflow dialogs fail with their last geometry and screen lab
   expect(lastReport).toEqual(expect.arrayContaining([
     expect.objectContaining({ problem: 'off-screen content' }),
   ]))
-  await dialog.evaluate((element) => element.close())
+  await dialog.evaluate((element) => (element as HTMLDialogElement).close())
   const message = await failure
   expect(message).toContain('dialog must remain visible after layout polling')
   expect(message).toContain(screen)
@@ -287,7 +287,7 @@ test('disappearing overflow dialogs fail with their last geometry and screen lab
 test('dialog layout polling accepts a visible dialog with no defects', async ({ page }) => {
   await page.setContent('<!doctype html><dialog>Refused</dialog>')
   const dialog = page.locator('dialog')
-  await dialog.evaluate((element) => element.showModal())
+  await dialog.evaluate((element) => (element as HTMLDialogElement).showModal())
   await expectDialogLayout(page, dialog, 'visible refusal')
 })
 

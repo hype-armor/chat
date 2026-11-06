@@ -10,7 +10,7 @@ test('safety numbers match, and a new device of a verified contact is flagged (A
   const bob = await signUp(browser, 'Bob', bobUsername)
   await startChat(alice, bobUsername)
   await expect(alice.getByLabel('Message', { exact: true })).toBeVisible({ timeout: 15_000 })
-  await alice.getByLabel('Message').fill('Hi Bob')
+  await alice.getByRole('textbox', { name: 'Message', exact: true }).fill('Hi Bob')
   await alice.getByRole('button', { name: 'Send' }).click()
   await expect(alice.getByRole('heading', { name: 'Bob' })).toBeVisible()
   await openChat(bob, /Alice/)

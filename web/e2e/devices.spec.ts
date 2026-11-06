@@ -9,7 +9,7 @@ test('linking a second device by code, then removing it (ADR-0019)', async ({ br
   const alice = await signUp(browser, 'Alice', aliceUsername)
   const bob = await signUp(browser, 'Bob', bobUsername)
   await startChat(alice, bobUsername)
-  await alice.getByLabel('Message').fill('Before linking')
+  await alice.getByRole('textbox', { name: 'Message', exact: true }).fill('Before linking')
   await alice.getByRole('button', { name: 'Send' }).click()
   await expect(alice.getByRole('heading', { name: 'Bob' })).toBeVisible()
 
@@ -28,16 +28,16 @@ test('linking a second device by code, then removing it (ADR-0019)', async ({ br
 
   // No history moves, but new messages reach both of Alice's devices.
   await openChat(bob, /Alice/)
-  await bob.getByLabel('Message').fill('Hello both')
+  await bob.getByRole('textbox', { name: 'Message', exact: true }).fill('Hello both')
   await bob.getByRole('button', { name: 'Send' }).click()
   await laptop.getByRole('button', { name: /Bob/ }).click()
   await expect(messages(laptop)).toHaveText([/Hello both/])
 
   // What Alice sends from one device shows as hers on the other.
-  await alice.getByLabel('Message').fill('From the username')
+  await alice.getByRole('textbox', { name: 'Message', exact: true }).fill('From the username')
   await alice.getByRole('button', { name: 'Send' }).click()
   await expect(messages(laptop).filter({ hasText: 'From the username' })).toHaveClass(/mine/)
-  await laptop.getByLabel('Message').fill('From the laptop')
+  await laptop.getByRole('textbox', { name: 'Message', exact: true }).fill('From the laptop')
   await laptop.getByRole('button', { name: 'Send' }).click()
   await expect(messages(bob).filter({ hasText: 'From the laptop' })).toHaveClass(/theirs/)
   await expect(messages(alice).filter({ hasText: 'From the laptop' })).toHaveClass(/mine/)
@@ -46,7 +46,7 @@ test('linking a second device by code, then removing it (ADR-0019)', async ({ br
   await alice.getByRole('button', { name: 'Remove device 2' }).click()
   await expect(laptop.getByText(/This device is no longer signed in/)).toBeVisible({ timeout: 15_000 })
   await expect(alice.getByRole('list', { name: 'Devices' }).getByRole('listitem')).toHaveCount(1)
-  await bob.getByLabel('Message').fill('Just you now')
+  await bob.getByRole('textbox', { name: 'Message', exact: true }).fill('Just you now')
   await bob.getByRole('button', { name: 'Send' }).click()
   await expect(messages(bob).filter({ hasText: 'Just you now' }).getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
   await expect(messages(alice).filter({ hasText: 'Just you now' })).toBeVisible()
