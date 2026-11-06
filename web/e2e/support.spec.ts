@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import { randomUsername } from './support'
 
 test('test usernames keep their format without insecure randomness', () => {

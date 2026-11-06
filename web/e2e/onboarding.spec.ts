@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 for (const colorScheme of ['light', 'dark'] as const) {
   for (const width of [390, 1280]) {

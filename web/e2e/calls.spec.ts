@@ -1,4 +1,4 @@
-import { type Browser, type Page, expect, test } from '@playwright/test'
+import { type Browser, type Page, expect, test } from './fixtures'
 import { auditLayouts } from './layout'
 import { closeSettings, openChat, openSetting, randomUsername, startChat } from './support'
 

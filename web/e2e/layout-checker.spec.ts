@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import { expectDialogLayout, layoutReport } from './layout'
 
 test('reports page overflow, sideways scrolling, clipped text and oversized choices with geometry', async ({ page }) => {

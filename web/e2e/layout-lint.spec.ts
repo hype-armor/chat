@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import { auditLayouts, expectDialogLayout, expectLayout, layoutViewports } from './layout'
 import {
   closeDetails, compose, conversationAction, conversationDetails, createGroup,
