@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { layoutReport } from './layout'
+import { expectDialogLayout, layoutReport } from './layout'
 
 test('reports page overflow, sideways scrolling, clipped text and oversized choices with geometry', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 640 })
@@ -59,6 +59,67 @@ test('an off-screen clipping ancestor does not hide a layout defect', async ({ p
   expect(report).toEqual(expect.arrayContaining([
     expect.objectContaining({ problem: 'off-screen content', element: expect.stringContaining('#child') }),
   ]))
+})
+
+test('reports modal overflow beyond an outer clipping ancestor', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 640 })
+  await page.setContent(`<!doctype html>
+    <div style="width: 100px; overflow: hidden">
+      <dialog id="modal" style="position: fixed; left: 300px; width: 100px; max-width: none;
+        margin: 0; padding: 0; border: 0; overflow: visible">
+        <div id="modal-child" style="width: 200px; height: 20px"></div>
+      </dialog>
+    </div>
+  `)
+  await page.locator('dialog').evaluate((dialog) => dialog.showModal())
+  const report = await layoutReport(page)
+  for (const id of ['#modal ', '#modal-child ']) {
+    expect(report).toEqual(expect.arrayContaining([
+      expect.objectContaining({ problem: 'off-screen content', element: expect.stringContaining(id) }),
+    ]))
+  }
+})
+
+test('preserves clipping inside a modal dialog', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 640 })
+  await page.setContent(`<!doctype html>
+    <div style="width: 40px; overflow: hidden">
+      <dialog style="position: fixed; left: 100px; width: 100px; margin: 0; padding: 0; border: 0; overflow: hidden">
+        <div style="width: 600px; height: 20px"></div>
+      </dialog>
+    </div>
+  `)
+  await page.locator('dialog').evaluate((dialog) => dialog.showModal())
+  expect(await layoutReport(page)).toEqual([])
+  // Clipping ancestors within the dialog also remain effective.
+  await page.locator('dialog').evaluate((dialog) => {
+    dialog.style.overflow = 'visible'
+    dialog.innerHTML = '<div style="width: 50px; overflow: hidden"><div style="width: 600px; height: 20px"></div></div>'
+  })
+  expect(await layoutReport(page)).toEqual([])
+})
+
+test('dialog layout polling cannot pass after an overflowing dialog disappears', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 640 })
+  await page.setContent(`<!doctype html>
+    <dialog style="position: fixed; left: 300px; width: 100px; max-width: none; margin: 0">Refused</dialog>
+  `)
+  const dialog = page.locator('dialog')
+  await dialog.evaluate((element) => element.showModal())
+  expect(await layoutReport(page)).toEqual(expect.arrayContaining([
+    expect.objectContaining({ problem: 'off-screen content' }),
+  ]))
+  await dialog.evaluate((element) => { setTimeout(() => element.close(), 250) })
+  await expect(expectDialogLayout(page, dialog, 'transient refusal'))
+    .rejects.toThrow(/dialog must remain visible after layout polling/)
+  expect(await layoutReport(page)).toEqual([])
+})
+
+test('dialog layout polling accepts a visible dialog with no defects', async ({ page }) => {
+  await page.setContent('<!doctype html><dialog>Refused</dialog>')
+  const dialog = page.locator('dialog')
+  await dialog.evaluate((element) => element.showModal())
+  await expectDialogLayout(page, dialog, 'visible refusal')
 })
 
 test('respects the one-pixel scroll tolerance and 28px choice limit', async ({ page }) => {

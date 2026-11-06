@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 
 /** Test-only geometry audit, evaluated in the real browser (including WebKit). */
 export async function layoutReport(page: Page, chat = false) {
@@ -38,13 +38,16 @@ export async function layoutReport(page: Page, chat = false) {
 
       // Intersect with horizontal clipping ancestors, not just their presence:
       // an off-screen clipping container must not excuse its off-screen children.
+      // Modal dialogs enter the top layer: only ancestors inside that modal clip.
       let left = rect.left
       let right = rect.right
-      for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
-        if (win.getComputedStyle(ancestor).overflowX === 'visible') continue
-        const bounds = ancestor.getBoundingClientRect()
-        left = Math.max(left, bounds.left + ancestor.clientLeft)
-        right = Math.min(right, bounds.left + ancestor.clientLeft + ancestor.clientWidth)
+      for (let ancestor: Element | null = element; ancestor; ancestor = ancestor.parentElement) {
+        if (ancestor !== element && win.getComputedStyle(ancestor).overflowX !== 'visible') {
+          const bounds = ancestor.getBoundingClientRect()
+          left = Math.max(left, bounds.left + ancestor.clientLeft)
+          right = Math.min(right, bounds.left + ancestor.clientLeft + ancestor.clientWidth)
+        }
+        if (ancestor.matches(':modal')) break
       }
       if (right > left && (left < -1 || right > width + 1)) add('off-screen content', element)
       if (element.matches('input[type="checkbox"], input[type="radio"]') && (rect.width > 28 || rect.height > 28)) {
@@ -62,6 +65,12 @@ export async function expectLayout(page: Page, screen: string, chat = false) {
   // Retry through resize, font loading and panel transitions; persistent defects
   // still report every offending element rather than an unexplained width mismatch.
   await expect.poll(() => layoutReport(page, chat), { message: screen }).toEqual([])
+}
+
+/** A transient dialog must survive the poll; dismissal is not a layout fix. */
+export async function expectDialogLayout(page: Page, dialog: Locator, screen: string, chat = false) {
+  await expectLayout(page, screen, chat)
+  expect(await dialog.isVisible(), 'dialog must remain visible after layout polling').toBe(true)
 }
 
 export const layoutViewports = [

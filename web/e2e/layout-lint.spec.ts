@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { auditLayouts, expectLayout, layoutViewports } from './layout'
+import { auditLayouts, expectDialogLayout, expectLayout, layoutViewports } from './layout'
 import {
   closeDetails, compose, conversationAction, conversationDetails, createGroup,
   messages, openChat, openSetting, randomUsername, signUp, startChat,
@@ -212,7 +212,7 @@ test.describe('signed-in layout lint', () => {
           await page.getByRole('button', { name: `${kind} call`, exact: true }).click()
           const dialog = page.getByRole('dialog', { name: 'Call with Echo (test bot)' })
           await expect(dialog).toContainText("can't encrypt call media")
-          await expectLayout(page, `WebKit ${kind} call refusal: ${width}×${height} ${colorScheme}`, true)
+          await expectDialogLayout(page, dialog, `WebKit ${kind} call refusal: ${width}×${height} ${colorScheme}`, true)
           await expect(dialog).toBeHidden()
         }
       }
