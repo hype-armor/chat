@@ -11,5 +11,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["vite.config.ts", "playwright.config.ts", "playwright.fixtures.config.ts", "playwright.interactions.config.ts", "e2e"]
+  "include": ["vite.config.ts", "playwright.config.ts", "playwright.fixtures.config.ts", "playwright.interactions.config.ts", "playwright.navigation-diagnostic.config.ts", "e2e"]
 }
