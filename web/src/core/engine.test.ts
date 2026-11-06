@@ -23,6 +23,13 @@ function engineWithMembers() {
 }
 
 describe('engine routing and group metadata', () => {
+  it('clears the cached location when live sharing pauses', () => {
+    const engine = engineWithMembers()
+    engine['liveFix'] = { latitude: 48.8584, longitude: 2.2945, accuracyM: 12 }
+    engine.pauseLive()
+    expect(engine['liveFix']).toBeUndefined()
+  })
+
   it('excludes only this device, not the account’s other devices, from recipients', () => {
     const engine = engineWithMembers()
     expect(engine['recipients'](conversationId)).toEqual([otherDevice, peerDevice])
