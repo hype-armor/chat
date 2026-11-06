@@ -21,7 +21,6 @@ incremental = false
 # LTO stays off until the first production release. Set `lto = true`
 # again before that release.
 lto = false
-codegen-units = 1
 strip = true
 
 [profile.release.package.chat-core]
