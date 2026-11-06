@@ -88,6 +88,10 @@ message SendEnvelope {
   // No Web Push for offline recipients (e.g. receipts): nothing a person
   // needs to be told about.
   bool silent = 5;
+  // Devices that are members after the commit this envelope carries
+  // (16-byte UUIDs). Required when a commit changes membership; absent
+  // leaves it unchanged.
+  repeated bytes members = 8;
 }
 
 message SendResult {

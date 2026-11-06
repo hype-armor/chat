@@ -12,11 +12,17 @@ use hmac::{Hmac, KeyInit, Mac};
 use serde::Serialize;
 use sha1::Sha1;
 
-use crate::{AppState, auth::AuthDevice, error::ApiError};
+use crate::{
+    AppState,
+    auth::AuthDevice,
+    error::ApiError,
+    limits::{self, DAY},
+};
 
 /// How long TURN credentials work; a call that outlives them keeps its
-/// allocation (coturn checks only when allocating and refreshing).
-pub const CREDENTIAL_TTL_SECS: u64 = 12 * 3600;
+/// allocation (coturn checks only when allocating and refreshing), and a
+/// client fetches fresh ones at each call, so an hour is enough.
+pub const CREDENTIAL_TTL_SECS: u64 = 3600;
 
 #[derive(Clone, Debug, Default)]
 pub struct TurnConfig {
@@ -75,8 +81,14 @@ pub fn credential(secret: &str, username: &str) -> String {
 /// `GET /v1/turn`: ICE servers for a call, for signed-in devices only.
 pub async fn credentials(
     State(state): State<AppState>,
-    AuthDevice(_device): AuthDevice,
+    AuthDevice(device): AuthDevice,
 ) -> Result<Json<IceServers>, ApiError> {
+    // Relayed media costs money and bandwidth: limit how often a device can
+    // ask for credentials, so one account cannot mint them for a botnet.
+    if let Some(db) = &state.db {
+        let key = format!("turn:{device}");
+        limits::take(db, &key, 1, state.limits.turn_credentials_per_day, DAY).await?;
+    }
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());

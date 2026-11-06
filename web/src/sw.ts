@@ -14,12 +14,22 @@ self.addEventListener('message', (event) => {
 // Push payloads never carry plaintext (FR-NOT-2). Until the core can
 // decrypt inside the service worker, show a generic notification.
 self.addEventListener('push', (event) => {
-  event.waitUntil(self.registration.showNotification('Chat', { body: 'New message', tag: 'chat-new-message' }))
+  // iOS Safari requires every received push to produce a visible notification.
+  event.waitUntil(
+    self.registration.showNotification('Chat', {
+      body: 'Open Chat to see new activity.',
+      icon: '/icon-192.png',
+    }),
+  )
 })
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
   event.waitUntil(
-    self.clients.matchAll({ type: 'window' }).then((windows) => windows[0]?.focus() ?? self.clients.openWindow('/')),
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windows) => {
+      const app = windows.find((client) => new URL(client.url).origin === self.location.origin)
+      if (!app) return self.clients.openWindow('/')
+      return app.focus().catch(() => self.clients.openWindow('/'))
+    }),
   )
 })

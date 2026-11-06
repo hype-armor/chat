@@ -38,6 +38,7 @@ server:
   vapid:
     existingSecret: ""
     secretKey: private-key
+    # Set this to a monitored mailto: address or an HTTPS contact URL.
     subject: "mailto:ops@example.com"
   # Encrypted attachments and backups (ADR-0023): an S3-compatible bucket,
   # e.g. SeaweedFS on k3s (deploy/k8s/seaweedfs.yaml) or Linode Object Storage. Credentials come from a Secret with
@@ -142,6 +143,9 @@ turn:
 ingress:
   enabled: true
   className: ""
+  # Send Strict-Transport-Security (one year, no subdomains) at Traefik via a
+  # Middleware. Turn off if the edge is not Traefik.
+  hsts: true
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt
   tls:

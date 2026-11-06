@@ -42,6 +42,14 @@ Items marked **[ASSUMPTION]** need stakeholder confirmation (see doc 09).
 | FR-MSG-11 | Mentions (@user) and per-conversation mute/notification settings. | S |
 | FR-MSG-12 | Local full-text search of message history (on-device only). | S |
 
+Quoted replies and typing indicators use the encrypted content extensions
+in [ADR-0038](adr/0038-encrypted-replies-and-typing.md). Reply previews must
+verify the original content hash within the same conversation. Missing or
+unverifiable originals show an unavailable placeholder. Older locally stored
+history can lack a verifiable hash; the composer must explain when it cannot
+send a verified reply. Typing indicators are optional, expire automatically,
+and never transmit draft text.
+
 ### 1.3 Media (MED)
 
 | ID | Requirement | Pri |

@@ -37,3 +37,16 @@ export function designatedCommitter(
 export function acceptsGroupInfo(admins: string[] | undefined, sender: string): boolean {
   return admins === undefined || admins.length === 0 || admins.includes(sender)
 }
+
+/**
+ * Whether a conversation shows the group UI (members, group info) or the
+ * direct-chat controls (verify, report, block). A name alone does not make a
+ * group: a 1:1 peer can send a `GroupInfo`, and hiding the safety controls
+ * behind a rename would help exactly the person they protect against (audit
+ * M9). A real group has more than one other person, or a name together with
+ * an admin list.
+ */
+export function isGroupView(conv: { peers: string[]; name?: string; admins?: string[] }): boolean {
+  if (conv.peers.length > 1) return true
+  return conv.name !== undefined && (conv.admins ?? []).length > 0
+}

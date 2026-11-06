@@ -19,13 +19,14 @@ use futures_util::TryStreamExt;
 use object_store::{ObjectStore, ObjectStoreExt, PutPayload, path::Path};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
 use crate::{
     AppState,
     auth::{AuthDevice, Registered, create_device, db, normalize_username, parse_identity_key},
     blobs, devices,
-    error::ApiError,
+    error::{ApiError, ApiJson},
     limits::{self, ClientIp},
 };
 
@@ -98,7 +99,7 @@ pub struct SetKey {
 pub async fn set_key(
     State(state): State<AppState>,
     AuthDevice(device): AuthDevice,
-    Json(req): Json<SetKey>,
+    ApiJson(req): ApiJson<SetKey>,
 ) -> Result<StatusCode, ApiError> {
     let db = db(&state)?;
     let store = blobs::store(&state)?;
@@ -239,7 +240,7 @@ pub struct Restore {
 pub async fn restore(
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
-    Json(req): Json<Restore>,
+    ApiJson(req): ApiJson<Restore>,
 ) -> Result<Json<Registered>, ApiError> {
     let db = db(&state)?;
     let caps = &state.limits;
@@ -264,11 +265,28 @@ pub async fn restore(
     let Some((account, expected)) = row else {
         return Err(refused);
     };
-    let key = format!("restore-account:{account}");
-    limits::take(db, &key, 1, caps.restores_per_account_per_day, limits::DAY).await?;
-    if expected != auth_hash {
+    // The per-IP limit above bounds one attacker. The per-account counters are
+    // charged only after the secret is known to be right (or wrong): charging
+    // them first would let a stranger lock the real owner out of recovery.
+    if !bool::from(expected.as_slice().ct_eq(auth_hash.as_slice())) {
+        limits::tx_take(
+            &mut tx,
+            &format!("restore-fail:{account}"),
+            1,
+            caps.restore_failures_per_day,
+            limits::DAY,
+        )
+        .await?;
         return Err(refused);
     }
+    limits::tx_take(
+        &mut tx,
+        &format!("restore-account:{account}"),
+        1,
+        caps.restores_per_account_per_day,
+        limits::DAY,
+    )
+    .await?;
     // Who to tell, worked out before the old devices (and their
     // memberships) go.
     let watchers = devices::watchers(&mut tx, account).await?;

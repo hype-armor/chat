@@ -3,9 +3,18 @@
 
 import { scriptUrl } from './trusted-types'
 
-/** iOS Safari has no install prompt: people add to the home screen by hand. */
-export function isIosSafari(userAgent: string): boolean {
-  return /iPad|iPhone|iPod/.test(userAgent) && /Safari/.test(userAgent) && !/CriOS|FxiOS|EdgiOS/.test(userAgent)
+/** Detect iOS Safari, including iPadOS's desktop-style user agent. */
+export function isIosSafari(userAgent: string, platform = '', maxTouchPoints = 0): boolean {
+  return (
+    isIosDevice(userAgent, platform, maxTouchPoints) &&
+    /Safari/.test(userAgent) &&
+    !/CriOS|FxiOS|EdgiOS/.test(userAgent)
+  )
+}
+
+/** Detect iOS and iPadOS, including iPadOS's desktop-style user agent. */
+export function isIosDevice(userAgent: string, platform: string, maxTouchPoints: number): boolean {
+  return /iPad|iPhone|iPod/.test(userAgent) || (platform === 'MacIntel' && maxTouchPoints > 1)
 }
 
 export type InstallHint = 'prompt' | 'ios' | undefined
@@ -109,7 +118,8 @@ export async function promptInstall() {
 }
 
 export function isInstalled(): boolean {
-  return window.matchMedia('(display-mode: standalone)').matches
+  const navigatorWithStandalone = navigator as Navigator & { standalone?: boolean }
+  return window.matchMedia('(display-mode: standalone)').matches || navigatorWithStandalone.standalone === true
 }
 
 export async function storageState(): Promise<StorageState> {

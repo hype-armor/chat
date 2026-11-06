@@ -19,7 +19,7 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::{AuthDevice, db},
-    error::ApiError,
+    error::{ApiError, ApiJson},
 };
 
 /// How long a join token can be used to connect (the session outlives it).
@@ -161,7 +161,7 @@ async fn room_for(state: &AppState, device: Uuid, req: &CallRequest) -> Result<S
 pub async fn join(
     State(state): State<AppState>,
     AuthDevice(device): AuthDevice,
-    Json(req): Json<CallRequest>,
+    ApiJson(req): ApiJson<CallRequest>,
 ) -> Result<Json<Join>, ApiError> {
     let url = state
         .livekit
@@ -190,7 +190,7 @@ pub async fn join(
 pub async fn status(
     State(state): State<AppState>,
     AuthDevice(device): AuthDevice,
-    Json(req): Json<CallRequest>,
+    ApiJson(req): ApiJson<CallRequest>,
 ) -> Result<Json<Status>, ApiError> {
     let livekit = &state.livekit;
     livekit.enabled().ok_or(ApiError::NotFound(

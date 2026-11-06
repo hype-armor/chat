@@ -5,13 +5,13 @@ import { SetupActions, SetupBanner, useSetup } from './Banners'
 import { Devices } from './Devices'
 import { Invite } from './Invite'
 import { Backup } from './Backup'
-import { Avatar } from './Avatar'
+import { Avatar, useAvatarPhoto } from './Avatar'
 import { Menu, type MenuItem } from './Menu'
 import { Attachment } from './Attachment'
 import { Recorder } from './Recorder'
 import { Media } from './Media'
 import { LocationCard, ShareLocation } from './Location'
-import { LiveBanner, LiveCard } from './Live'
+import { ContactLiveLocations, LiveCard, LiveIndicator, LiveSharing, type LiveShare } from './Live'
 import { CallScreen } from './Call'
 import { CallController } from './calls'
 import { GroupCallScreen, useGroupCall } from './GroupCall'
@@ -20,8 +20,21 @@ import { probeClip } from './media'
 import type { MediaInfo } from '../core/protocol'
 import { BlockedList, DeleteAccount, ReportForm } from './Safety'
 import { VerificationBadge, Verify } from './Verify'
-import { type NotificationState, enableNotifications, notificationState, refreshSubscription } from '../notifications'
-import { useVisualViewport } from './useVisualViewport'
+import {
+  type NotificationState,
+  type PushSetup,
+  enableNotifications,
+  notificationState,
+  preparePush,
+  reconnectNotifications,
+  refreshSubscription,
+} from '../notifications'
+import { useBannerHeight, useVisualViewport } from './useVisualViewport'
+import { MessageText } from './MessageText'
+import { useMessageScroll } from './useMessageScroll'
+import { ReplyPreview, quoteMessage, useRemoteTyping, useSendTyping } from './messageInteractions'
+import type { ReplyPreview as ReplyQuote } from '../core/protocol'
+import { isIosDevice } from '../pwa'
 import { filterConversations, highlightTitle, normalizeSearch, searchUsername } from './conversationSearch'
 
 type Ready = Extract<AppView, { phase: 'ready' }>
@@ -87,8 +100,13 @@ export function Chat({
   useVisualViewport()
   const [selected, setSelected] = useState<string>()
   const [panel, setPanel] = useState<'chats' | 'settings' | 'chat' | 'group'>('chats')
+  const hasLiveSharing = view.liveSharing.length > 0
+  const liveSharingIndicators = useBannerHeight<HTMLDivElement>('--live-sharing-height', hasLiveSharing)
   const sidebar = useRef<HTMLElement>(null)
   const setup = useSetup()
+  useEffect(() => {
+    void refreshSubscription(core)
+  }, [core])
   const [calls] = useState(() => new CallController(core))
   const [groupCalls] = useState(() => {
     const g = new GroupCallController(core)
@@ -115,16 +133,23 @@ export function Chat({
   }
   return (
     <>
-      <LiveBanner core={core} sharing={view.liveSharing} />
+      <LiveSharing core={core} sharing={view.liveSharing} />
+      {view.liveSharing.length > 0 && (
+        <div className="live-sharing-indicators" ref={liveSharingIndicators}>
+          {view.liveSharing.map((share) => (
+            <LiveIndicator key={share.conversationId} core={core} share={share} />
+          ))}
+        </div>
+      )}
       <CallScreen calls={calls} />
       <GroupCallScreen calls={groupCalls} />
       <div
         hidden={showDiagnostics}
-        className={`chat-layout ${conversation ? 'has-selection' : ''} ${view.liveSharing.length > 0 ? 'with-banner' : ''}`}
+        className={`chat-layout ${conversation ? 'has-selection' : ''} ${hasLiveSharing ? 'with-banner' : ''}`}
       >
         <aside className="sidebar" ref={sidebar}>
           <header className="bar me">
-            <Avatar name={view.me.displayName} id={view.me.username} />
+            <Avatar name={view.me.displayName} id={view.me.username} account={view.me.account} />
             <div className="who">
               <strong>{view.me.displayName}</strong>
             </div>
@@ -146,7 +171,11 @@ export function Chat({
               ⚙
             </button>
           </header>
-          <div className={view.connection === 'online' ? 'visually-hidden' : 'connection'} role="status">
+          <div
+            className={view.connection === 'online' ? 'visually-hidden' : 'connection'}
+            role="status"
+            aria-label="Connection status"
+          >
             {view.connection === 'online' ? 'Connected' : view.connection === 'connecting' ? 'Connecting…' : 'Offline'}
           </div>
           {view.alerts.map((a) => (
@@ -167,7 +196,12 @@ export function Chat({
               </div>
               <section className="settings-group" aria-labelledby="settings-account">
                 <h3 id="settings-account">Account</h3>
-                <SettingsIdentity name={view.me.displayName} username={view.me.username} />
+                <SettingsIdentity
+                  core={core}
+                  account={view.me.account}
+                  name={view.me.displayName}
+                  username={view.me.username}
+                />
                 <Invite core={core} />
               </section>
               <section className="settings-group" aria-labelledby="settings-privacy">
@@ -220,6 +254,7 @@ export function Chat({
                 onSelect={select}
                 onNewChat={() => setPanel('chat')}
                 onInvite={() => setPanel('settings')}
+                sharing={view.liveSharing}
               />
             </>
           )}
@@ -240,6 +275,7 @@ export function Chat({
             verification={conversation.verification}
             blocked={conversation.blocked ?? false}
             request={conversation.request}
+            typingIndicators={view.typingIndicators}
             onBack={() => setSelected(undefined)}
           />
         ) : (
@@ -264,11 +300,53 @@ export function Chat({
   )
 }
 
-function SettingsIdentity({ name, username }: { name: string; username: string }) {
+function SettingsIdentity({
+  core,
+  account,
+  name,
+  username,
+}: {
+  core: CoreClient
+  account: string
+  name: string
+  username: string
+}) {
   const [copied, setCopied] = useState(false)
-  const { error, run } = useAction()
+  const photo = useAvatarPhoto(account)
+  const picker = useRef<HTMLInputElement>(null)
+  const { busy, error, run } = useAction()
   return (
     <div className="settings-identity">
+      <div className="identity-photo">
+        <Avatar name={name} id={username} account={account} size={4} />
+        <div className="photo-actions">
+          <input
+            ref={picker}
+            type="file"
+            accept="image/*"
+            hidden
+            data-testid="avatar-input"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              e.target.value = ''
+              if (file) void run(() => core.setAvatar(file))
+            }}
+          />
+          <button type="button" className="link small" disabled={busy} onClick={() => picker.current?.click()}>
+            {photo ? 'Change photo' : 'Add photo'}
+          </button>
+          {photo && (
+            <button
+              type="button"
+              className="link small"
+              disabled={busy}
+              onClick={() => void run(() => core.setAvatar())}
+            >
+              Remove photo
+            </button>
+          )}
+        </div>
+      </div>
       <strong>{name}</strong>
       <span className="muted small">Your username: {username}</span>
       <button
@@ -346,6 +424,7 @@ function ConversationBrowser({
   onSelect,
   onNewChat,
   onInvite,
+  sharing,
 }: {
   core: CoreClient
   conversations: ConversationSummary[]
@@ -353,6 +432,7 @@ function ConversationBrowser({
   onSelect: (id: string) => void
   onNewChat: () => void
   onInvite: () => void
+  sharing: LiveShare[]
 }) {
   const [search, setQuery] = useState('')
   const showSearch = conversations.length >= 6
@@ -437,11 +517,11 @@ function ConversationBrowser({
         <details key={filtering ? 'filtered' : 'all'} className="message-requests" open={filtering ? true : undefined}>
           <summary>Message requests ({requests.length})</summary>
           <nav aria-label="Requests">
-            <ConversationList conversations={requests} selected={selected} onSelect={onSelect} query={query} />
+            <ConversationList conversations={requests} selected={selected} onSelect={onSelect} query={query} sharing={sharing} />
           </nav>
         </details>
       )}
-      <ConversationList conversations={accepted} selected={selected} onSelect={onSelect} query={query} />
+      <ConversationList conversations={accepted} selected={selected} onSelect={onSelect} query={query} sharing={sharing} />
       {filtering && results.length === 0 ? (
         <div className="empty search-empty">
           <p className="muted" role="status">No chats match "{query.trim()}"</p>
@@ -471,21 +551,28 @@ function ConversationList({
   selected,
   onSelect,
   query,
+  sharing,
 }: {
   conversations: ConversationSummary[]
   selected?: string
   onSelect: (id: string) => void
   query: string
+  sharing: LiveShare[]
 }) {
   return (
     <ul className="conversations">
       {conversations.map((c) => (
         <li key={c.id}>
           <button type="button" className={c.id === selected ? 'active' : ''} onClick={() => onSelect(c.id)}>
-            <Avatar name={c.title} id={c.peer ?? c.id} />
+            <Avatar name={c.title} id={c.peer ?? c.id} account={c.peer} />
             <span className="title">
               {highlightTitle(c.title, query).map((part, index) =>
                 part.match ? <mark key={index}>{part.text}</mark> : part.text,
+              )}
+              {sharing.some((s) => s.conversationId === c.id) && (
+                <span className="live-dot" role="img" aria-label="Sharing live location">
+                  📍
+                </span>
               )}
               {c.unread > 0 && (
                 <span className="badge small unread" aria-label={`${c.unread} unread`}>
@@ -571,11 +658,48 @@ function Privacy({
 
 function NotificationToggle({ core }: { core: CoreClient }) {
   const [state, setState] = useState<NotificationState>(notificationState)
+  const iosDevice = isIosDevice(navigator.userAgent, navigator.platform, navigator.maxTouchPoints)
+  const [pushSetup, setPushSetup] = useState<PushSetup>()
+  const [preparing, setPreparing] = useState(false)
+  const [prepareError, setPrepareError] = useState<string>()
   const { busy, error, run } = useAction()
 
   useEffect(() => {
-    void refreshSubscription(core)
-  }, [core])
+    if (state !== 'default') return
+    let active = true
+    setPreparing(true)
+    void preparePush(core)
+      .then((setup) => {
+        if (active) {
+          setPushSetup(setup)
+          setPrepareError(undefined)
+        }
+      })
+      .catch((e: unknown) => {
+        if (active) setPrepareError(e instanceof Error ? e.message : String(e))
+      })
+      .finally(() => {
+        if (active) setPreparing(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [core, state])
+
+  const retryPreparation = () =>
+    run(async () => {
+      setPreparing(true)
+      setPrepareError(undefined)
+      try {
+        const setup = await preparePush(core)
+        setPushSetup(setup)
+      } catch (e) {
+        setPrepareError(e instanceof Error ? e.message : String(e))
+        throw e
+      } finally {
+        setPreparing(false)
+      }
+    })
 
   return (
     <details className="devices">
@@ -585,24 +709,67 @@ function NotificationToggle({ core }: { core: CoreClient }) {
           {state === 'granted' ? 'Enabled'
             : state === 'denied' ? 'Blocked'
             : state === 'unsupported' ? 'Unavailable'
+            : state === 'install-required' ? 'Install required'
             : 'Not enabled'}
         </span>
       </summary>
       {state === 'granted' ? (
-        <p className="muted small">Notifications are enabled.</p>
+        <>
+          <p className="muted small">
+            Notifications are enabled.
+            {iosDevice && ' Enable Lock Screen and Notification Center in iOS Settings → Notifications → Chat.'}
+          </p>
+          <button
+            type="button"
+            className="link"
+            disabled={busy}
+            onClick={() => run(async () => reconnectNotifications(core, await preparePush(core)))}
+          >
+            Reconnect notifications
+          </button>
+        </>
       ) : state === 'unsupported' ? (
         <p className="muted small">Notifications are not supported by this browser.</p>
+      ) : state === 'install-required' ? (
+        <p className="muted small">
+          On iPhone or iPad, add Chat to the Home Screen in Safari, then open it from the new icon. Notifications need iOS or iPadOS 16.4 or later.
+        </p>
       ) : state === 'denied' ? (
-        <p className="muted small">Notifications are blocked in your browser settings.</p>
+        <p className="muted small">
+          {iosDevice
+            ? 'Notifications are blocked. Change this in iOS Settings → Notifications → Chat.'
+            : 'Notifications are blocked in your browser settings.'}
+        </p>
+      ) : prepareError ? (
+        <>
+          <p className="error" role="alert">
+            {prepareError}
+          </p>
+          <button type="button" className="link" disabled={busy || preparing} onClick={retryPreparation}>
+            Retry notification setup
+          </button>
+        </>
       ) : (
-        <button
-          type="button"
-          className="link"
-          disabled={busy}
-          onClick={() => run(async () => setState(await enableNotifications(core)))}
-        >
-          Enable notifications
-        </button>
+        <>
+          <button
+            type="button"
+            className="link"
+            disabled={busy || preparing || !pushSetup}
+            onClick={() =>
+              run(async () => {
+                if (!pushSetup) throw new Error('Notification setup is not ready yet.')
+                setState(await enableNotifications(core, pushSetup))
+              })
+            }
+          >
+            Enable notifications
+          </button>
+          {preparing && (
+            <p className="muted small" role="status">
+              Preparing notifications…
+            </p>
+          )}
+        </>
       )}
       {error && (
         <p role="alert" className="error">
@@ -654,6 +821,7 @@ function NewChat({ core, onStarted }: { core: CoreClient; onStarted: (id: string
 
 function GroupInfo({
   core,
+  messages,
   id,
   title,
   amAdmin,
@@ -664,6 +832,7 @@ function GroupInfo({
   onAdded,
 }: {
   core: CoreClient
+  messages: ChatMessage[]
   id: string
   title: string
   amAdmin: boolean
@@ -753,6 +922,9 @@ function GroupInfo({
       {verifying && (
         <div>
           <button ref={verifyBack} type="button" className="link" onClick={() => setVerifying(undefined)}>← Members</button>
+          {active && !verifying.blocked && (
+            <ContactLiveLocations core={core} conversationId={id} account={verifying.account} messages={messages} />
+          )}
           <Verify
             key={verifying.account}
             core={core}
@@ -771,7 +943,7 @@ function GroupInfo({
         <ul className="members" aria-label="Members">
           {members.map((m) => (
             <li key={m.account}>
-              <Avatar name={m.name} id={m.account} />
+              <Avatar name={m.name} id={m.account} account={m.account} />
               <span className="member-name">
                 <span>{m.name}</span>
                 {m.isMe && <span className="badge small">You</span>}
@@ -950,6 +1122,7 @@ function Conversation({
   verification,
   blocked,
   request,
+  typingIndicators,
   onBack,
 }: {
   core: CoreClient
@@ -965,6 +1138,7 @@ function Conversation({
   verification?: ConversationSummary['verification']
   blocked: boolean
   request: boolean
+  typingIndicators: boolean
   onBack: () => void
 }) {
   const [panel, updatePanel] = useState<'add' | 'info' | 'verify' | 'report'>()
@@ -1009,29 +1183,33 @@ function Conversation({
   }, [panelOpen, detailsVersion])
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [draft, setDraft] = useState('')
+  const [replyTo, setReplyTo] = useState<ReplyQuote>()
+  const draftVersion = useRef(0)
+  const [failedDrafts, setFailedDrafts] = useState<Array<{ version: number; text: string; quote?: ReplyQuote; error: string }>>([])
+  const editDraft = (text: string) => {
+    draftVersion.current++
+    setDraft(text)
+  }
+  const editReply = (quote: ReplyQuote | undefined) => {
+    draftVersion.current++
+    setReplyTo(quote)
+  }
+  const typingEnabled = typingIndicators
+  const [composerFocused, setComposerFocused] = useState(false)
+  const [typingError, setTypingError] = useState('')
+  const typingNames = useRemoteTyping(core, id, typingEnabled && active && !blocked && !request)
+  useSendTyping(core, id, draft, typingEnabled && active && !blocked && !request, composerFocused)
   const [attaching, setAttaching] = useState(false)
   const [attachError, setAttachError] = useState<string>()
-  const viewport = useRef<HTMLDivElement>(null)
-  const content = useRef<HTMLOListElement>(null)
-  const atBottom = useRef(true)
-  const lastScrollTop = useRef(0)
-  const viewportSize = useRef({ width: 0, height: 0 })
-  const previousMessages = useRef<ChatMessage[]>([])
-  const [newMessages, setNewMessages] = useState(false)
+  const { viewport, content, onScroll, capture, scrollToBottom, newMessages } = useMessageScroll(messages, panelOpen)
   const picker = useRef<HTMLInputElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const [recording, setRecording] = useState(false)
   const wasRecording = useRef(false)
   const setPanel = useCallback((next: typeof panel) => {
-    const list = viewport.current
-    // Capture pending user scrolling before a panel change reflows the messages.
-    if (list) {
-      atBottom.current = list.scrollHeight - list.scrollTop - list.clientHeight <= 80
-      lastScrollTop.current = list.scrollTop
-      viewportSize.current = { width: list.clientWidth, height: list.clientHeight }
-    }
+    capture()
     updatePanel(next)
-  }, [])
+  }, [capture])
   const menuItems: MenuItem[] = [
     ...(isGroup ? [{ label: 'Group info', onSelect: () => openPanel('info') }] : []),
     ...(peer ? [{ label: 'Verify safety number', onSelect: () => openPanel('verify') }] : []),
@@ -1040,40 +1218,18 @@ function Conversation({
     ...(peer && !blocked ? [{ label: 'Block', onSelect: () => void core.block(peer), danger: true }] : []),
   ]
 
-  const scrollToBottom = useCallback(() => {
-    atBottom.current = true
-    setNewMessages(false)
-    if (viewport.current) {
-      viewport.current.scrollTop = viewport.current.scrollHeight
-      lastScrollTop.current = viewport.current.scrollTop
-    }
-  }, [])
-
-  const onScroll = useCallback(() => {
-    const list = viewport.current
-    if (!list) return
-    // Reflow can move the browser's scroll anchor; it isn't a user scroll.
-    if (list.clientWidth !== viewportSize.current.width || list.clientHeight !== viewportSize.current.height) {
-      viewportSize.current = { width: list.clientWidth, height: list.clientHeight }
-      if (atBottom.current) scrollToBottom()
-      else lastScrollTop.current = list.scrollTop
-      return
-    }
-    // A queued event from our own scroll must not unpin newly grown content.
-    if (list.scrollTop === lastScrollTop.current) return
-    lastScrollTop.current = list.scrollTop
-    atBottom.current = list.scrollHeight - list.scrollTop - list.clientHeight <= 80
-    if (atBottom.current) setNewMessages(false)
-  }, [scrollToBottom])
-
-  useLayoutEffect(() => {
-    // Consume this resize before a later scroll can race its ResizeObserver.
-    onScroll()
-  }, [panelOpen, onScroll])
-
   useEffect(() => {
     let live = true
-    const load = () => core.messages(id).then((m) => live && setMessages(m))
+    let latest = 0
+    const load = async () => {
+      const version = ++latest
+      try {
+        const next = await core.messages(id)
+        if (live && version === latest) { capture(); setMessages(next) }
+      } catch (error) {
+        if (live) setAttachError(error instanceof Error ? error.message : 'Could not load messages')
+      }
+    }
     load()
     const unsubscribe = core.subscribe((e) => {
       if (e.type === 'messages' && e.conversationId === id) load()
@@ -1082,7 +1238,7 @@ function Conversation({
       live = false
       unsubscribe()
     }
-  }, [core, id])
+  }, [core, id, capture])
 
   // Seen while visible: read receipts go out (FR-MSG-5).
   useEffect(() => {
@@ -1092,29 +1248,6 @@ function Conversation({
     document.addEventListener('visibilitychange', mark)
     return () => document.removeEventListener('visibilitychange', mark)
   }, [core, id, messages, request])
-
-  useLayoutEffect(() => {
-    onScroll()
-    const previousIds = new Set(previousMessages.current.map((m) => m.id))
-    const added = messages.filter((m) => !previousIds.has(m.id))
-    previousMessages.current = messages
-    if (atBottom.current || added.some((m) => m.from === 'me')) {
-      scrollToBottom()
-    } else if (added.length > 0) {
-      setNewMessages(true)
-    }
-  }, [messages, onScroll, scrollToBottom])
-
-  useLayoutEffect(() => {
-    const observer = new ResizeObserver(() => {
-      onScroll()
-      if (atBottom.current) scrollToBottom()
-    })
-    // The list grows with loaded media; the viewport can shrink as panels open.
-    observer.observe(content.current!)
-    observer.observe(viewport.current!)
-    return () => observer.disconnect()
-  }, [onScroll, scrollToBottom])
 
   useLayoutEffect(() => {
     const input = composer.current
@@ -1142,13 +1275,29 @@ function Conversation({
   const send = async () => {
     const text = draft.trim()
     if (!text) return
+    const quote = replyTo
+    const originalDraft = draft
+    const submittedVersion = ++draftVersion.current
     setDraft('')
+    setReplyTo(undefined)
+    setAttachError(undefined)
     // Keyboard activation unmounts the focused Send button; pointer sends keep focus here.
     composer.current?.focus({ preventScroll: true })
     try {
-      await core.sendText(id, text)
+      scrollToBottom()
+      await core.sendText(id, text, quote?.messageId)
+      scrollToBottom()
     } catch (e) {
-      setAttachError(e instanceof Error ? e.message : String(e))
+      const error = e instanceof Error ? e.message : String(e)
+      if (draftVersion.current === submittedVersion) {
+        // Restore the submitted pair only while this submission still owns the composer.
+        draftVersion.current++
+        setDraft(originalDraft)
+        setReplyTo(quote)
+      } else {
+        setFailedDrafts((current) => [...current, { version: submittedVersion, text: originalDraft, quote, error }])
+      }
+      setAttachError(error)
     }
   }
 
@@ -1156,12 +1305,18 @@ function Conversation({
   const attach = async (file: File | undefined, recorded?: MediaInfo) => {
     if (picker.current) picker.current.value = ''
     if (!file) return
+    if (replyTo) {
+      setAttachError('Send or cancel your text reply before attaching a file.')
+      return
+    }
     setAttaching(true)
     setAttachError(undefined)
     try {
       const media = recorded ?? (await probeClip(file).catch(() => undefined))
+      scrollToBottom()
       await core.sendFile(id, file, draft.trim(), media)
-      setDraft('')
+      scrollToBottom()
+      editDraft('')
     } catch (e) {
       setAttachError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -1186,7 +1341,7 @@ function Conversation({
             aria-expanded={panelOpen}
             onClick={() => openPanel(isGroup ? 'info' : 'verify')}
           >
-            <Avatar name={title} id={peer ?? id} />
+            <Avatar name={title} id={peer ?? id} account={peer} />
             <span className="who" id={detailsId}>
               <span className="conversation-name" role="heading" aria-level={2}>
                 {title}
@@ -1308,7 +1463,12 @@ function Conversation({
                   )}
                   {m.location && <LocationCard core={core} location={m.location} />}
                   {m.live && <LiveCard core={core} conversationId={id} message={m} live={m.live} />}
-                  {m.text && <span className="text">{m.text}</span>}
+                  {m.reply && <ReplyPreview quote={m.reply} />}
+                  {m.text && <MessageText text={m.text} />}
+                  {active && !blocked && !request && <button type="button" className="link small message-reply" aria-label={`Reply to ${m.from === 'me' ? 'your message' : m.fromName ?? title}`} onClick={() => {
+                    editReply(quoteMessage(m))
+                    composer.current?.focus({ preventScroll: true })
+                  }}>Reply</button>}
                   <span className={last || m.status === 'failed' ? 'meta small' : 'visually-hidden'}>
                     <time
                       className={last ? undefined : 'visually-hidden'}
@@ -1372,6 +1532,38 @@ function Conversation({
         }}
         hidden={!active || blocked || request}
       >
+        <div className="failed-drafts" hidden={failedDrafts.length === 0}>
+        {failedDrafts.map((failed) => <section className="failed-draft" aria-label="Failed draft" key={failed.version}>
+          <strong>Message was not sent</strong>
+          <p role="alert">{failed.error}</p>
+          {failed.quote && <ReplyPreview quote={failed.quote} />}
+          <p className="failed-draft-text">{failed.text}</p>
+          <p className="small">Send or clear your current draft before restoring this message.</p>
+          <button type="button" className="link small" disabled={draft !== '' || !!replyTo || recording || attaching} onClick={() => {
+            draftVersion.current++
+            setDraft(failed.text)
+            setReplyTo(failed.quote)
+            setFailedDrafts((current) => current.filter((item) => item.version !== failed.version))
+            composer.current?.focus({ preventScroll: true })
+          }}>Restore failed draft</button>
+          <button type="button" className="link small" onClick={() => setFailedDrafts((current) => current.filter((item) => item.version !== failed.version))}>Discard failed draft</button>
+        </section>)}
+        </div>
+        {replyTo && <ReplyPreview quote={replyTo} cancel={() => {
+          editReply(undefined)
+          composer.current?.focus({ preventScroll: true })
+        }} />}
+        <div className="typing-controls">
+          <span role="status" aria-live="polite">{typingNames.length > 0 ? `${typingNames.join(', ')} ${typingNames.length === 1 ? 'is' : 'are'} typing…` : ''}</span>
+          <label className="small"><input type="checkbox" checked={typingEnabled} onChange={(e) => {
+            const enabled = e.target.checked
+            setTypingError('')
+            void core.setTypingIndicators(enabled).catch((error: unknown) => {
+              setTypingError(error instanceof Error ? error.message : 'Could not change typing indicators')
+            })
+          }} /> Typing indicators</label>
+          {typingError && <span role="alert">{typingError}</span>}
+        </div>
         <div className="composer-row">
           <input
             ref={picker}
@@ -1384,7 +1576,10 @@ function Conversation({
             core={core}
             conversationId={id}
             onError={setAttachError}
-            onSend={() => composer.current?.focus({ preventScroll: true })}
+            onSend={() => {
+              scrollToBottom()
+              composer.current?.focus({ preventScroll: true })
+            }}
             trigger={(locate) =>
               recording ? null : attaching ? (
                 <span className="small" role="status">Attaching…</span>
@@ -1393,8 +1588,14 @@ function Conversation({
                   triggerLabel="Add attachment"
                   triggerContent="+"
                   items={[
-                    { label: 'Photo or file', onSelect: () => picker.current?.click() },
-                    { label: 'Location', onSelect: locate },
+                    { label: 'Photo or file', onSelect: () => {
+                      if (replyTo) setAttachError('Send or cancel your text reply before attaching a file.')
+                      else picker.current?.click()
+                    } },
+                    { label: 'Location', onSelect: () => {
+                      if (replyTo) setAttachError('Send or cancel your text reply before sharing a location.')
+                      else locate()
+                    } },
                   ]}
                 />
               )
@@ -1409,7 +1610,9 @@ function Conversation({
             rows={1}
             hidden={recording}
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onFocus={() => setComposerFocused(true)}
+            onBlur={() => setComposerFocused(false)}
+            onChange={(e) => editDraft(e.target.value)}
             onKeyDown={(e) => {
               if (
                 e.key === 'Enter' && !e.shiftKey &&
@@ -1431,7 +1634,7 @@ function Conversation({
           )}
           <Recorder
             hidden={draft.length > 0}
-            disabled={attaching}
+            disabled={attaching || !!replyTo}
             onRecordingChange={setRecording}
             onRecorded={(file, media) => void attach(file, media)}
             onError={setAttachError}
@@ -1475,6 +1678,7 @@ function Conversation({
             <GroupInfo
               key={detailsVersion}
               core={core}
+              messages={messages}
               id={id}
               title={title}
               amAdmin={amAdmin && active}
@@ -1487,7 +1691,7 @@ function Conversation({
           ) : (
             <>
               <div className="details-identity">
-                <Avatar name={title} id={peer ?? id} size={5} />
+                <Avatar name={title} id={peer ?? id} account={peer} size={5} />
                 <strong>{title}</strong>
                 <VerificationBadge status={verification} />
               </div>
@@ -1506,14 +1710,19 @@ function Conversation({
                   }}
                 />
               ) : peer && (
-                <Verify
-                  core={core}
-                  conversationId={id}
-                  account={peer}
-                  name={title}
-                  status={verification}
-                  onDone={() => setPanel(undefined)}
-                />
+                <>
+                  {active && !blocked && !request && (
+                    <ContactLiveLocations core={core} conversationId={id} account={peer} messages={messages} />
+                  )}
+                  <Verify
+                    core={core}
+                    conversationId={id}
+                    account={peer}
+                    name={title}
+                    status={verification}
+                    onDone={() => setPanel(undefined)}
+                  />
+                </>
               )}
               {peer && (
                 <div className="details-danger">

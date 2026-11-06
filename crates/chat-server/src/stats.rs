@@ -3,13 +3,13 @@
 //! per-call timing, folded into the Prometheus counters and kept nowhere
 //! else. Measures Phase 3's exit criterion (call success ≥ 99 %).
 
-use axum::{Json, extract::State, http::StatusCode};
+use axum::{extract::State, http::StatusCode};
 use serde::Deserialize;
 
 use crate::{
     AppState,
     auth::db,
-    error::ApiError,
+    error::{ApiError, ApiJson},
     limits::{self, ClientIp},
 };
 
@@ -44,7 +44,7 @@ pub struct CallStats {
 pub async fn calls(
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
-    Json(stats): Json<CallStats>,
+    ApiJson(stats): ApiJson<CallStats>,
 ) -> Result<StatusCode, ApiError> {
     for o in [&stats.direct, &stats.group] {
         if o.connected + o.failed > MAX_CALLS

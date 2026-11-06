@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     Error, Result, envelope,
-    mls::{Conversation, Device, Provider, Received},
+    mls::{Conversation, Device, JoinPackage, Provider, Received},
 };
 
 const SNAPSHOT_VERSION: u32 = 1;
@@ -80,6 +80,9 @@ pub struct Added {
     pub commit_hash: Vec<u8>,
 }
 
+// Keep the received content inline and preserve the public event API.
+// Optional reply metadata makes this variant cross Clippy's size threshold.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, PartialEq)]
 pub enum Event {
     Message {
@@ -168,11 +171,11 @@ impl Client {
     /// Creates a conversation with the devices whose key packages are given.
     pub fn start_conversation(
         &mut self,
-        key_packages: &[&[u8]],
+        joins: &[JoinPackage<'_>],
         message_id: Vec<u8>,
     ) -> Result<Started> {
         let mut conv = Conversation::create(&self.device)?;
-        let change = conv.add_members(&self.device, key_packages)?;
+        let change = conv.add_members(&self.device, joins)?;
         let conversation_id = conv.id();
         let welcome = Envelope {
             version: PROTOCOL_VERSION,
@@ -187,6 +190,12 @@ impl Client {
             conversation_id,
             welcome,
         })
+    }
+
+    /// The identity inside a claimed key package, so the caller can check it
+    /// against the device it asked for before staging anything (audit H1).
+    pub fn key_package_identity(&self, key_package: &[u8]) -> Result<Vec<u8>> {
+        self.device.key_package_identity(key_package)
     }
 
     /// Members' identities and signature keys, including this device.
@@ -206,7 +215,7 @@ impl Client {
     pub fn add_members(
         &mut self,
         conversation_id: &[u8],
-        key_packages: &[&[u8]],
+        joins: &[JoinPackage<'_>],
         commit_id: Vec<u8>,
         welcome_id: Vec<u8>,
     ) -> Result<Added> {
@@ -214,7 +223,7 @@ impl Client {
         // Commits are built in the current epoch; the server accepts exactly
         // one commit per epoch.
         let epoch = conv.epoch();
-        let change = conv.stage_add_members(device, key_packages)?;
+        let change = conv.stage_add_members(device, joins)?;
         Ok(Added {
             commit_hash: Sha256::digest(&change.commit).to_vec(),
             commit: envelope(
@@ -384,6 +393,18 @@ impl Client {
     }
 }
 
+/// Binds a quote to authenticated sender identity and decoded protobuf content.
+/// Keep this encoding stable across clients. Do not hash UI-normalized fields.
+#[cfg(any(feature = "wasm", test))]
+pub(crate) fn content_hash(sender: &[u8], content: &Content) -> Vec<u8> {
+    let mut hash = Sha256::new();
+    hash.update(b"chat.reply-content.v1\0");
+    hash.update((sender.len() as u64).to_le_bytes());
+    hash.update(sender);
+    hash.update(content.encode_to_vec());
+    hash.finalize().to_vec()
+}
+
 #[cfg(test)]
 mod tests {
     use chat_proto::v1::{Text, content};
@@ -393,6 +414,8 @@ mod tests {
     fn text(body: &str) -> Content {
         Content {
             sent_at_ms: 1,
+            reply_to: None,
+            reply_to_hash: None,
             body: Some(content::Body::Text(Text {
                 body: body.to_owned(),
             })),
@@ -405,7 +428,15 @@ mod tests {
         let mut bob = Client::new(Device::new(b"bob").unwrap());
         let kp = bob.key_packages(1).unwrap().remove(0);
 
-        let started = alice.start_conversation(&[&kp], vec![1]).unwrap();
+        let started = alice
+            .start_conversation(
+                &[JoinPackage {
+                    identity: b"bob",
+                    key_package: &kp,
+                }],
+                vec![1],
+            )
+            .unwrap();
         let id = started.conversation_id.clone();
         assert_eq!(
             bob.receive(&started.welcome).unwrap(),
@@ -441,12 +472,148 @@ mod tests {
     }
 
     #[test]
+    fn replies_and_typing_preserve_authenticated_sender() {
+        use chat_proto::v1::Typing;
+        let mut alice = Client::new(Device::new(b"alice").unwrap());
+        let mut bob = Client::new(Device::new(b"bob").unwrap());
+        let kp = bob.key_packages(1).unwrap().remove(0);
+        let started = alice
+            .start_conversation(
+                &[JoinPackage {
+                    identity: b"bob",
+                    key_package: &kp,
+                }],
+                vec![1],
+            )
+            .unwrap();
+        bob.receive(&started.welcome).unwrap();
+        let id = started.conversation_id;
+        let mut reply = text("reply");
+        reply.reply_to = Some(vec![7; 16]);
+        reply.reply_to_hash = Some(content_hash(b"bob", &text("original")));
+        let typing = |active| Content {
+            sent_at_ms: 1000,
+            reply_to: None,
+            reply_to_hash: None,
+            body: Some(content::Body::Typing(Typing {
+                active,
+                expires_at_ms: 6000,
+            })),
+        };
+        for (index, content) in [reply, typing(true), typing(false), text("ordinary")]
+            .into_iter()
+            .enumerate()
+        {
+            let mut env = alice.send(&id, &content, vec![index as u8 + 2]).unwrap();
+            let expected_hash = content_hash(b"alice", &content);
+            // The server can rename the outer id, but cannot redirect the hash.
+            env.message_id = vec![99; 16];
+            let received = bob.receive(&env).unwrap();
+            if let Event::Message {
+                sender, content, ..
+            } = &received
+            {
+                assert_eq!(content_hash(sender, content), expected_hash);
+            } else {
+                panic!("expected an authenticated application message");
+            }
+            assert_eq!(
+                received,
+                Event::Message {
+                    conversation_id: id.clone(),
+                    sender: b"alice".to_vec(),
+                    content,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn quote_hash_binds_sender_and_exact_content() {
+        let original = text("hello");
+        let expected = content_hash(b"alice-device-1", &original);
+        assert_eq!(expected.len(), 32);
+        assert_eq!(
+            expected,
+            content_hash(
+                b"alice-device-1",
+                &Content::decode(original.encode_to_vec().as_slice()).unwrap()
+            )
+        );
+        assert_ne!(expected, content_hash(b"alice-device-2", &original));
+        let mut changed = original.clone();
+        changed.sent_at_ms += 1;
+        assert_ne!(expected, content_hash(b"alice-device-1", &changed));
+        assert_ne!(
+            expected,
+            content_hash(b"alice-device-1", &text("different"))
+        );
+        changed = original.clone();
+        changed.reply_to = Some(vec![1; 16]);
+        changed.reply_to_hash = Some(vec![2; 32]);
+        assert_ne!(expected, content_hash(b"alice-device-1", &changed));
+        changed.reply_to_hash = None;
+        let absent = content_hash(b"alice-device-1", &changed);
+        changed.reply_to_hash = Some(Vec::new());
+        assert_ne!(absent, content_hash(b"alice-device-1", &changed));
+    }
+
+    #[test]
+    fn legacy_content_ignores_reply_and_typing_fields() {
+        use prost::Message;
+        // Model the previous schema without the new fields.
+        #[derive(Clone, PartialEq, Message)]
+        struct LegacyContent {
+            #[prost(uint64, tag = "1")]
+            sent_at_ms: u64,
+            #[prost(message, optional, tag = "2")]
+            text: Option<Text>,
+        }
+        let mut reply = text("reply");
+        reply.reply_to = Some(vec![7; 16]);
+        reply.reply_to_hash = Some(vec![8; 32]);
+        let legacy = LegacyContent::decode(reply.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(legacy.text.unwrap().body, "reply");
+        let ordinary = LegacyContent {
+            sent_at_ms: 1,
+            text: Some(Text { body: "old".into() }),
+        };
+        assert_eq!(
+            Content::decode(ordinary.encode_to_vec().as_slice()).unwrap(),
+            text("old")
+        );
+        let typing = Content {
+            sent_at_ms: 1000,
+            reply_to: None,
+            reply_to_hash: None,
+            body: Some(content::Body::Typing(chat_proto::v1::Typing {
+                active: true,
+                expires_at_ms: 6000,
+            })),
+        };
+        assert!(
+            LegacyContent::decode(typing.encode_to_vec().as_slice())
+                .unwrap()
+                .text
+                .is_none()
+        );
+    }
+
+    #[test]
     fn call_media_keys_agree_through_mls() {
         use crate::call::CallKeys;
         let mut alice = Client::new(Device::new(b"alice").unwrap());
         let mut bob = Client::new(Device::new(b"bob").unwrap());
         let kp = bob.key_packages(1).unwrap().remove(0);
-        let started = alice.start_conversation(&[&kp], vec![1]).unwrap();
+        let started = alice
+            .start_conversation(
+                &[JoinPackage {
+                    identity: b"bob",
+                    key_package: &kp,
+                }],
+                vec![1],
+            )
+            .unwrap();
         let id = started.conversation_id.clone();
         bob.receive(&started.welcome).unwrap();
 
@@ -471,8 +638,15 @@ mod tests {
         let mut alice = Client::new(Device::new(b"alice").unwrap());
         let mut bob = Client::new(Device::new(b"bob").unwrap());
         let mut carol = Client::new(Device::new(b"carol").unwrap());
+        let bob_kp = bob.key_packages(1).unwrap().remove(0);
         let started = alice
-            .start_conversation(&[&bob.key_packages(1).unwrap()[0]], vec![1])
+            .start_conversation(
+                &[JoinPackage {
+                    identity: b"bob",
+                    key_package: &bob_kp,
+                }],
+                vec![1],
+            )
             .unwrap();
         let id = started.conversation_id.clone();
         bob.receive(&started.welcome).unwrap();
@@ -480,11 +654,27 @@ mod tests {
         let carol_kp = carol.key_packages(1).unwrap().remove(0);
         // A lost race: discard and nothing changes.
         alice
-            .add_members(&id, &[&carol_kp], vec![2], vec![3])
+            .add_members(
+                &id,
+                &[JoinPackage {
+                    identity: b"carol",
+                    key_package: &carol_kp,
+                }],
+                vec![2],
+                vec![3],
+            )
             .unwrap();
         assert!(
             alice
-                .add_members(&id, &[&carol_kp], vec![2], vec![3])
+                .add_members(
+                    &id,
+                    &[JoinPackage {
+                        identity: b"carol",
+                        key_package: &carol_kp
+                    }],
+                    vec![2],
+                    vec![3],
+                )
                 .is_err(),
             "one at a time"
         );
@@ -493,7 +683,15 @@ mod tests {
 
         let carol_kp = carol.key_packages(1).unwrap().remove(0);
         let added = alice
-            .add_members(&id, &[&carol_kp], vec![4], vec![5])
+            .add_members(
+                &id,
+                &[JoinPackage {
+                    identity: b"carol",
+                    key_package: &carol_kp,
+                }],
+                vec![4],
+                vec![5],
+            )
             .unwrap();
         assert_eq!(added.commit.content_type, i32::from(ContentType::Handshake));
         assert_eq!(
@@ -531,7 +729,19 @@ mod tests {
             carol.key_packages(1).unwrap().remove(0),
         ];
         let started = alice
-            .start_conversation(&[&kps[0], &kps[1]], vec![1])
+            .start_conversation(
+                &[
+                    JoinPackage {
+                        identity: b"bob-dev",
+                        key_package: &kps[0],
+                    },
+                    JoinPackage {
+                        identity: b"carol-dev",
+                        key_package: &kps[1],
+                    },
+                ],
+                vec![1],
+            )
             .unwrap();
         let id = started.conversation_id.clone();
         bob.receive(&started.welcome).unwrap();

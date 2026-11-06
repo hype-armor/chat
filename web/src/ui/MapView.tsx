@@ -104,6 +104,11 @@ export function MapView({
     view.current?.map.easeTo({ center: [longitude, latitude] })
   }, [latitude, longitude])
 
-  if (error) return <p className="small muted">The map can't be shown in this browser.</p>
-  return <div ref={container} className="map" data-testid="map" />
+  // A late map failure must not move dialog controls during a pointer click.
+  if (error) return (
+    <div key="unavailable" className="map map-unavailable" data-testid="map">
+      <p className="small muted">The map can't be shown in this browser.</p>
+    </div>
+  )
+  return <div key="map" ref={container} className="map" data-testid="map" />
 }

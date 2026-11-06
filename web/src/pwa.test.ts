@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   SETUP_REMINDER_MS,
   installHint,
+  isIosDevice,
   isIosSafari,
   readSetupDismissals,
   saveSetupDismissals,
@@ -16,7 +17,14 @@ describe('install hint', () => {
   it('detects iOS Safari only', () => {
     expect(isIosSafari(iphone)).toBe(true)
     expect(isIosSafari(iphone.replace('Version/18.0', 'CriOS/130.0'))).toBe(false)
+    expect(isIosSafari('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) Safari/605.1.15', 'MacIntel', 5)).toBe(true)
+    expect(isIosSafari('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) Safari/605.1.15', 'MacIntel', 0)).toBe(false)
     expect(isIosSafari('Mozilla/5.0 (X11; Linux x86_64) Chrome/130.0 Safari/537.36')).toBe(false)
+  })
+  it('detects iPhone and iPadOS desktop user agents', () => {
+    expect(isIosDevice(iphone, 'iPhone', 5)).toBe(true)
+    expect(isIosDevice('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15)', 'MacIntel', 5)).toBe(true)
+    expect(isIosDevice('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15)', 'MacIntel', 0)).toBe(false)
   })
   it('prefers the browser prompt, else the iOS steps, never when installed', () => {
     expect(installHint({ installed: false, promptAvailable: true, iosSafari: false })).toBe('prompt')

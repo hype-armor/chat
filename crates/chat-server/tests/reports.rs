@@ -53,7 +53,7 @@ async fn reports_are_stored_with_chosen_evidence(pool: PgPool) {
         404
     );
     let bad = json!({ "account_id": account, "reason": "nope" });
-    assert_eq!(server.post("/v1/reports", Some(&token), bad).await.0, 422);
+    assert_eq!(server.post("/v1/reports", Some(&token), bad).await.0, 400);
     let long = json!({ "account_id": account, "reason": "other",
         "messages": [{ "text": "x".repeat(4001), "sent_at_ms": 0 }] });
     assert_eq!(server.post("/v1/reports", Some(&token), long).await.0, 400);

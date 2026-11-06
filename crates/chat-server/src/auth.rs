@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    error::ApiError,
+    error::{ApiError, ApiJson},
     invites,
     limits::{self, ClientIp},
 };
@@ -64,7 +64,7 @@ pub struct Registered {
 pub async fn register(
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
-    Json(req): Json<Register>,
+    ApiJson(req): ApiJson<Register>,
 ) -> Result<Json<Registered>, ApiError> {
     let db = db(&state)?;
     let username = normalize_username(&req.username).ok_or(ApiError::BadRequest(
@@ -83,21 +83,23 @@ pub async fn register(
         )
         .await?;
     }
-    limits::take(
-        db,
-        "register-all",
-        1,
-        caps.registrations_per_day,
-        limits::DAY,
-    )
-    .await?;
-
     let mut tx = db.begin().await?;
     match (&req.invite, state.open_registration) {
         (Some(code), _) => invites::redeem(&mut tx, code).await?,
         (None, true) => {}
         (None, false) => return Err(ApiError::Forbidden("sign-up needs an invite")),
     }
+    // Charged only once the request is allowed to create an account, and
+    // inside the transaction: anonymous requests without a valid invite must
+    // not be able to use up the service's daily sign-up budget.
+    limits::tx_take(
+        &mut tx,
+        "register-all",
+        1,
+        caps.registrations_per_day,
+        limits::DAY,
+    )
+    .await?;
     let created: Option<(Uuid,)> = sqlx::query_as(
         "INSERT INTO accounts (account_id, username) VALUES ($1, $2)
          ON CONFLICT (username) DO NOTHING RETURNING account_id",

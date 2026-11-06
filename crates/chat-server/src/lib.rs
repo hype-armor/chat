@@ -42,6 +42,8 @@ pub struct AppState {
     pub push: Option<Arc<push::PushSender>>,
     pub limits: limits::Limits,
     pub send_buckets: Arc<limits::SendBuckets>,
+    /// Failed `/v1/ws` sign-ins per client IP (see [`limits::FailureBuckets`]).
+    pub ws_auth: Arc<limits::FailureBuckets>,
     pub metrics: Arc<metrics::Metrics>,
     /// Sign-up without an invite (ADR-0021); off in production.
     pub open_registration: bool,
@@ -74,6 +76,7 @@ impl AppState {
             push: None,
             limits: limits::Limits::default(),
             send_buckets: Arc::default(),
+            ws_auth: Arc::new(limits::FailureBuckets::new(Duration::from_secs(60))),
             metrics: Arc::default(),
         }
     }

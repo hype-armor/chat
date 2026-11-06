@@ -1,4 +1,5 @@
-import { type Browser, type Page, expect, test } from '@playwright/test'
+import { type Browser, type Page, expect, test } from './fixtures'
+import { auditLayouts } from './layout'
 import { closeSettings, openChat, openSetting, randomUsername, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
@@ -48,7 +49,7 @@ test.describe('calls', () => {
       [bob, 'Alice'],
     ] as const) {
       const video = page.getByLabel(`${other}'s video`)
-      await expect.poll(() => video.evaluate((v) => (v as { videoWidth: number }).videoWidth), { timeout: 15_000 }).toBeGreaterThan(0)
+      await expect.poll(() => video.evaluate((v) => (v as HTMLVideoElement).videoWidth), { timeout: 15_000 }).toBeGreaterThan(0)
     }
 
     await alice.evaluate("location.hash = 'diagnostics'")
@@ -56,7 +57,7 @@ test.describe('calls', () => {
     await expect(alice.getByRole('dialog', { name: 'Call with Bob' })).toBeVisible()
     // A network change on the caller's side: ICE restarts over the encrypted
     // signalling, and media keeps coming (FR-CALL-8).
-    const playedTo = () => bob.getByLabel("Alice's video").evaluate((v) => (v as { currentTime: number }).currentTime)
+    const playedTo = () => bob.getByLabel("Alice's video").evaluate((v) => (v as HTMLVideoElement).currentTime)
     await alice.evaluate("dispatchEvent(new Event('online'))")
     await alice.waitForTimeout(3_000)
     const before = await playedTo()
@@ -153,10 +154,11 @@ for (const kind of ['Voice', 'Video'] as const) {
       if (kind === 'Video') {
         // Alice's camera, decrypted by the bot, re-encrypted and decrypted here.
         const video = alice.getByLabel("Echo (test bot)'s video")
-        await expect.poll(() => video.evaluate((v) => (v as { videoWidth: number }).videoWidth), { timeout: 20_000 }).toBeGreaterThan(0)
+        await expect.poll(() => video.evaluate((v) => (v as HTMLVideoElement).videoWidth), { timeout: 20_000 }).toBeGreaterThan(0)
       }
 
       const dialog = alice.getByRole('dialog', { name: 'Call with Echo (test bot)' })
+      await auditLayouts(alice, `echo ${kind} call`)
       for (const width of [320, 390, 768, 1280]) {
         await alice.setViewportSize({ width, height: 720 })
         const controls = dialog.locator('.call-controls')
