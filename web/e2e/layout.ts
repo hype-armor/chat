@@ -24,6 +24,20 @@ export async function layoutReport(page: Page, chat = false) {
         scroll: `${element.scrollWidth}×${element.scrollHeight}`,
       })
     }
+    // Out-of-flow descendants escape overflow between themselves and their
+    // containing block. Fixed positioning ignores merely positioned ancestors.
+    const establishesContainingBlock = (style: ReturnType<typeof win.getComputedStyle>, position: 'absolute' | 'fixed') =>
+      style.display !== 'contents' && (
+        (position === 'absolute' && style.position !== 'static')
+        || [style.transform, style.translate, style.rotate, style.scale, style.perspective,
+          style.filter, style.backdropFilter].some((value) => value && value !== 'none')
+        || style.transformStyle === 'preserve-3d'
+        || /\b(layout|paint|strict|content)\b/.test(style.contain)
+        || style.willChange.split(',').some((property: string) => [
+          'transform', 'translate', 'rotate', 'scale', 'perspective', 'filter', 'backdrop-filter', 'transform-style',
+        ].includes(property.trim()))
+        || style.contentVisibility === 'auto'
+      )
     const root = doc.scrollingElement!
     if (root.scrollWidth > root.clientWidth) add('page overflow-x', root)
     if (chat && root.scrollHeight > root.clientHeight) add('page overflow-y', root)
@@ -41,13 +55,22 @@ export async function layoutReport(page: Page, chat = false) {
       // Modal dialogs enter the top layer: only ancestors inside that modal clip.
       let left = rect.left
       let right = rect.right
+      let positioned: 'absolute' | 'fixed' | null = null
       for (let ancestor: Element | null = element; ancestor; ancestor = ancestor.parentElement) {
-        if (ancestor !== element && win.getComputedStyle(ancestor).overflowX !== 'visible') {
-          const bounds = ancestor.getBoundingClientRect()
-          left = Math.max(left, bounds.left + ancestor.clientLeft)
-          right = Math.min(right, bounds.left + ancestor.clientLeft + ancestor.clientWidth)
+        const ancestorStyle = ancestor === element ? style : win.getComputedStyle(ancestor)
+        if (ancestor !== element && (!positioned || establishesContainingBlock(ancestorStyle, positioned))) {
+          positioned = null
+          if (ancestorStyle.overflowX !== 'visible') {
+            const bounds = ancestor.getBoundingClientRect()
+            left = Math.max(left, bounds.left + ancestor.clientLeft)
+            right = Math.min(right, bounds.left + ancestor.clientLeft + ancestor.clientWidth)
+          }
         }
         if (ancestor.matches(':modal')) break
+        // Keep an unresolved fixed escape when walking through absolute parents.
+        if (!positioned && (ancestorStyle.position === 'absolute' || ancestorStyle.position === 'fixed')) {
+          positioned = ancestorStyle.position
+        }
       }
       if (right > left && (left < -1 || right > width + 1)) add('off-screen content', element)
       if (element.matches('input[type="checkbox"], input[type="radio"]') && (rect.width > 28 || rect.height > 28)) {

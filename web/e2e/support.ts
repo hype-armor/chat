@@ -1,9 +1,10 @@
 // Helpers for the messaging end-to-end tests (real chat-server).
+import { randomInt } from 'node:crypto'
 import { type Browser, type Page, expect } from '@playwright/test'
 
 /** A fresh username for each test run, e.g. `u4821937.55`. */
 export function randomUsername(): string {
-  const digits = (n: number) => String(Math.floor(Math.random() * 10 ** n)).padStart(n, '0')
+  const digits = (n: number) => String(randomInt(10 ** n)).padStart(n, '0')
   return `u${digits(7)}.${digits(2)}`
 }
 

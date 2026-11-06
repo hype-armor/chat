@@ -61,6 +61,80 @@ test('an off-screen clipping ancestor does not hide a layout defect', async ({ p
   ]))
 })
 
+for (const position of ['fixed', 'absolute'] as const) {
+  for (const wrapper of ['static', 'relative'] as const) {
+    if (position === 'absolute' && wrapper === 'relative') continue
+    test(`reports ${position} content escaping a ${wrapper} clipping wrapper`, async ({ page }) => {
+      await page.setViewportSize({ width: 320, height: 640 })
+      await page.setContent(`<!doctype html>
+        <div style="position: ${wrapper}; width: 100px; height: 100px; overflow: hidden">
+          <div id="escaped" style="position: ${position}; left: 300px; top: 20px; width: 100px; height: 20px">
+            <div id="escaped-child" style="width: 100px; height: 20px"></div>
+          </div>
+        </div>
+      `)
+      // Confirm that the browser does not clip this content at the wrapper.
+      expect(await page.locator('body').evaluate((body) => body.ownerDocument.elementFromPoint(310, 30)?.id)).toBe('escaped-child')
+      const report = await layoutReport(page)
+      for (const id of ['#escaped ', '#escaped-child ']) {
+        expect(report).toEqual(expect.arrayContaining([
+          expect.objectContaining({ problem: 'off-screen content', element: expect.stringContaining(id) }),
+        ]))
+      }
+    })
+  }
+
+  for (const containingBlock of [
+    ...(position === 'absolute' ? ['position: relative'] : []),
+    'transform: translateX(0)', 'translate: 0px', 'perspective: 1000px', 'filter: blur(0px)',
+    'contain: layout', 'contain: paint', 'will-change: transform', 'transform-style: preserve-3d',
+    'will-change: transform-style', 'content-visibility: auto',
+  ]) {
+    test(`${position} content respects clipping at its ${containingBlock} containing block`, async ({ page }) => {
+      await page.setViewportSize({ width: 320, height: 640 })
+      await page.setContent(`<!doctype html>
+        <div style="${containingBlock}; width: 100px; height: 100px; overflow: hidden">
+          <div style="position: ${position}; left: 300px; top: 20px; width: 100px; height: 20px">
+            <div id="clipped-child" style="width: 100px; height: 20px"></div>
+          </div>
+        </div>
+      `)
+      expect(await page.locator('body').evaluate((body) => body.ownerDocument.elementFromPoint(310, 30)?.id)).not.toBe('clipped-child')
+      expect(await layoutReport(page)).toEqual([])
+    })
+  }
+
+  test(`${position} content escapes a wrapper below its containing block`, async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 640 })
+    await page.setContent(`<!doctype html>
+      <div style="transform: translateX(0); width: 310px; height: 100px; overflow: visible">
+        <div style="width: 100px; overflow: hidden">
+          <div id="escaped" style="position: ${position}; left: 300px; top: 20px; width: 100px; height: 20px"></div>
+        </div>
+      </div>
+    `)
+    expect(await page.locator('body').evaluate((body) => body.ownerDocument.elementFromPoint(310, 30)?.id)).toBe('escaped')
+    expect(await layoutReport(page)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ problem: 'off-screen content', element: expect.stringContaining('#escaped ') }),
+    ]))
+  })
+}
+
+test('a viewport-fixed descendant also escapes absolutely positioned ancestors', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 640 })
+  await page.setContent(`<!doctype html>
+    <div style="position: relative; width: 100px; height: 100px; overflow: hidden">
+      <div style="position: absolute; width: 100px; height: 100px; overflow: hidden">
+        <div id="escaped" style="position: fixed; left: 300px; top: 20px; width: 100px; height: 20px"></div>
+      </div>
+    </div>
+  `)
+  expect(await page.locator('body').evaluate((body) => body.ownerDocument.elementFromPoint(310, 30)?.id)).toBe('escaped')
+  expect(await layoutReport(page)).toEqual(expect.arrayContaining([
+    expect.objectContaining({ problem: 'off-screen content', element: expect.stringContaining('#escaped ') }),
+  ]))
+})
+
 test('reports modal overflow beyond an outer clipping ancestor', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 640 })
   await page.setContent(`<!doctype html>
