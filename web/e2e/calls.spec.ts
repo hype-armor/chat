@@ -1,4 +1,5 @@
 import { type Browser, type Page, expect, test } from './fixtures'
+import { auditLayouts } from './layout'
 import { closeSettings, openChat, openSetting, randomUsername, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
@@ -157,6 +158,7 @@ for (const kind of ['Voice', 'Video'] as const) {
       }
 
       const dialog = alice.getByRole('dialog', { name: 'Call with Echo (test bot)' })
+      await auditLayouts(alice, `echo ${kind} call`)
       for (const width of [320, 390, 768, 1280]) {
         await alice.setViewportSize({ width, height: 720 })
         const controls = dialog.locator('.call-controls')
