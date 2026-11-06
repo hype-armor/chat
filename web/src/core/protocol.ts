@@ -37,13 +37,15 @@ export type AppView =
     }
   | {
       phase: 'ready'
-      me: { username: string; displayName: string }
+      me: { account: string; username: string; displayName: string }
       connection: ConnectionState
       conversations: ConversationSummary[]
       /** New devices on this account that nobody here approved (ADR-0020). */
       alerts: { id: string; text: string }[]
       /** Whether this user sends read receipts (FR-MSG-5). */
       readReceipts: boolean
+      /** Whether this device sends and shows encrypted typing indicators. */
+      typingIndicators: boolean
       /** Calls go only through the server's relay (FR-CALL-9). */
       relayCalls: boolean
       /** Sharing anonymous call statistics (ADR-0032). */
@@ -52,7 +54,7 @@ export type AppView =
       backup?: { lastAt?: number }
       media: MediaSettings
       /** This device's live-location sessions (FR-LOC-6 indicator). */
-      liveSharing: { conversationId: string; title: string; expiresAt: number }[]
+      liveSharing: { conversationId: string; title: string; expiresAt: number; untilStopped: boolean }[]
     }
 
 /** When attachments download by themselves (FR-MED-6, ADR-0025). */
@@ -145,12 +147,30 @@ export type LocationInfo = {
 export type LiveInfo = {
   sessionId: string
   expiresAt: number
+  /** This session continues until stopped, with an 8-hour inactivity lease. */
+  untilStopped?: boolean
+  /** True only when the sender sent an explicit stop. */
+  stopped?: boolean
   /** Latest point; gone once the session ends. */
   latest?: LocationInfo & { at: number }
   ended: boolean
 }
 
+export type Typist = { account: string; name: string }
+
+export type ReplyPreview = {
+  messageId: string
+  from?: string
+  fromName?: string
+  text: string
+  unavailable?: boolean
+}
+
 export type ChatMessage = {
+  /** Encrypted reference to a message in this conversation. */
+  replyTo?: string
+  /** Resolved by the worker, never trusted from a sender. */
+  reply?: ReplyPreview
   id: string
   /** 'me' or the sender's account id (hex); empty for notices. */
   from: string
@@ -222,10 +242,14 @@ export type CoreRequest =
   | { type: 'removeMember'; conversationId: string; account: string }
   | { type: 'leaveGroup'; conversationId: string }
   | { type: 'messages'; conversationId: string }
-  | { type: 'sendText'; conversationId: string; text: string }
+  | { type: 'sendText'; conversationId: string; text: string; replyTo?: string }
+  | { type: 'setTyping'; conversationId: string; active: boolean }
+  | { type: 'typing'; conversationId: string }
+  | { type: 'setTypingIndicators'; on: boolean }
   | { type: 'sendLocation'; conversationId: string; location: LocationInfo }
-  | { type: 'startLive'; conversationId: string; durationMs: number; location: LocationInfo }
+  | { type: 'startLive'; conversationId: string; durationMs: number | null; location: LocationInfo }
   | { type: 'liveUpdate'; location: LocationInfo }
+  | { type: 'pauseLive' }
   | { type: 'stopLive'; conversationId: string }
   | { type: 'iceServers' }
   | { type: 'callSignal'; conversationId: string; signal: CallSignal }
@@ -235,6 +259,9 @@ export type CoreRequest =
   | { type: 'mapInfo' }
   | { type: 'tile'; z: number; x: number; y: number }
   | { type: 'sendFile'; conversationId: string; file: File; caption: string; media?: MediaInfo }
+  /** Sets this account's profile picture; no file removes it. */
+  | { type: 'setAvatar'; file?: File }
+  | { type: 'avatar'; account: string }
   | { type: 'openAttachment'; conversationId: string; messageId: string }
   | { type: 'startLink' }
   | { type: 'cancelLink' }
@@ -273,11 +300,14 @@ export type CoreRequest =
   | { type: 'bench'; members: number }
 
 export type CoreResponseBody =
+  | { type: 'typing'; typists: Typist[] }
   | { type: 'view'; view: AppView }
   | { type: 'ok' }
   | { type: 'conversation'; conversationId: string }
   | { type: 'messages'; messages: ChatMessage[] }
   | { type: 'file'; blob: Blob }
+  /** A profile picture as base64 JPEG, if the account has one. */
+  | { type: 'avatar'; avatar?: string }
   | { type: 'iceServers'; servers: IceServer[] }
   | { type: 'groupCallJoin'; url: string; token: string }
   | { type: 'groupCallStatus'; call?: GroupCallStatus }
@@ -299,12 +329,15 @@ export type CoreResponseBody =
 
 /** Pushed by the worker without a request. */
 export type CoreEvent =
+  | { type: 'typing'; conversationId: string; typists: Typist[] }
   | { type: 'view'; view: AppView }
   | { type: 'messages'; conversationId: string }
   /** An attachment upload or download moved on (ADR-0025). */
   | { type: 'progress'; conversationId: string; messageId: string; done: number; total: number }
   /** Call signalling for the call screen (ADR-0028). */
   | { type: 'call'; signal: IncomingCallSignal }
+  /** An account's profile picture changed: re-read it with `avatar`. */
+  | { type: 'avatar'; account: string }
 
 export type RequestEnvelope = { id: number; request: CoreRequest }
 /** Encoded media streams for SFrame (ADR-0030); no reply. */

@@ -20,6 +20,7 @@ import init, {
   sealedLength,
 } from './pkg/chat_core.js'
 import { ApiError, type Registered, api, fromBase64, toBase64 } from './api'
+import { isAvatar, prepareAvatar } from './avatar'
 import {
   type CommitOutcome,
   MAX_SEND_RETRIES,
@@ -29,8 +30,25 @@ import {
   sendOutcome,
   throwUnlessAccepted,
 } from './commits'
-import { RecentIds, fromHex, makeIdentity, plain, randomId, splitIdentity, toHex } from './ids'
-import { type DeviceSync, deviceHex, linkText, memberDevicePlan, parseDeviceSync, parseLinkCode } from './devices'
+import {
+  RecentIds,
+  fromHex,
+  makeIdentity,
+  plain,
+  randomId,
+  splitIdentity,
+  toHex,
+  trySplitIdentity,
+} from './ids'
+import {
+  type DeviceSync,
+  avatarSyncChunks,
+  deviceHex,
+  linkText,
+  memberDevicePlan,
+  parseDeviceSync,
+  parseLinkCode,
+} from './devices'
 import { applyReceipt, splitIds } from './receipts'
 import {
   MAX_ATTACHMENT_BYTES,
@@ -87,11 +105,20 @@ import { isMp4, scrubMp4 } from './mp4'
 import { DEFAULT_MEDIA, autoDownloads, onMobileData } from './policy'
 import * as transfers from './transfers'
 import { prepareArea, safeLocation } from './maps'
-import { LIVE_DURATIONS_MS, plausibleExpiry, updateDue } from './live'
+import {
+  LIVE_DURATIONS_MS,
+  MAX_LIVE_DURATION_MS,
+  canResumeUntilStopped,
+  expiryForUpdate,
+  plausibleExpiry,
+  updateDue,
+} from './live'
 import { type MediaTransformOptions, frameTransform } from './media'
 import { CALL_KINDS, type CallEnd, type CallRecord, GIVE_UP_MS, STALE_OFFER_MS, callNotice, safeSignalText } from './calls'
-import { acceptsGroupInfo, designatedCommitter, parseAdmins } from './roles'
+import { acceptsGroupInfo, designatedCommitter, isGroupView, parseAdmins } from './roles'
 import { SecureStore } from './storage'
+import { TypingClock, TypingLeases, TYPING_REFRESH_MS, TYPING_TTL_MS } from './typing'
+import { buildReplyLookup, hashHex, replyPreview, validContentHash, validReplyId } from './replies'
 
 /** How long the server may take to answer a request before we reconnect. */
 const REQUEST_TIMEOUT_MS = 20_000
@@ -125,9 +152,22 @@ type StoredFile = Omit<FileInfo, 'thumbnail'> & {
 }
 
 /** A message as stored; `messages()` hands the UI a `ChatMessage` without keys. */
-type StoredMessage = Omit<ChatMessage, 'file'> & { file?: StoredFile }
+type StoredMessage = Omit<ChatMessage, 'file' | 'reply'> & {
+  file?: StoredFile
+  /** Hashes bind previews to authenticated MLS content, not mutable outer IDs. */
+  contentHash?: string
+  replyToHash?: string
+}
 
-type Account = { username: string; displayName: string; accountId: string; deviceId: string; token: string }
+type Account = {
+  username: string
+  displayName: string
+  /** This account's profile picture, base64 JPEG (avatar.ts). */
+  avatar?: string
+  accountId: string
+  deviceId: string
+  token: string
+}
 
 type Conversation = {
   id: string
@@ -148,7 +188,14 @@ type Conversation = {
 }
 
 /** A contact resolved through the key directory, with one key package per device. */
-type Invitee = { username: string; account: string; devices: string[]; keyPackages: Uint8Array[] }
+type Invitee = {
+  username: string
+  account: string
+  devices: string[]
+  /** One 32-byte `account ‖ device` identity per key package (audit H1). */
+  identities: Uint8Array[]
+  keyPackages: Uint8Array[]
+}
 
 /** A live-location session this device sends. */
 type LiveSession = {
@@ -157,6 +204,8 @@ type LiveSession = {
   /** The message that started it, which shows the session. */
   messageId: string
   expiresAt: number
+  /** No fixed duration; remote copies use `expiresAt` as a renewable lease. */
+  untilStopped?: boolean
   lastSentAt: number
   last?: LocationInfo
 }
@@ -196,6 +245,8 @@ type State = {
   conversations: Record<string, Conversation>
   /** Account id (hex) → display name from their profile message. */
   names: Record<string, string>
+  /** Account id (hex) → base64 profile picture from their profile message. */
+  avatars: Record<string, string>
   /** Account id (hex) → username number, for contacts this user looked up. */
   usernames: Record<string, string>
   outbox: Outgoing[]
@@ -220,6 +271,7 @@ type State = {
   blocked: string[]
   /** Whether to send read receipts (FR-MSG-5); delivery receipts always go. */
   readReceipts: boolean
+  typingIndicators?: boolean
   /** Calls only through the TURN relay, hiding this device's IP address (FR-CALL-9). */
   relayCalls?: boolean
   /** Opt-in call statistics (ADR-0032): today's tallies, sent once a day. */
@@ -247,13 +299,18 @@ type BackupPayload = {
   version: 1
   createdAt: number
   displayName: string
-  state: Pick<State, 'conversations' | 'names' | 'usernames' | 'blocked' | 'verified' | 'keys' | 'readReceipts'>
+  avatar?: string
+  state: Pick<
+    State,
+    'conversations' | 'names' | 'avatars' | 'usernames' | 'blocked' | 'verified' | 'keys' | 'readReceipts'
+  >
   messages: Record<string, StoredMessage[]>
 }
 
 const emptyState = (): State => ({
   conversations: {},
   names: {},
+  avatars: {},
   usernames: {},
   outbox: [],
   early: [],
@@ -294,6 +351,18 @@ export class Engine {
   private callTimer?: ReturnType<typeof setInterval>
   /** SFrame keys of calls with media flowing, by call id (ADR-0030). */
   private media = new Map<string, { conversationId: string; media: CallMedia; createdAt: number }>()
+  /**
+   * Call ids whose SFrame keys this page has dropped. A new key state under a
+   * used call id would start its frame counter at 0 and repeat nonces, so such
+   * a call cannot be joined again here (audit M10).
+   */
+  private readonly endedCalls = new Set<string>()
+  /**
+   * `DeviceSync` frames from an own device this page did not know yet (a
+   * device linked or restored a moment ago). Applied once the server's device
+   * list confirms it (audit H1).
+   */
+  private pendingSyncs: { conversationId: string; device: string; bytes: Uint8Array }[] = []
   /** Downloads under way, by message id. */
   private downloads = new Map<string, Promise<Blob>>()
   private nextRequestId = 1
@@ -319,6 +388,14 @@ export class Engine {
   /** Receipts to send, per conversation, batched (see `queueReceipt`). */
   private receipts = new Map<string, { delivered: string[]; read: string[] }>()
   private receiptTimer?: ReturnType<typeof setTimeout>
+  private typingLeases = new Map<string, TypingLeases>()
+  private typingSent = new Map<string, { active: boolean; at: number }>()
+  private typingTimer?: ReturnType<typeof setInterval>
+  private typingPublished = new Map<string, string>()
+  private typingConversation?: string
+  /** These floors survive empty lease maps and reconnects, until sign-out. */
+  private typingClock = new TypingClock()
+  private typingSentAt = 0
 
   /** Serialises every mutation of core state and storage. */
   private lock: Promise<unknown> = Promise.resolve()
@@ -356,7 +433,7 @@ export class Engine {
       .map((c) => ({
         id: c.id,
         title: this.title(c),
-        isGroup: c.name !== undefined || c.peers.length > 1,
+        isGroup: isGroupView(c),
         amAdmin: (c.admins ?? []).includes(this.myAccount()),
         status: c.status ?? ('active' as const),
         memberCount: c.peers.length + 1,
@@ -370,23 +447,69 @@ export class Engine {
       }))
     return {
       phase: 'ready',
-      me: { username: this.account.username, displayName: this.account.displayName || this.account.username },
+      me: {
+        account: this.myAccount(),
+        username: this.account.username,
+        displayName: this.account.displayName || this.account.username,
+      },
       connection: this.connection,
       conversations,
       alerts: this.state.alerts,
       readReceipts: this.state.readReceipts,
+      typingIndicators: this.state.typingIndicators !== false,
       relayCalls: this.state.relayCalls ?? false,
       callStats: !!this.state.callStats,
       backup: this.state.backup ? { lastAt: this.state.backup.lastAt } : undefined,
       media: this.state.media,
       liveSharing: this.state.live
-        .filter((l) => l.expiresAt > Date.now())
+        .filter((l) => l.untilStopped === true || l.expiresAt > Date.now())
         .map((l) => ({
           conversationId: l.conversationId,
           title: this.state.conversations[l.conversationId] ? this.title(this.state.conversations[l.conversationId]) : '',
           expiresAt: l.expiresAt,
+          untilStopped: l.untilStopped === true,
         })),
     }
+  }
+
+  // ---- profile pictures ----------------------------------------------------
+
+  /**
+   * Sets this account's profile picture from a photo, or removes it when
+   * `file` is undefined. Everyone in a conversation gets it with their next
+   * profile message, and this account's other devices get it in a sync.
+   */
+  async setAvatar(file?: Blob) {
+    this.ready()
+    const bytes = file ? await prepareAvatar(file) : undefined
+    await this.exclusive(async () => {
+      if (this.state.pendingCommit) throw new Error('Still finishing an earlier group change; try again shortly')
+      this.account!.avatar = bytes ? toBase64(bytes) : undefined
+      await this.store.putJson('account', this.account)
+      for (const c of Object.values(this.state.conversations)) {
+        if (!c.self && !c.status) this.queueProfile(c.id)
+      }
+      const self = Object.values(this.state.conversations).find((c) => c.self && !c.status)
+      if (self) this.queueDeviceSync(self.id)
+      await this.persist()
+    })
+    this.emit({ type: 'avatar', account: this.myAccount() })
+    this.emitView()
+    void this.flushOutbox()
+  }
+
+  /** An account's profile picture as base64 JPEG, if it has one. */
+  avatarOf(account: string): string | undefined {
+    return account === this.myAccount() ? this.account?.avatar : this.state.avatars[account]
+  }
+
+  /** Keeps a contact's picture from their profile message; a missing or bad one removes it. */
+  private setPeerAvatar(account: string, bytes: Uint8Array | undefined) {
+    const next = bytes && isAvatar(bytes) ? toBase64(bytes) : undefined
+    if (next === this.state.avatars[account]) return
+    if (next) this.state.avatars[account] = next
+    else delete this.state.avatars[account]
+    this.emit({ type: 'avatar', account })
   }
 
   // ---- registration ------------------------------------------------------
@@ -472,12 +595,13 @@ export class Engine {
         conversations[c.id] = c
         messages[c.id] = await this.stored(c.id)
       }
-      const { names, usernames, blocked, verified, keys, readReceipts } = this.state
+      const { names, avatars, usernames, blocked, verified, keys, readReceipts } = this.state
       return {
         version: 1,
         createdAt: Date.now(),
         displayName: account.displayName,
-        state: { conversations, names, usernames, blocked, verified, keys, readReceipts },
+        avatar: account.avatar,
+        state: { conversations, names, avatars, usernames, blocked, verified, keys, readReceipts },
         messages,
       } satisfies BackupPayload
     })
@@ -505,6 +629,7 @@ export class Engine {
     await this.register(reg, '', async () => {
       const backup = await openBackup<BackupPayload>(keys.encryption, await api.downloadBackup(reg.token))
       this.account!.displayName = backup.displayName
+      this.account!.avatar = backup.avatar
       await this.store.putJson('account', this.account)
       const restored = backup.state
       for (const c of Object.values(restored.conversations)) {
@@ -654,6 +779,8 @@ export class Engine {
     ws?.close()
     await this.store.clear()
     this.setConnection('offline')
+    this.typingClock = new TypingClock()
+    this.typingSentAt = 0
   }
 
   /** Runs `syncOwnDevices` soon, coalescing bursts (e.g. many joins). */
@@ -678,6 +805,12 @@ export class Engine {
       const { devices } = await api.devices(this.account.token)
       const mine = devices.map((d) => deviceHex(d.device_id))
       this.state.myDevices = mine
+      // Syncs that waited for this list (a device linked a moment ago).
+      const ready = this.pendingSyncs.filter((p) => mine.includes(p.device))
+      this.pendingSyncs = this.pendingSyncs.filter((p) => !mine.includes(p.device))
+      for (const pending of ready) {
+        await this.exclusive(() => this.applyDeviceSync(pending.conversationId, pending.bytes))
+      }
       const thisDevice = deviceHex(this.account.deviceId)
       const hasSelf = Object.values(this.state.conversations).some((c) => c.self && !c.status)
       // The oldest device creates it; duplicates from races are tolerated.
@@ -745,14 +878,21 @@ export class Engine {
           if (this.state.pendingCommit || this.connection !== 'online') return undefined
           await this.flushOutbox(true)
           const existing = this.recipients(conversationId)
-          const added = core.addMembers(fromHex(conversationId), invitee.keyPackages, randomId(), randomId())
+          const added = core.addMembers(
+            fromHex(conversationId),
+            invitee.identities,
+            invitee.keyPackages,
+            randomId(),
+            randomId(),
+          )
           const pending: PendingCommit = {
             conversationId,
             commitHash: toBase64(added.commitHash),
             invitees: [{ account: invitee.account, username: invitee.username, devices: invitee.devices }],
           }
           const welcome = { envelope: added.welcome, recipients: invitee.devices }
-          return this.sendCommit(pending, added.commit, existing, welcome)
+          const after = [...new Set([...this.memberDevices(conversationId), ...invitee.devices])]
+          return this.sendCommit(pending, added.commit, existing, welcome, after)
         })
       } else if (removing.length > 0) {
         outcome = await this.exclusive(async () => {
@@ -762,7 +902,9 @@ export class Engine {
           const identities = removing.flatMap((p) => p.stale.map((d) => fromHex(p.account + d)))
           const staged = core.removeMembers(fromHex(conversationId), identities, randomId())
           const pending: PendingCommit = { conversationId, commitHash: toBase64(staged.commitHash) }
-          return this.sendCommit(pending, staged.commit, everyone)
+          const gone = removing.flatMap((p) => p.stale)
+          const after = this.memberDevices(conversationId).filter((d) => !gone.includes(d))
+          return this.sendCommit(pending, staged.commit, everyone, undefined, after)
         })
       }
       if (outcome !== 'accepted') return
@@ -782,12 +924,33 @@ export class Engine {
     const packages = new Map(Object.entries(claimed.key_packages).map(([id, kp]) => [deviceHex(id), kp]))
     const found = devices.filter((d) => packages.has(d))
     if (found.length === 0) return undefined
+    const identities = found.map((d) => makeIdentity(account, d))
+    const keyPackages = found.map((d) => fromBase64(packages.get(d)!))
+    this.checkIdentities(identities, keyPackages)
     return {
       username: account === this.myAccount() ? me.username : (this.state.usernames[account] ?? ''),
       account,
       devices: found,
-      keyPackages: found.map((d) => fromBase64(packages.get(d)!)),
+      identities,
+      keyPackages,
     }
+  }
+
+  /**
+   * Refuses any claimed key package whose credential identity is not the
+   * account and device it was claimed for (audit H1). The key directory hands
+   * out packages that their uploader chose, so a package can claim to belong
+   * to someone else. Without this check, messages from that member would be
+   * shown as the other account's.
+   */
+  private checkIdentities(identities: Uint8Array[], keyPackages: Uint8Array[]) {
+    const { core } = this.ready()
+    identities.forEach((identity, i) => {
+      const claimed = core.keyPackageIdentity(keyPackages[i])
+      if (toHex(claimed) !== toHex(identity)) {
+        throw new Error('the server sent a key that belongs to another account')
+      }
+    })
   }
 
   /** This account's other devices, for new conversations. */
@@ -801,7 +964,7 @@ export class Engine {
     const invitee = await this.ownInvitee(mine.filter((d) => d !== thisDevice))
     if (!invitee) return
     await this.exclusive(async () => {
-      const started = this.core!.startConversation(invitee.keyPackages, randomId())
+      const started = this.core!.startConversation(invitee.identities, invitee.keyPackages, randomId())
       const id = toHex(started.conversationId)
       this.state.conversations[id] = { id, peers: [], self: true, lastAt: Date.now() }
       await this.observeKeysIn(id)
@@ -821,6 +984,7 @@ export class Engine {
   private queueDeviceSync(selfId: string) {
     const sync: DeviceSync = {
       displayName: this.account!.displayName,
+      avatar: this.account!.avatar ?? null,
       names: this.state.names,
       usernames: this.state.usernames,
       blocked: this.state.blocked,
@@ -830,31 +994,49 @@ export class Engine {
           .map((c) => [c.id, { name: c.name, admins: c.admins }]),
       ),
     }
-    const messageId = randomId()
-    const envelope = this.core!.sendDeviceSync(
-      fromHex(selfId),
-      new TextEncoder().encode(JSON.stringify(sync)),
-      Date.now(),
-      messageId,
-    )
-    this.state.outbox.push({
-      messageId: toHex(messageId),
-      conversationId: selfId,
-      envelope: toBase64(envelope),
-      recipients: this.recipients(selfId),
-    })
+    const queue = (state: DeviceSync) => {
+      const messageId = randomId()
+      const envelope = this.core!.sendDeviceSync(
+        fromHex(selfId),
+        new TextEncoder().encode(JSON.stringify(state)),
+        Date.now(),
+        messageId,
+      )
+      this.state.outbox.push({
+        messageId: toHex(messageId),
+        conversationId: selfId,
+        envelope: toBase64(envelope),
+        recipients: this.recipients(selfId),
+      })
+    }
+    queue(sync)
+    for (const avatars of avatarSyncChunks(this.state.avatars)) {
+      queue({ names: {}, usernames: {}, conversations: {}, avatars })
+    }
   }
 
   /** Applies a `DeviceSync` from another of this account's devices. */
   private async applyDeviceSync(conversationId: string, bytes: Uint8Array) {
     const sync = parseDeviceSync(bytes)
-    const conv = this.state.conversations[conversationId]
+    const conv = this.conv(conversationId)
     if (!sync || !conv) return
     conv.self = true
     conv.peers = []
     if (sync.displayName && this.account) {
       this.account.displayName = sync.displayName
       await this.store.putJson('account', this.account)
+    }
+    // Older linked devices omitted `avatar`; only null explicitly removes it.
+    if (this.account && sync.avatar !== undefined && (sync.avatar ?? undefined) !== this.account.avatar) {
+      this.account.avatar = sync.avatar ?? undefined
+      await this.store.putJson('account', this.account)
+      this.emit({ type: 'avatar', account: this.myAccount() })
+    }
+    for (const [account, avatar] of Object.entries(sync.avatars ?? {})) {
+      if (avatar !== this.state.avatars[account]) {
+        this.state.avatars[account] = avatar
+        this.emit({ type: 'avatar', account })
+      }
     }
     if (sync.blocked) this.state.blocked = sync.blocked
     this.state.names = { ...sync.names, ...this.state.names }
@@ -911,7 +1093,7 @@ export class Engine {
     // Under the lock: the read-modify-write of the message list must not
     // interleave with a delivery appending to it.
     const changed = await this.exclusive(async () => {
-      const conv = this.state.conversations[conversationId]
+      const conv = this.conv(conversationId)
       if (!conv) return false
       const list = await this.stored(conversationId)
       const unseen = list.filter((m) => m.status === 'received' && !m.seen && m.kind !== 'notice')
@@ -1253,10 +1435,18 @@ export class Engine {
     const own = await this.otherOwnDevices()
 
     const id = await this.exclusive(async () => {
-      const started = core.startConversation(
-        [...devices.map((d) => fromBase64(claimed.key_packages[d])), ...(own?.keyPackages ?? [])],
-        randomId(),
-      )
+      const identities = [
+        ...devices.map((d) => makeIdentity(peer, deviceHex(d))),
+        ...(own?.identities ?? []),
+      ]
+      const keyPackages = [
+        ...devices.map((d) => fromBase64(claimed.key_packages[d])),
+        ...(own?.keyPackages ?? []),
+      ]
+      // The peer's packages are checked here; our own devices were checked
+      // when they were claimed (audit H1).
+      this.checkIdentities(identities.slice(0, devices.length), keyPackages.slice(0, devices.length))
+      const started = core.startConversation(identities, keyPackages, randomId())
       const id = toHex(started.conversationId)
       this.state.usernames[peer] = username
       this.state.conversations[id] = { id, peers: [peer], lastAt: Date.now() }
@@ -1290,6 +1480,7 @@ export class Engine {
 
     const id = await this.exclusive(async () => {
       const started = core.startConversation(
+        everyone.flatMap((i) => i.identities),
         everyone.flatMap((i) => i.keyPackages),
         randomId(),
       )
@@ -1326,7 +1517,7 @@ export class Engine {
    */
   async addMembers(conversationId: string, usernames: string[]) {
     const { core } = this.ready()
-    const conv = this.state.conversations[conversationId]
+    const conv = this.conv(conversationId)
     if (!conv) throw new Error('Unknown conversation')
     if (this.connection !== 'online') throw new Error('You need to be online to add people')
     if (this.state.pendingCommit) throw new Error('Still finishing an earlier group change; try again shortly')
@@ -1342,6 +1533,7 @@ export class Engine {
       const existing = this.recipients(conversationId)
       const added = core.addMembers(
         fromHex(conversationId),
+        invitees.flatMap((i) => i.identities),
         invitees.flatMap((i) => i.keyPackages),
         randomId(),
         randomId(),
@@ -1352,7 +1544,11 @@ export class Engine {
         invitees: invitees.map(({ account, username, devices }) => ({ account, username, devices })),
       }
       const welcome = { envelope: added.welcome, recipients: invitees.flatMap((i) => i.devices) }
-      throwUnlessAccepted(await this.sendCommit(pending, added.commit, existing, welcome), 'adding people')
+      const after = [...new Set([...this.memberDevices(conversationId), ...invitees.flatMap((i) => i.devices)])]
+      throwUnlessAccepted(
+        await this.sendCommit(pending, added.commit, existing, welcome, after),
+        'adding people',
+      )
     })
     this.emitView()
     void this.flushOutbox()
@@ -1409,7 +1605,11 @@ export class Engine {
       const everyone = this.recipients(conversationId)
       const staged = core.removeMembers(fromHex(conversationId), [fromHex(account)], randomId())
       const pending: PendingCommit = { conversationId, commitHash: toBase64(staged.commitHash) }
-      throwUnlessAccepted(await this.sendCommit(pending, staged.commit, everyone), 'removing them')
+      const after = this.withoutAccounts(conversationId, [account])
+      throwUnlessAccepted(
+        await this.sendCommit(pending, staged.commit, everyone, undefined, after),
+        'removing them',
+      )
     })
     this.emitView()
     void this.flushOutbox()
@@ -1420,6 +1620,7 @@ export class Engine {
     const { core } = this.ready()
     const conv = this.group(conversationId)
     if (conv.status) return
+    await this.stopLive(conversationId)
     await this.exclusive(async () => {
       const messageId = randomId()
       const proposal = core.leave(fromHex(conversationId), messageId)
@@ -1431,6 +1632,7 @@ export class Engine {
       })
       conv.status = 'left'
       this.state.live = this.state.live.filter((l) => l.conversationId !== conversationId)
+      await this.endGroupLiveLocations(conversationId)
       await this.persist()
     })
     this.emitView()
@@ -1450,11 +1652,14 @@ export class Engine {
   /** Messages for the UI: sender names resolved, attachment keys left out. */
   async messages(conversationId: string): Promise<ChatMessage[]> {
     const now = Date.now()
-    return (await this.stored(conversationId)).map(({ file, ...m }) => ({
+    const list = await this.stored(conversationId)
+    const replyLookup = buildReplyLookup(list)
+    return list.map(({ file, contentHash: _contentHash, replyToHash, ...m }) => ({
       ...m,
       // An ended session shows no point, even before the sweep forgets it.
       live: m.live && (m.live.ended || m.live.expiresAt <= now ? { ...m.live, ended: true, latest: undefined } : m.live),
       fromName: m.from === 'me' || m.kind === 'notice' ? undefined : this.nameOf(m.from),
+      reply: m.replyTo ? replyPreview(m.replyTo, replyLookup, (a) => a === 'me' ? 'You' : this.nameOf(a), replyToHash) : undefined,
       file: file && {
         name: file.name,
         mime: file.mime,
@@ -1469,8 +1674,129 @@ export class Engine {
     }))
   }
 
+  private typingNow(): number {
+    return this.typingClock.now()
+  }
+
+  /** Order a new visible send after prior composition, not after later upload work. */
+  private compositionSentAt(): number {
+    const sentAt = Math.max(Date.now(), this.typingSentAt + 1)
+    this.typingSentAt = sentAt
+    return sentAt
+  }
+
+  /** Current typists, resolved from authenticated current group identities. */
+  typing(conversationId: string): import('./protocol').Typist[] {
+    const conv = this.conv(conversationId)
+    if (!conv || conv.status || conv.self || conv.request || this.state.typingIndicators === false || this.connection !== 'online') {
+      this.typingLeases.delete(conversationId)
+      return []
+    }
+    const owners = this.deviceAccounts(conversationId)
+    const accounts = this.typingLeases.get(conversationId)?.accounts(this.typingNow(), (device, account) =>
+      owners.get(device) === account && account !== this.myAccount() && !this.state.blocked.includes(account)) ?? []
+    return accounts.map((account) => ({ account, name: this.nameOf(account) }))
+  }
+
+  private stopTypingForMessage(conversationId: string, from: string, device: string, sentAt: number) {
+    const conv = this.conv(conversationId)
+    if (from === this.myAccount() || !conv || conv.status || conv.self || conv.request ||
+        this.state.blocked.includes(from) || this.state.typingIndicators === false || this.connection !== 'online') return
+    const leases = this.typingLeases.get(conversationId) ?? new TypingLeases()
+    leases.stopDevice(device, from, sentAt, this.typingNow())
+    this.typingLeases.set(conversationId, leases)
+    this.publishTyping(conversationId)
+    this.scheduleTypingSweep()
+  }
+
+  private publishTyping(conversationId: string) {
+    const typists = this.typing(conversationId)
+    const signature = JSON.stringify(typists)
+    if ((this.typingPublished.get(conversationId) ?? '[]') === signature) return
+    this.typingPublished.set(conversationId, signature)
+    this.emit({ type: 'typing', conversationId, typists })
+  }
+
+  private scheduleTypingSweep() {
+    this.typingTimer ??= setInterval(() => {
+      for (const id of this.typingLeases.keys()) {
+        this.publishTyping(id)
+        if (this.typingLeases.get(id)?.empty(this.typingNow())) this.typingLeases.delete(id)
+      }
+      if (!this.typingLeases.size) {
+        clearInterval(this.typingTimer)
+        this.typingTimer = undefined
+      }
+    }, 250)
+  }
+
+  private clearTyping() {
+    clearInterval(this.typingTimer)
+    this.typingTimer = undefined
+    this.typingLeases.clear()
+    this.typingSent.clear()
+    this.typingConversation = undefined
+    for (const id of this.typingPublished.keys()) this.publishTyping(id)
+    this.typingPublished.clear()
+  }
+
+  async setTypingIndicators(on: boolean) {
+    this.ready()
+    await this.exclusive(async () => {
+      if (!on && this.typingConversation) await this.sendTypingLocked(this.typingConversation, false)
+      this.state.typingIndicators = on
+      if (!on) this.clearTyping()
+      await this.persist()
+    })
+    this.emitView()
+  }
+
+  /** Best effort only: no typing envelope ever enters the persistent outbox. */
+  async setTyping(conversationId: string, active: boolean) {
+    await this.exclusive(async () => {
+      if (active && this.typingConversation && this.typingConversation !== conversationId) {
+        await this.sendTypingLocked(this.typingConversation, false)
+      }
+      await this.sendTypingLocked(conversationId, active)
+    })
+  }
+
+  private async sendTypingLocked(conversationId: string, active: boolean) {
+    const conv = this.conv(conversationId)
+    if (!this.core || !this.account || !conv || conv.status || conv.self || conv.request ||
+        this.state.typingIndicators === false || this.connection !== 'online' || this.state.pendingCommit ||
+        (conv.peers.length === 1 && this.state.blocked.includes(conv.peers[0]))) return
+    const now = this.typingNow()
+    const last = this.typingSent.get(conversationId)
+    if (active && last?.active && now - last.at < TYPING_REFRESH_MS) return
+    if (!active && !last?.active) return
+    // Stops must order after starts, even within one millisecond or after a clock change.
+    const sentAt = Math.max(Math.ceil(now), this.typingSentAt + 1)
+    this.typingSentAt = sentAt
+    const envelope = this.core.sendTyping(fromHex(conversationId), active, sentAt, sentAt + TYPING_TTL_MS, randomId())
+    // The MLS sender ratchet advances even if delivery subsequently fails.
+    await this.persist()
+    this.typingSent.set(conversationId, { active, at: now })
+    if (active) this.typingConversation = conversationId
+    else if (this.typingConversation === conversationId) this.typingConversation = undefined
+    // No retries. Silent uses an existing generic delivery option, not a typing marker.
+    void this.request((id) => encodeSend(id, envelope, this.recipients(conversationId).map(fromHex), true, [])).catch(() => undefined)
+  }
+
   private async stored(conversationId: string): Promise<StoredMessage[]> {
     return (await this.store.getJson<StoredMessage[]>(`messages:${conversationId}`)) ?? []
+  }
+
+  /**
+   * The conversation map entry for an id, via `Object.hasOwn` so that a
+   * `__proto__` or `constructor` key cannot resolve to `Object.prototype`
+   * (its fields look truthy and a later write would pollute it). Only used
+   * for entries before they are written back to.
+   */
+  private conv(conversationId: string): Conversation | undefined {
+    return Object.hasOwn(this.state.conversations, conversationId)
+      ? this.state.conversations[conversationId]
+      : undefined
   }
 
   private checkCanSend(conversationId: string) {
@@ -1497,7 +1823,7 @@ export class Engine {
         id: toHex(randomId()),
         from: 'me',
         text: '',
-        sentAt: Date.now(),
+        sentAt: this.compositionSentAt(),
         status: 'sending',
         location: checked,
       }
@@ -1516,22 +1842,27 @@ export class Engine {
 
   // ---- live location (FR-LOC-2/3/6, doc 06 §2) --------------------------------
 
-  /** Starts sharing in one conversation for 15 min, 1 h or 8 h, from `location`. */
-  async startLive(conversationId: string, durationMs: number, location: LocationInfo) {
+  /** Starts sharing in one conversation for a fixed duration or until stopped. */
+  async startLive(conversationId: string, durationMs: number | null, location: LocationInfo) {
     prepareArea(location.latitude, location.longitude, this.token())
     const { core } = this.ready()
     this.checkCanSend(conversationId)
-    if (!(LIVE_DURATIONS_MS as readonly number[]).includes(durationMs)) throw new Error('Choose 15 minutes, 1 hour or 8 hours')
+    if (durationMs !== null && !(LIVE_DURATIONS_MS as readonly number[]).includes(durationMs)) {
+      throw new Error('Choose 15 minutes, 1 hour, 8 hours or until stopped')
+    }
+    const untilStopped = durationMs === null
     const point = safeLocation(location.latitude, location.longitude, location.accuracyM, '')
     if (!point) throw new Error("That location doesn't look right")
+    // Replacing a session can wait on storage while the composer starts a newer draft.
+    const now = await this.exclusive(async () => this.compositionSentAt())
     await this.stopLive(conversationId)
     await this.exclusive(async () => {
-      const now = Date.now()
       const session: LiveSession = {
         sessionId: toHex(randomId()),
         conversationId,
         messageId: toHex(randomId()),
-        expiresAt: now + durationMs,
+        expiresAt: now + (durationMs ?? MAX_LIVE_DURATION_MS),
+        untilStopped,
         lastSentAt: now,
         last: point,
       }
@@ -1541,7 +1872,13 @@ export class Engine {
         text: '',
         sentAt: now,
         status: 'sending',
-        live: { sessionId: session.sessionId, expiresAt: session.expiresAt, latest: { ...point, at: now }, ended: false },
+        live: {
+          sessionId: session.sessionId,
+          expiresAt: session.expiresAt,
+          untilStopped,
+          latest: { ...point, at: now },
+          ended: false,
+        },
       }
       this.state.outbox.push({
         messageId: message.id,
@@ -1557,10 +1894,15 @@ export class Engine {
     void this.flushOutbox()
   }
 
+  /** Forget the cached fix when the page cannot provide foreground updates. */
+  pauseLive() {
+    this.liveFix = undefined
+  }
+
   /**
    * A new fix from the page. Each running session sends it if it moved
    * enough or a heartbeat is due, and only while online: updates queued
-   * offline would arrive stale.
+   * offline would arrive stale. Resuming renews the same card, not a new post.
    */
   async liveUpdate(location: LocationInfo) {
     const point = safeLocation(location.latitude, location.longitude, location.accuracyM, '')
@@ -1577,11 +1919,15 @@ export class Engine {
       for (const session of this.state.live) {
         if (this.state.conversations[session.conversationId]?.status) continue
         if (!updateDue(now, session.lastSentAt, session.last, point)) continue
+        const untilStopped = session.untilStopped === true
+        const resume = untilStopped && session.expiresAt <= now
+        const expiresAt = expiryForUpdate(now, session.expiresAt, untilStopped)
         const messageId = randomId()
         const envelope = core.sendLiveLocation(
           fromHex(session.conversationId),
           fromHex(session.sessionId),
-          session.expiresAt,
+          expiresAt,
+          untilStopped,
           true,
           point.latitude,
           point.longitude,
@@ -1597,9 +1943,17 @@ export class Engine {
           // Moving a pin is nothing to wake a phone for.
           silent: true,
         })
+        session.expiresAt = expiresAt
         session.lastSentAt = now
         session.last = point
-        await this.setLivePoint(session.conversationId, session.messageId, { ...point, at: now })
+        await this.setLivePoint(
+          session.conversationId,
+          session.messageId,
+          { ...point, at: now },
+          expiresAt,
+          untilStopped,
+          resume,
+        )
         sent = true
       }
       if (sent) await this.persist()
@@ -1612,20 +1966,24 @@ export class Engine {
     const session = this.state.live.find((l) => l.conversationId === conversationId)
     if (!session) return
     await this.exclusive(async () => {
+      const now = Date.now()
       this.state.live = this.state.live.filter((l) => l !== session)
-      await this.endLiveMessage(conversationId, session.messageId)
+      await this.endLiveMessage(conversationId, session.messageId, true)
       const conv = this.state.conversations[conversationId]
-      if (this.core && conv && !conv.status && session.expiresAt > Date.now()) {
+      const untilStopped = session.untilStopped === true
+      if (this.core && conv && !conv.status && (untilStopped || session.expiresAt > now)) {
         const messageId = randomId()
+        const expiresAt = untilStopped ? now + MAX_LIVE_DURATION_MS : session.expiresAt
         const envelope = this.core.sendLiveLocation(
           fromHex(conversationId),
           fromHex(session.sessionId),
-          session.expiresAt,
+          expiresAt,
+          untilStopped,
           false,
           0,
           0,
           0,
-          Date.now(),
+          now,
           messageId,
         )
         this.state.outbox.push({
@@ -1797,6 +2155,9 @@ export class Engine {
   }
 
   private callMedia(conversationId: string, callId: string): CallMedia {
+    if (this.endedCalls.has(callId)) {
+      throw new Error('this call already ended on this device')
+    }
     const known = this.media.get(callId)
     if (known) {
       if (known.conversationId !== conversationId) throw new Error('call belongs to another conversation')
@@ -1827,6 +2188,7 @@ export class Engine {
   private forgetMedia(callId: string) {
     this.media.get(callId)?.media.free()
     this.media.delete(callId)
+    this.endedCalls.add(callId)
   }
 
   /** A signal from the other person or another of our devices (under the lock). */
@@ -1932,42 +2294,61 @@ export class Engine {
     }
   }
 
-  /** Moves the point shown on a live message (under the lock). */
-  private async setLivePoint(conversationId: string, messageId: string, latest: LocationInfo & { at: number }) {
+  /** Moves the point and refreshes its lease (under the lock). */
+  private async setLivePoint(
+    conversationId: string,
+    messageId: string,
+    latest: LocationInfo & { at: number },
+    expiresAt: number,
+    untilStopped: boolean,
+    resume = false,
+  ) {
     const list = await this.stored(conversationId)
     const message = list.find((m) => m.id === messageId)
-    if (!message?.live || message.live.ended) return
+    if (!message?.live || (message.live.ended && !resume) || message.live.stopped) return
+    message.live.ended = false
     message.live.latest = latest
+    message.live.expiresAt = expiresAt
+    message.live.untilStopped = untilStopped
     await this.store.putJson(`messages:${conversationId}`, list)
     this.emit({ type: 'messages', conversationId })
   }
 
   /** Ends a live message and forgets its point (doc 06: discard at the end). Under the lock. */
-  private async endLiveMessage(conversationId: string, messageId: string) {
+  private async endLiveMessage(conversationId: string, messageId: string, stopped = false) {
     const list = await this.stored(conversationId)
     const message = list.find((m) => m.id === messageId)
-    if (!message?.live || message.live.ended) return
+    if (!message?.live) return false
+    const changed = !message.live.ended || message.live.latest !== undefined || (stopped && !message.live.stopped)
+    if (!changed) return false
     message.live.ended = true
     message.live.latest = undefined
+    if (stopped) message.live.stopped = true
     await this.store.putJson(`messages:${conversationId}`, list)
     this.emit({ type: 'messages', conversationId })
+    return true
   }
 
-  /** Ends our sessions that ran out, and forgets the points of others' that did. */
+  /** Expires timed sessions and clears points whose rolling leases ran out. */
   private async endExpiredLive() {
     const now = Date.now()
-    const due =
-      this.state.live.some((l) => l.expiresAt <= now) || this.state.liveSeen.some((l) => l.expiresAt <= now)
-    if (!due) return
+    if (!this.state.live.some((l) => l.expiresAt <= now) && !this.state.liveSeen.some((l) => l.expiresAt <= now)) return
+    let changed = false
     await this.exclusive(async () => {
-      for (const l of [...this.state.live, ...this.state.liveSeen].filter((l) => l.expiresAt <= now)) {
-        await this.endLiveMessage(l.conversationId, l.messageId)
+      const expiredLive = this.state.live.filter((l) => l.expiresAt <= now)
+      const expiredSeen = this.state.liveSeen.filter((l) => l.expiresAt <= now)
+      if (expiredLive.length === 0 && expiredSeen.length === 0) return
+      for (const l of [...expiredLive, ...expiredSeen]) {
+        changed = (await this.endLiveMessage(l.conversationId, l.messageId)) || changed
       }
-      this.state.live = this.state.live.filter((l) => l.expiresAt > now)
+      // Keep until-stopped sender sessions so they can resume when the page opens.
+      // Their expired cards must not trigger storage writes on every later sweep.
+      changed = changed || expiredLive.some((l) => !l.untilStopped) || expiredSeen.length > 0
+      this.state.live = this.state.live.filter((l) => l.untilStopped === true || l.expiresAt > now)
       this.state.liveSeen = this.state.liveSeen.filter((l) => l.expiresAt > now)
-      await this.persist()
+      if (changed) await this.persist()
     })
-    this.emitView()
+    if (changed) this.emitView()
   }
 
   private scheduleLiveSweep() {
@@ -1989,6 +2370,7 @@ export class Engine {
     messageId: string,
     sentAt: number,
     view: LiveLocationView,
+    reference: Pick<StoredMessage, 'contentHash' | 'replyTo' | 'replyToHash'> = {},
   ) {
     const sessionId = view.sessionId.length === 16 ? toHex(view.sessionId) : undefined
     const place = view.location
@@ -2001,9 +2383,38 @@ export class Engine {
     // Only the session's own sender can move or stop it.
     const shown = list.find((m) => m.live?.sessionId === sessionId && m.from === sender)
     if (shown?.live) {
-      if (shown.live.ended) return
-      if (view.stopped) await this.endLiveMessage(conversationId, shown.id)
-      else if (point && sentAt > (shown.live.latest?.at ?? 0)) await this.setLivePoint(conversationId, shown.id, { ...point, at: sentAt })
+      if ((shown.live.untilStopped === true) !== view.untilStopped) return
+      if (view.stopped) {
+        await this.endLiveMessage(conversationId, shown.id, true)
+        this.state.liveSeen = this.state.liveSeen.filter(
+          (l) => l.conversationId !== conversationId || l.messageId !== shown.id,
+        )
+        return
+      }
+      const now = Date.now()
+      if (shown.live.stopped || view.expiresAtMs <= now) return
+      if (
+        shown.live.ended &&
+        !canResumeUntilStopped(shown.live.ended, shown.live.stopped ?? false, view.untilStopped, view.expiresAtMs, now)
+      ) {
+        return
+      }
+      if (point && sentAt > (shown.live.latest?.at ?? 0)) {
+        await this.setLivePoint(
+          conversationId,
+          shown.id,
+          { ...point, at: sentAt },
+          view.expiresAtMs,
+          view.untilStopped,
+          shown.live.ended,
+        )
+        const seen = this.state.liveSeen.find((l) => l.conversationId === conversationId && l.messageId === shown.id)
+        if (seen) seen.expiresAt = view.expiresAtMs
+        else {
+          this.state.liveSeen.push({ conversationId, messageId: shown.id, expiresAt: view.expiresAtMs })
+          this.scheduleLiveSweep()
+        }
+      }
       return
     }
     if (view.stopped || !point) return
@@ -2017,30 +2428,47 @@ export class Engine {
       id: messageId,
       from: sender,
       text: '',
+      ...reference,
       sentAt,
       status: mine ? 'sent' : 'received',
-      live: { sessionId, expiresAt: view.expiresAtMs, latest: ended ? undefined : { ...point, at: sentAt }, ended },
+      live: {
+        sessionId,
+        expiresAt: view.expiresAtMs,
+        untilStopped: view.untilStopped,
+        latest: ended ? undefined : { ...point, at: sentAt },
+        ended,
+      },
     })
     if (!ended) {
       this.state.liveSeen.push({ conversationId, messageId, expiresAt: view.expiresAtMs })
       this.scheduleLiveSweep()
     }
+    return true
   }
 
-  async sendText(conversationId: string, text: string) {
+  async sendText(conversationId: string, text: string, replyTo?: string) {
     const { core } = this.ready()
     this.checkCanSend(conversationId)
     await this.exclusive(async () => {
+      // Keep the stop and message ahead of typing requests from a newer draft.
+      await this.sendTypingLocked(conversationId, false)
       const messageId = randomId()
-      const sentAt = Date.now()
-      const envelope = core.sendText(fromHex(conversationId), text, sentAt, messageId)
+      const sentAt = this.compositionSentAt()
+      const target = replyTo && (await this.stored(conversationId)).find((m) => m.id === replyTo && m.kind !== 'notice')
+      if (replyTo && (!validReplyId(replyTo) || !target)) throw new Error('The reply target is not in this conversation')
+      if (target && !validContentHash(target.contentHash)) throw new Error('The original message cannot be verified on this device. Cancel the reply and send a new message.')
+      const message: StoredMessage = {
+        id: toHex(messageId), from: 'me', text, replyTo,
+        replyToHash: target ? target.contentHash : undefined, sentAt, status: 'sending',
+      }
+      const envelope = this.encode(core, conversationId, message)
       this.state.outbox.push({
         messageId: toHex(messageId),
         conversationId,
         envelope: toBase64(envelope),
         recipients: this.recipients(conversationId),
       })
-      await this.appendMessage(conversationId, { id: toHex(messageId), from: 'me', text, sentAt, status: 'sending' })
+      await this.appendMessage(conversationId, message)
       // The ratchet advanced: persist before anything leaves the device.
       await this.persist()
     })
@@ -2084,26 +2512,39 @@ export class Engine {
 
   /** Encrypts one of our messages for the group as it is now. */
   private encode(core: CoreClient, conversationId: string, m: StoredMessage): Uint8Array {
+    const envelope = this.encodeBody(core, conversationId, m)
+    // No other send can run between encryption and this getter: the caller holds the lock.
+    m.contentHash = hashHex(core.lastSentContentHash)
+    return envelope
+  }
+
+  private encodeBody(core: CoreClient, conversationId: string, m: StoredMessage): Uint8Array {
     const id = fromHex(m.id)
+    if (m.replyTo && (!validReplyId(m.replyTo) || !validContentHash(m.replyToHash))) {
+      throw new Error('The original message cannot be verified on this device. Cancel the reply and send a new message.')
+    }
+    const replyTo = m.replyTo ? fromHex(m.replyTo) : undefined
+    const replyToHash = m.replyToHash ? fromHex(m.replyToHash) : undefined
     if (m.live) {
       const p = m.live.latest
       return core.sendLiveLocation(
         fromHex(conversationId),
         fromHex(m.live.sessionId),
         m.live.expiresAt,
+        m.live.untilStopped === true,
         !!p,
         p?.latitude ?? 0,
         p?.longitude ?? 0,
         p?.accuracyM ?? 0,
-        m.sentAt,
+        m.live.untilStopped === true ? m.live.expiresAt - MAX_LIVE_DURATION_MS : m.sentAt,
         id,
       )
     }
     if (m.location) {
       const l = m.location
-      return core.sendLocation(fromHex(conversationId), l.latitude, l.longitude, l.accuracyM, l.label ?? '', m.sentAt, id)
+      return core.sendLocation(fromHex(conversationId), l.latitude, l.longitude, l.accuracyM, l.label ?? '', m.sentAt, id, replyTo, replyToHash)
     }
-    if (!m.file) return core.sendText(fromHex(conversationId), m.text, m.sentAt, id)
+    if (!m.file) return core.sendText(fromHex(conversationId), m.text, m.sentAt, id, replyTo, replyToHash)
     const f = m.file
     if (!f.blobId) throw new Error('not uploaded yet')
     const view = new AttachmentView(
@@ -2121,7 +2562,7 @@ export class Engine {
       !!f.voiceNote,
     )
     try {
-      return core.sendAttachment(fromHex(conversationId), view, m.sentAt, id)
+      return core.sendAttachment(fromHex(conversationId), view, m.sentAt, id, replyTo, replyToHash)
     } finally {
       view.free()
     }
@@ -2139,6 +2580,8 @@ export class Engine {
     this.checkCanSend(conversationId)
     if (file.size === 0) throw new Error('That file is empty')
     if (file.size > MAX_ATTACHMENT_BYTES) throw new Error('Files can be up to 100 MB')
+    // Capture the user action before preparation and upload can overlap a newer draft.
+    const sentAt = await this.exclusive(async () => this.compositionSentAt())
     const image = await prepareImage(file, this.state.media.quality)
     // Clips: where they were filmed is blanked (ADR-0024).
     const data = image?.data ?? (isMp4(file.type) ? await scrubMp4(file) : file)
@@ -2157,7 +2600,7 @@ export class Engine {
         id: messageId,
         from: 'me',
         text: caption,
-        sentAt: Date.now(),
+        sentAt,
         status: 'sending',
         file: {
           name,
@@ -2429,15 +2872,21 @@ export class Engine {
         return
       }
       const members = [
-        ...new Set((core.members(fromHex(conversationId)) as Uint8Array[]).map((m) => splitIdentity(m).account)),
+        ...new Set(
+          (core.members(fromHex(conversationId)) as Uint8Array[])
+            .map((m) => trySplitIdentity(m)?.account)
+            .filter((a): a is string => a !== undefined),
+        ),
       ]
       if (designatedCommitter(conv.admins, members, leavers) !== this.myAccount()) return
       await this.flushOutbox(true)
       const everyone = this.recipients(conversationId)
       const staged = core.commitProposals(fromHex(conversationId), randomId())
       const pending: PendingCommit = { conversationId, commitHash: toBase64(staged.commitHash) }
+      // The leavers are the members this commit takes out (ADR-0035).
+      const after = this.withoutAccounts(conversationId, leavers)
       // A conflict means another member committed first; nothing to do.
-      await this.sendCommit(pending, staged.commit, everyone)
+      await this.sendCommit(pending, staged.commit, everyone, undefined, after)
     })
     this.emitView()
   }
@@ -2489,14 +2938,20 @@ export class Engine {
       if (!conv) return
       const peers = this.peersOf(conversationId)
       if (!this.core!.isActive(event.conversationId)) {
-        // A commit removed us (or committed our own departure).
+        // A commit removed us (or committed our own departure). End local live points.
         conv.status ??= 'removed'
+        const localSessions = this.state.live.filter((l) => l.conversationId === conversationId)
+        const seenSessions = this.state.liveSeen.filter((l) => l.conversationId === conversationId)
+        this.state.live = this.state.live.filter((l) => l.conversationId !== conversationId)
+        this.state.liveSeen = this.state.liveSeen.filter((l) => l.conversationId !== conversationId)
+        for (const l of [...localSessions, ...seenSessions]) await this.endLiveMessage(conversationId, l.messageId, true)
         this.emitView()
         return
       }
       await this.observeKeysIn(conversationId)
       this.refreshCallKeys(conversationId)
       if (conv.self) return
+      await this.endRemovedPeerLiveLocations(conversationId, conv.peers, peers)
       // Introduce ourselves to anyone new.
       if (peers.some((p) => !conv.peers.includes(p))) this.queueProfile(conversationId)
       conv.peers = peers
@@ -2534,15 +2989,44 @@ export class Engine {
       const from = splitIdentity(event.sender).account
       const conv = this.state.conversations[conversationId]
       const mine = from === this.myAccount()
+      if (event.typingActive !== undefined) {
+        if (!mine && conv && !conv.status && !conv.self && !conv.request && !this.state.blocked.includes(from) && this.state.typingIndicators !== false && this.connection === 'online') {
+          const leases = this.typingLeases.get(conversationId) ?? new TypingLeases()
+          leases.update(toHex(splitIdentity(event.sender).device), from, event.typingActive, event.sentAtMs, event.typingExpiresAtMs ?? NaN, this.typingNow())
+          this.typingLeases.set(conversationId, leases)
+          this.publishTyping(conversationId)
+          this.scheduleTypingSweep()
+        }
+        return
+      }
       if (event.deviceSync !== undefined) {
-        if (mine) await this.applyDeviceSync(conversationId, event.deviceSync)
+        // Only this account's own devices may edit the local account (blocked
+        // list, display name): audit H1. A device linked a moment ago is not
+        // in the local list yet, so hold its sync until the server confirms it
+        // rather than dropping it.
+        const senderDevice = toHex(splitIdentity(event.sender).device)
+        if (mine && this.state.myDevices.includes(senderDevice)) {
+          await this.applyDeviceSync(conversationId, event.deviceSync)
+        } else if (mine) {
+          this.pendingSyncs.push({
+            conversationId,
+            device: senderDevice,
+            bytes: new Uint8Array(event.deviceSync),
+          })
+          void this.syncOwnDevices()
+        }
         return
       }
       if (event.receiptKind !== undefined) {
         if (!mine && conv) await this.applyReceipts(conversationId, from, event.receiptKind === 1, event.receiptIds)
         return
       }
-      if (event.groupName !== undefined && conv && acceptsGroupInfo(conv.admins, from)) {
+      if (
+        event.groupName !== undefined &&
+        conv &&
+        !conv.status &&
+        acceptsGroupInfo(conv.admins, from)
+      ) {
         if (event.groupName) conv.name = event.groupName.slice(0, 64)
         const admins = parseAdmins(event.groupAdmins)
         if (admins.length > 0) conv.admins = admins
@@ -2577,7 +3061,14 @@ export class Engine {
       const live = event.live
       if (live) {
         if (!conv?.status && !this.state.blocked.includes(from)) {
-          await this.applyLive(conversationId, from, mine, messageId, event.sentAtMs, live)
+          const reference = event.replyTo && toHex(event.replyTo)
+          const added = await this.applyLive(conversationId, from, mine, messageId, event.sentAtMs, live, {
+            contentHash: hashHex(event.contentHash),
+            replyTo: reference && validReplyId(reference) ? reference : undefined,
+            replyToHash: hashHex(event.replyToHash),
+          })
+          // Only a new visible card ends composition. Background session updates do not.
+          if (added) this.stopTypingForMessage(conversationId, from, toHex(splitIdentity(event.sender).device), event.sentAtMs)
         }
         live.free()
         return
@@ -2595,6 +3086,7 @@ export class Engine {
       if (this.state.blocked.includes(from)) return // blocked (FR-ID-8)
       if (event.displayName !== undefined && !mine) {
         this.state.names[from] = event.displayName.slice(0, 64)
+        this.setPeerAvatar(from, event.avatar)
         this.emitView()
         // Sender names are resolved when messages are read: refresh lists.
         for (const c of Object.values(this.state.conversations)) {
@@ -2602,6 +3094,9 @@ export class Engine {
         }
       }
       if (text !== undefined) {
+        this.stopTypingForMessage(conversationId, from, toHex(splitIdentity(event.sender).device), event.sentAtMs)
+        const reference = event.replyTo && toHex(event.replyTo)
+        const replyTo = reference && validReplyId(reference) ? reference : undefined
         if (!mine && conv) {
           conv.unread = (conv.unread ?? 0) + 1
           if (!conv.request) this.queueReceipt(conversationId, 'delivered', messageId)
@@ -2611,6 +3106,9 @@ export class Engine {
           id: messageId,
           from: mine ? 'me' : from,
           text,
+          replyTo,
+          replyToHash: hashHex(event.replyToHash),
+          contentHash: hashHex(event.contentHash),
           sentAt: event.sentAtMs,
           status: mine ? 'sent' : 'received',
           file: attachment,
@@ -2635,7 +3133,13 @@ export class Engine {
       while (this.state.outbox.length > 0 && this.connection === 'online') {
         const item = this.state.outbox[0]
         const result = await this.request((id) =>
-          encodeSend(id, fromBase64(item.envelope), item.recipients.map(fromHex), item.silent ?? false),
+          encodeSend(
+            id,
+            fromBase64(item.envelope),
+            item.recipients.map(fromHex),
+            item.silent ?? false,
+            [],
+          ),
         )
         if (!result) return // disconnected: retry after reconnecting
         let outcome = sendOutcome(result)
@@ -2696,6 +3200,12 @@ export class Engine {
     commit: Uint8Array,
     recipients: string[],
     welcome?: { envelope: Uint8Array; recipients: string[] },
+    /**
+     * Devices that are members once the server accepts this commit
+     * (ADR-0035). Without it the server keeps the old member list, and a
+     * removed member keeps send and call access.
+     */
+    membersAfter?: string[],
   ): Promise<CommitOutcome> {
     const id = fromHex(pending.conversationId)
     if (recipients.length === 0 && !welcome) {
@@ -2711,8 +3221,9 @@ export class Engine {
             recipients.map(fromHex),
             welcome.envelope,
             welcome.recipients.map(fromHex),
+            (membersAfter ?? []).map(fromHex),
           )
-        : encodeSend(requestId, commit, recipients.map(fromHex), false),
+        : encodeSend(requestId, commit, recipients.map(fromHex), false, (membersAfter ?? []).map(fromHex)),
     )
     if (!result) {
       // The server may or may not have accepted it; ask once reconnected.
@@ -2731,10 +3242,14 @@ export class Engine {
 
   /** Applies an accepted commit; for additions, introduces us to newcomers. */
   private async finishCommit(p: PendingCommit) {
-    const conv = this.state.conversations[p.conversationId]
+    const conv = this.conv(p.conversationId)
     this.core!.confirmCommit(fromHex(p.conversationId))
     this.refreshCallKeys(p.conversationId)
-    if (conv && !conv.self) conv.peers = this.peersOf(p.conversationId)
+    if (conv && !conv.self) {
+      const peers = this.peersOf(p.conversationId)
+      await this.endRemovedPeerLiveLocations(p.conversationId, conv.peers, peers)
+      conv.peers = peers
+    }
     if (conv) await this.observeKeysIn(p.conversationId)
     if (!this.core!.hasPendingProposals(fromHex(p.conversationId))) delete this.state.leaving[p.conversationId]
     if (p.invitees && conv?.self) {
@@ -2749,6 +3264,28 @@ export class Engine {
     this.state.pendingCommit = undefined
     await this.persist()
     this.emitView()
+  }
+
+  /** Clears all other members' live points in a conversation we left. Under the lock (issue #114). */
+  private async endGroupLiveLocations(conversationId: string) {
+    const seen = this.state.liveSeen.filter((l) => l.conversationId === conversationId)
+    this.state.liveSeen = this.state.liveSeen.filter((l) => l.conversationId !== conversationId)
+    const ids = new Set(seen.map((l) => l.messageId))
+    for (const m of await this.stored(conversationId)) if (m.live && !m.live.ended) ids.add(m.id)
+    for (const id of ids) await this.endLiveMessage(conversationId, id)
+  }
+
+  private async endRemovedPeerLiveLocations(conversationId: string, previousPeers: string[], peers: string[]) {
+    const removedAccounts = previousPeers.filter((p) => !peers.includes(p))
+    if (removedAccounts.length === 0) return
+    const list = await this.stored(conversationId)
+    const removedIds = list
+      .filter((m) => removedAccounts.includes(m.from) && m.live && !m.live.ended)
+      .map((m) => m.id)
+    for (const messageId of removedIds) await this.endLiveMessage(conversationId, messageId, true)
+    this.state.liveSeen = this.state.liveSeen.filter(
+      (l) => l.conversationId !== conversationId || !removedIds.includes(l.messageId),
+    )
   }
 
   /** Settles a commit whose server answer was lost (see `PendingCommit`). */
@@ -2792,12 +3329,12 @@ export class Engine {
     return found.map((f) => {
       const devices = f.device_ids.filter((d) => claimed.key_packages[d])
       if (devices.length === 0) throw new Error(`${f.username} has no keys available right now; try again later`)
-      return {
-        username: f.username,
-        account: f.account_id.replaceAll('-', ''),
-        devices: devices.map((d) => d.replaceAll('-', '')),
-        keyPackages: devices.map((d) => fromBase64(claimed.key_packages[d])),
-      }
+      const account = f.account_id.replaceAll('-', '')
+      const deviceIds = devices.map((d) => d.replaceAll('-', ''))
+      const identities = deviceIds.map((d) => makeIdentity(account, d))
+      const keyPackages = devices.map((d) => fromBase64(claimed.key_packages[d]))
+      this.checkIdentities(identities, keyPackages)
+      return { username: f.username, account, devices: deviceIds, identities, keyPackages }
     })
   }
 
@@ -2813,9 +3350,27 @@ export class Engine {
   }
 
   private queueProfile(conversationId: string) {
+    const conv = this.state.conversations[conversationId]
+    if (!conv || (conv.peers.length === 1 && !isGroupView(conv) && this.state.blocked.includes(conv.peers[0]))) return
     if (!this.account!.displayName) return // linked device still waiting for its name
+    const conversation = this.state.conversations[conversationId]
+    if (
+      conversation &&
+      conversation.name === undefined &&
+      conversation.peers.length === 1 &&
+      this.state.blocked.includes(conversation.peers[0])
+    ) {
+      return
+    }
     const messageId = randomId()
-    const envelope = this.core!.sendProfile(fromHex(conversationId), this.account!.displayName, Date.now(), messageId)
+    const avatar = this.account!.avatar ? fromBase64(this.account!.avatar) : new Uint8Array()
+    const envelope = this.core!.sendProfile(
+      fromHex(conversationId),
+      this.account!.displayName,
+      avatar,
+      Date.now(),
+      messageId,
+    )
     this.state.outbox.push({
       messageId: toHex(messageId),
       conversationId,
@@ -2824,12 +3379,38 @@ export class Engine {
     })
   }
 
+  /**
+   * Device ids (hex) of every member, this device included. A member whose
+   * identity is not 32 bytes is skipped: it cannot be addressed, and it must
+   * not stop the rest of the group from sending (audit H1).
+   */
+  private memberDevices(conversationId: string): string[] {
+    return (this.core!.members(fromHex(conversationId)) as Uint8Array[])
+      .map((m) => trySplitIdentity(m))
+      .filter((m): m is { account: string; device: Uint8Array; deviceId: string } => m !== undefined)
+      .map((m) => m.deviceId)
+  }
+
+  /** Device id (hex) to account id (hex), from the core's group state. */
+  private deviceAccounts(conversationId: string): Map<string, string> {
+    const owners = new Map<string, string>()
+    for (const m of this.core!.members(fromHex(conversationId)) as Uint8Array[]) {
+      const split = trySplitIdentity(m)
+      if (split) owners.set(split.deviceId, split.account)
+    }
+    return owners
+  }
+
+  /** Member devices after every device of `accounts` leaves. */
+  private withoutAccounts(conversationId: string, accounts: string[]): string[] {
+    const owners = this.deviceAccounts(conversationId)
+    return this.memberDevices(conversationId).filter((d) => !accounts.includes(owners.get(d) ?? ''))
+  }
+
   /** Device ids (hex) of every member except this device. */
   private recipients(conversationId: string): string[] {
-    const me = toHex(this.core!.identity())
-    return (this.core!.members(fromHex(conversationId)) as Uint8Array[])
-      .filter((m) => toHex(m) !== me)
-      .map((m) => toHex(splitIdentity(m).device))
+    const me = toHex(splitIdentity(this.core!.identity()).device)
+    return this.memberDevices(conversationId).filter((d) => d !== me)
   }
 
   private myAccount(): string {
@@ -2839,7 +3420,9 @@ export class Engine {
   /** Other members' account ids, from the core's current group state. */
   private peersOf(conversationId: string): string[] {
     const me = this.myAccount()
-    const accounts = (this.core!.members(fromHex(conversationId)) as Uint8Array[]).map((m) => splitIdentity(m).account)
+    const accounts = (this.core!.members(fromHex(conversationId)) as Uint8Array[])
+      .map((m) => trySplitIdentity(m)?.account)
+      .filter((a): a is string => a !== undefined)
     return [...new Set(accounts.filter((a) => a !== me))]
   }
 
@@ -2893,7 +3476,7 @@ export class Engine {
     const list = await this.stored(conversationId)
     list.push(message)
     await this.store.putJson(`messages:${conversationId}`, list)
-    const conv = this.state.conversations[conversationId]
+    const conv = this.conv(conversationId)
     if (conv && message.kind !== 'notice') {
       conv.lastText = message.live
         ? 'Live location'
@@ -2944,6 +3527,7 @@ export class Engine {
 
   private setConnection(state: ConnectionState) {
     this.connection = state
+    if (state !== 'online') this.clearTyping()
     this.emitView()
     if (state === 'online') void this.reportCallStats()
   }

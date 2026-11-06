@@ -9,7 +9,7 @@ use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr},
     sync::Mutex,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use axum::{
@@ -28,6 +28,8 @@ pub struct Limits {
     /// Devices a device may welcome (first contact) per day.
     pub welcomes_per_day: i32,
     pub sends_per_minute: u32,
+    /// Failed sign-in attempts on `/v1/ws` per client IP per minute.
+    pub ws_auth_failures_per_minute: u32,
     /// Sign-ups per client IP per hour (ADR-0021).
     pub registrations_per_ip_per_hour: i32,
     /// Sign-ups across the whole service per day.
@@ -71,6 +73,7 @@ impl Default for Limits {
             claims_per_hour: 300,
             welcomes_per_day: 200,
             sends_per_minute: 600,
+            ws_auth_failures_per_minute: 30,
             registrations_per_ip_per_hour: 10,
             registrations_per_day: 1_000,
             invites_per_day: 10,
@@ -152,6 +155,66 @@ where
 pub const HOUR: i64 = 3600;
 pub const DAY: i64 = 86_400;
 
+/// Failed WebSocket sign-ins per client IP: fixed windows, kept in memory
+/// on each replica. Device tokens are long random values, so guessing one
+/// is not the threat; this only stops one address from hammering the
+/// database lookup behind every `Authenticate` frame, for which per-replica
+/// counts are good enough (as for sends).
+pub struct FailureBuckets {
+    /// Length of every window.
+    window: Duration,
+    windows: Mutex<HashMap<IpAddr, (u32, Instant)>>,
+}
+
+impl FailureBuckets {
+    pub fn new(window: Duration) -> Self {
+        Self {
+            window,
+            windows: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Whether this client may still try to authenticate. An unknown IP is
+    /// never limited (there is nothing to key on) and `limit` 0 means
+    /// unlimited. Expired windows go while the lock is held.
+    pub fn allow(&self, ip: &Option<IpAddr>, limit: u32) -> bool {
+        let Some(ip) = *ip else {
+            return true;
+        };
+        if limit == 0 {
+            return true;
+        }
+        let mut windows = self.windows.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        prune(&mut windows, now, self.window);
+        // Only live windows survive the prune, so an entry is this IP's
+        // count in the current window.
+        windows
+            .get(&ip)
+            .is_none_or(|(count, _start)| *count < limit)
+    }
+
+    /// Counts one failed attempt in this IP's current window, opening a new
+    /// window when the old one has passed.
+    pub fn record(&self, ip: Option<IpAddr>) {
+        let Some(ip) = ip else { return };
+        let mut windows = self.windows.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        prune(&mut windows, now, self.window);
+        match windows.get_mut(&ip) {
+            Some(entry) if now < entry.1 + self.window => entry.0 += 1,
+            _ => {
+                windows.insert(ip, (1, now));
+            }
+        }
+    }
+}
+
+/// Drop the entries whose window has passed.
+fn prune(windows: &mut HashMap<IpAddr, (u32, Instant)>, now: Instant, window: Duration) {
+    windows.retain(|_, (_, start)| now < *start + window);
+}
+
 /// Per-device token buckets for message sends.
 #[derive(Default)]
 pub struct SendBuckets {
@@ -218,5 +281,21 @@ mod tests {
         assert!((0..3).all(|_| buckets.allow(device, 3)));
         assert!(!buckets.allow(device, 3));
         assert!(buckets.allow(Uuid::new_v4(), 3), "per device");
+    }
+
+    #[test]
+    fn failure_buckets_block_an_ip_that_hits_its_limit_then_clear() {
+        let window = Duration::from_millis(50);
+        let buckets = FailureBuckets::new(window);
+        let ip = IpAddr::from([1, 2, 3, 4]);
+        let other = IpAddr::from([5, 6, 7, 8]);
+        assert!(buckets.allow(&Some(ip), 2), "no window yet");
+        buckets.record(Some(ip));
+        buckets.record(Some(ip));
+        assert!(!buckets.allow(&Some(ip), 2), "limit reached");
+        assert!(buckets.allow(&Some(other), 2), "per ip");
+        assert!(buckets.allow(&None, 2), "unknown ip");
+        std::thread::sleep(window * 2);
+        assert!(buckets.allow(&Some(ip), 2), "window expired");
     }
 }

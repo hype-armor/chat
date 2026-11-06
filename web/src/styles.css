@@ -240,6 +240,11 @@ form {
   display: none;
 }
 
+.chat-layout.with-banner {
+  top: calc(var(--app-top, 0px) + var(--update-banner-height, 0px) + var(--live-sharing-height, 0px));
+  height: calc(var(--app-height, 100dvh) - var(--update-banner-height, 0px) - var(--live-sharing-height, 0px));
+}
+
 .sidebar {
   display: flex;
   flex-direction: column;
@@ -439,6 +444,17 @@ form {
   white-space: nowrap;
 }
 
+.contact-live-location {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.contact-live-location .map {
+  width: 100%;
+}
+
 .details-members {
   display: grid;
   gap: 0.75rem;
@@ -509,6 +525,8 @@ form {
 .messages-viewport {
   position: relative;
   min-height: 0;
+  /* useMessageScroll owns anchoring, including media growth above the reader. */
+  overflow-anchor: none;
   overflow-y: auto;
   overscroll-behavior: contain;
   flex: 1;
@@ -1141,6 +1159,12 @@ button.link.danger {
   overflow: hidden;
 }
 
+.map-unavailable {
+  display: grid;
+  place-items: center;
+  text-align: center;
+}
+
 .composer {
   position: relative;
 }
@@ -1176,7 +1200,7 @@ button.link.danger {
 
 .share-location .live-choices {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.5rem;
 }
 
@@ -1186,25 +1210,41 @@ button.link.danger {
   white-space: nowrap;
 }
 
-.live-banner {
+/* App-wide live-location indicators (FR-LOC-6). */
+.live-sharing-indicators {
   position: fixed;
+  top: calc(var(--app-top, 0px) + var(--update-banner-height, 0px));
   left: 0;
   right: 0;
-  top: calc(var(--app-top, 0px) + var(--update-banner-height, 0px));
+  z-index: 5;
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 0.25rem 1rem;
-  min-height: 2.75rem;
-  padding: 0.25rem 1rem;
-  background: #fff4d6;
-  color: #5c4400;
-  border-bottom: 1px solid #f0d58a;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
 }
 
-.chat-layout.with-banner {
-  top: calc(var(--app-top, 0px) + var(--update-banner-height, 0px) + var(--live-banner-height, 2.75rem));
-  height: calc(var(--app-height, 100dvh) - var(--update-banner-height, 0px) - var(--live-banner-height, 2.75rem));
+.live-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 100%;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  background: #fff4d6;
+  color: #5c4400;
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+
+.diagnostics-live-sharing {
+  display: flex;
+  justify-content: center;
+  padding: 0.75rem;
+}
+
+.live-dot {
+  margin-inline-start: 0.25rem;
 }
 
 /* ---- UI polish (2026-10-30) ---------------------------------------------- */
@@ -1218,6 +1258,11 @@ button.link.danger {
   font-weight: 600;
   line-height: 1;
   user-select: none;
+}
+
+/* A profile picture: cropped to the circle. */
+img.avatar {
+  object-fit: cover;
 }
 
 .who {
@@ -1289,6 +1334,20 @@ button.icon[aria-pressed='true'] {
 .settings-identity strong,
 .settings-identity .error {
   grid-column: 1 / -1;
+}
+
+.identity-photo {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.photo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
 }
 
 .settings-group h3 {
@@ -1474,6 +1533,12 @@ button.conversation-title {
   flex: none;
   gap: 0.125rem;
   white-space: nowrap;
+}
+
+@media (max-width: 40rem) {
+  .live-indicator {
+    white-space: normal;
+  }
 }
 
 .menu {
@@ -1804,3 +1869,23 @@ button.conversation-title {
 .tile.screen video {
   object-fit: contain;
 }
+
+/* Message actions do not intercept native selection or link callouts. */
+.message-link { display: inline; overflow-wrap: anywhere; }
+.message-link-actions { display: block; font-size: 0.8125rem; margin-block: 0.25rem; }
+.message-link-actions summary { cursor: pointer; width: fit-content; min-height: 2.75rem; padding-block: 0.5rem; }
+.message-link-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.message-link-buttons > a, .message-link-buttons > button { min-height: 2.75rem; display: inline-flex; align-items: center; }
+.message-reply { display: block; min-height: 2.75rem; }
+.reply-preview { border-inline-start: 3px solid currentColor; padding: 0.375rem 0.625rem; margin-block: 0.375rem; min-width: 0; }
+.reply-preview strong, .reply-preview > span { display: block; overflow-wrap: anywhere; white-space: pre-wrap; }
+.reply-preview > span { max-height: 6rem; overflow: auto; }
+.typing-controls { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 0.25rem 0.75rem; min-height: 2rem; }
+.typing-controls label { display: inline-flex; align-items: center; gap: 0.375rem; min-height: 2.75rem; }
+.composer > .typing-controls, .composer > .reply-preview { padding-inline: 1rem; width: 100%; max-width: 54rem; margin-inline: auto; }
+.typing-controls input { width: auto; }
+.failed-drafts { max-height: 30vh; overflow-y: auto; padding-inline: 1rem; }
+.failed-draft { border-block-end: 1px solid var(--border); padding-block: 0.5rem; }
+.failed-draft-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.failed-draft > button { min-height: 2.75rem; margin-inline-end: 0.75rem; }
+.message-link-actions :focus-visible, .message-reply:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }

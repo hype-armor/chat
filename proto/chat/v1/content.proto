@@ -17,16 +17,34 @@ message Content {
     Location location = 8;
     LiveLocation live_location = 9;
     Call call = 10;
+    Typing typing = 12;
   }
+  // Original envelope message id in this conversation, exactly 16 bytes.
+  // Absent for an ordinary message. Only used on user-visible messages.
+  optional bytes reply_to = 11;
+  // SHA-256 of the original authenticated sender and encoded Content.
+  // Exactly 32 bytes. Receivers must verify this before showing a quote.
+  optional bytes reply_to_hash = 13;
+}
+
+// Ephemeral state, not history. Identity comes from the authenticated MLS
+// sender. Content.sent_at_ms orders updates per sender device. Both start
+// and stop events expire: 0 < expires_at_ms - sent_at_ms <= 10 seconds.
+message Typing {
+  bool active = 1;
+  uint64 expires_at_ms = 2;
 }
 
 message Text {
   string body = 1;
 }
 
-// Sent when a conversation starts so members can label each other.
+// Sent when a conversation starts so members can label each other, and
+// again when the sender changes their name or photo.
 message Profile {
   string display_name = 1;
+  // A square JPEG of the sender's photo, at most 32 KiB. Empty: no photo.
+  bytes avatar = 2;
 }
 
 // Group metadata, sent by the member who created or renamed the group.
@@ -96,11 +114,14 @@ message Location {
 message LiveLocation {
   // 16 random bytes naming the session.
   bytes session_id = 1;
-  // When sharing ends on its own (sender's clock).
+  // When sharing ends on its own, or its renewable lease ends, on sender's clock.
   uint64 expires_at_ms = 2;
   // Absent in a stop message.
   Location location = 3;
   bool stopped = 4;
+  // Until-stopped shares renew this lease on each update. A quiet session
+  // expires after 8 hours.
+  bool until_stopped = 5;
 }
 
 // Call signalling (FR-CALL-1, ADR-0028), end-to-end encrypted like any

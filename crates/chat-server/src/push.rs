@@ -1,4 +1,4 @@
-//! Web Push wake-ups for devices that aren't connected (FR-NOT-1/2).
+//! Content-free Web Push notifications for queued envelopes (FR-NOT-1/2).
 //!
 //! Pushes carry **no payload**: the service worker shows a generic
 //! notification, so nothing about the message reaches the push service.
@@ -21,13 +21,13 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::{AuthDevice, db},
-    error::ApiError,
+    error::{ApiError, ApiJson},
 };
 
-/// At most one push per device in this window: one wake-up is enough to
-/// make the app fetch everything queued.
+/// Limit duplicate notifications during a burst of queued envelopes.
 const COALESCE: Duration = Duration::from_secs(30);
 const JWT_LIFETIME_SECS: u64 = 12 * 3600;
+const VAPID_REFRESH_SECS: u64 = 3600;
 const MAX_ENDPOINT_LEN: usize = 1024;
 
 /// Push services the server will talk to (suffix match, leading `.` covers
@@ -46,6 +46,8 @@ pub struct PushSender {
     subject: String,
     http: reqwest::Client,
     last_sent: Mutex<HashMap<Uuid, Instant>>,
+    /// Reuse each audience's VAPID JWT for at least one hour, as APNs asks.
+    vapid_tokens: Mutex<HashMap<String, (u64, String)>>,
     /// Tests use plain-HTTP push endpoints; real ones are always HTTPS.
     allow_http: bool,
     /// Hosts a subscription endpoint may point at; empty while `allow_http`
@@ -82,6 +84,7 @@ impl PushSender {
             subject,
             http,
             last_sent: Mutex::default(),
+            vapid_tokens: Mutex::default(),
             allow_http,
             allowed_hosts: DEFAULT_PUSH_HOSTS.iter().map(|h| (*h).to_owned()).collect(),
         })
@@ -139,18 +142,28 @@ impl PushSender {
     }
 
     fn vapid_jwt(&self, audience: &str, now: u64) -> String {
+        let mut cache = self.vapid_tokens.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((created, token)) = cache.get(audience)
+            && now >= *created
+            && now - *created < VAPID_REFRESH_SECS
+        {
+            return token.clone();
+        }
+
         let header = URL_SAFE_NO_PAD.encode(br#"{"typ":"JWT","alg":"ES256"}"#);
         let claims = serde_json::json!({ "aud": audience, "exp": now + JWT_LIFETIME_SECS, "sub": self.subject });
         let claims = URL_SAFE_NO_PAD.encode(claims.to_string());
         let signing_input = format!("{header}.{claims}");
         let signature: Signature = self.key.sign(signing_input.as_bytes());
-        format!(
+        let token = format!(
             "{signing_input}.{}",
             URL_SAFE_NO_PAD.encode(signature.to_bytes())
-        )
+        );
+        cache.insert(audience.to_owned(), (now, token.clone()));
+        token
     }
 
-    /// Wakes `device` if it has a subscription and wasn't pushed recently.
+    /// Notifies `device` if it has a subscription and wasn't pushed recently.
     pub async fn notify(&self, db: &PgPool, device: Uuid) -> Outcome {
         {
             let mut last = self.last_sent.lock().unwrap_or_else(|e| e.into_inner());
@@ -289,7 +302,7 @@ pub struct SubscriptionKeys {
 pub async fn subscribe(
     State(state): State<AppState>,
     AuthDevice(device): AuthDevice,
-    Json(sub): Json<Subscription>,
+    ApiJson(sub): ApiJson<Subscription>,
 ) -> Result<StatusCode, ApiError> {
     let db = db(&state)?;
     let allow_http = state.push.as_ref().is_some_and(|p| p.allow_http);
@@ -353,6 +366,16 @@ mod tests {
             URL_SAFE_NO_PAD.decode(sender.public_key()).unwrap().len(),
             65
         );
+    }
+
+    #[test]
+    fn vapid_jwt_is_reused_for_an_audience_for_one_hour() {
+        let sender = PushSender::generate("mailto:ops@example.com".into(), false).unwrap();
+        let audience = "https://web.push.apple.com";
+        let first = sender.vapid_jwt(audience, 1_000);
+        assert_eq!(sender.vapid_jwt(audience, 2_000), first);
+        let refreshed = sender.vapid_jwt(audience, 1_000 + VAPID_REFRESH_SECS);
+        assert_ne!(refreshed, first);
     }
 
     #[test]

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { CallIds } from '../ui/groupCall'
 import { type CallRecord, callNotice, formatCallDuration } from './calls'
 
 const call = (over: Partial<CallRecord> = {}): CallRecord => ({
@@ -48,5 +49,33 @@ describe('call notices', () => {
     expect(formatCallDuration(0)).toBe('0:00')
     expect(formatCallDuration(725_000)).toBe('12:05')
     expect(formatCallDuration(3_729_000)).toBe('1:02:09')
+  })
+})
+
+describe('group call ids', () => {
+  const hex = (pair: string) => pair.repeat(16)
+
+  it('keeps the call id of a rejoin, so the keys are not rebuilt', () => {
+    const ids = new CallIds()
+    const offered = hex('ab')
+    // A call starts here under a random id, then another device offers a call.
+    const started = ids.start()
+    expect(ids.rejoin(offered)).toBe(offered)
+    expect(ids.rejoin(offered)).toBe(offered)
+    expect(ids.joined(offered)).toBe(true)
+    // A rejoin never mints a new id: the id holds the SFrame keys of the call.
+    expect(ids.joined(started)).toBe(true)
+    expect(ids.start()).not.toBe(offered)
+  })
+
+  it('never starts a call under an id this page used before', () => {
+    // A source that repeats must not hand out the same call id twice: the
+    // second call would reuse the key state and the frame counter.
+    const ids = new CallIds(() => hex('cd'))
+    const first = ids.start()
+    const second = ids.start()
+    expect(first).toBe(hex('cd'))
+    expect(second).not.toBe(first)
+    expect(second).toMatch(/^[0-9a-f]{32}$/)
   })
 })

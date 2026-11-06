@@ -48,7 +48,15 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
     case 'messages':
       return { type: 'messages', messages: await engine.messages(request.conversationId) }
     case 'sendText':
-      await engine.sendText(request.conversationId, request.text)
+      await engine.sendText(request.conversationId, request.text, request.replyTo)
+      return { type: 'ok' }
+    case 'setTyping':
+      await engine.setTyping(request.conversationId, request.active)
+      return { type: 'ok' }
+    case 'typing':
+      return { type: 'typing', typists: engine.typing(request.conversationId) }
+    case 'setTypingIndicators':
+      await engine.setTypingIndicators(request.on)
       return { type: 'ok' }
     case 'sendLocation':
       await engine.sendLocation(request.conversationId, request.location)
@@ -58,6 +66,9 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
       return { type: 'ok' }
     case 'liveUpdate':
       await engine.liveUpdate(request.location)
+      return { type: 'ok' }
+    case 'pauseLive':
+      engine.pauseLive()
       return { type: 'ok' }
     case 'stopLive':
       await engine.stopLive(request.conversationId)
@@ -84,6 +95,11 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
       return { type: 'ok' }
     case 'openAttachment':
       return { type: 'file', blob: await engine.openAttachment(request.conversationId, request.messageId) }
+    case 'setAvatar':
+      await engine.setAvatar(request.file)
+      return { type: 'ok' }
+    case 'avatar':
+      return { type: 'avatar', avatar: engine.avatarOf(request.account) }
     case 'startLink':
       return { type: 'link', offer: await engine.startLink() }
     case 'cancelLink':

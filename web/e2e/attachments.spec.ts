@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises'
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import { closeDetails, conversationAction, conversationDetails, messages, openChat, randomUsername, signUp, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
@@ -138,7 +138,7 @@ test('photos lose their metadata, and files arrive intact', async ({ browser }) 
   const photo = withExif(jpeg)
   expect(photo.includes(MARKER)).toBe(true)
 
-  await alice.getByLabel('Message').fill('The view')
+  await alice.getByRole('textbox', { name: 'Message', exact: true }).fill('The view')
   await alice.getByRole('button', { name: 'Add attachment' }).click()
   const chooser = alice.waitForEvent('filechooser')
   await alice.getByRole('menuitem', { name: 'Photo or file' }).click()

@@ -1,9 +1,28 @@
 // Live location (FR-LOC-2/3/6, doc 06 §2): pure rules shared by the engine
 // and tests.
 
-/** The durations people can choose. */
+/** The timed durations people can choose. */
 export const LIVE_DURATIONS_MS = [15 * 60_000, 60 * 60_000, 8 * 60 * 60_000] as const
-/** Never more often than this, so a session sends at most a few thousand updates. */
+/** Until-stopped sessions renew this lease with each update. */
+export const MAX_LIVE_DURATION_MS = LIVE_DURATIONS_MS[LIVE_DURATIONS_MS.length - 1]
+
+/** Renew only until-stopped sessions; timed sessions keep their original expiry. */
+export function expiryForUpdate(now: number, expiresAt: number, untilStopped: boolean): number {
+  return untilStopped ? now + MAX_LIVE_DURATION_MS : expiresAt
+}
+
+/** An expired until-stopped card can reopen only after a fresh lease arrives. */
+export function canResumeUntilStopped(
+  ended: boolean,
+  stopped: boolean,
+  untilStopped: boolean,
+  expiresAt: number,
+  now: number,
+): boolean {
+  return ended && !stopped && untilStopped && expiresAt > now
+}
+
+/** Never more often than this, so a session sends at most a few thousand updates per 8 h. */
 export const MIN_UPDATE_MS = 10_000
 /** Without moving, still refresh this often so others see it's live. */
 export const HEARTBEAT_MS = 60_000
@@ -35,6 +54,6 @@ export function plausibleExpiry(expiresAt: number, sentAt: number): boolean {
   return (
     Number.isFinite(expiresAt) &&
     expiresAt > sentAt &&
-    expiresAt <= sentAt + LIVE_DURATIONS_MS[LIVE_DURATIONS_MS.length - 1] + CLOCK_SLACK_MS
+    expiresAt <= sentAt + MAX_LIVE_DURATION_MS + CLOCK_SLACK_MS
   )
 }

@@ -1,4 +1,4 @@
-import { type Browser, type Page, expect, test } from '@playwright/test'
+import { type Browser, type Page, expect, test } from './fixtures'
 import { createGroup, openChat, randomUsername } from './support'
 
 test.skip(!process.env.E2E_SERVER || !process.env.E2E_LIVEKIT, 'needs chat-server and LiveKit (E2E_LIVEKIT)')
@@ -16,7 +16,7 @@ async function signUp(browser: Browser, browserName: string, name: string, usern
 }
 
 const width = (page: Page, label: string) =>
-  page.getByLabel(label).evaluate((v) => (v as { videoWidth: number }).videoWidth)
+  page.getByLabel(label).evaluate((v) => (v as HTMLVideoElement).videoWidth)
 
 test('a group video call through LiveKit, SFrame-encrypted (FR-CALL-2/3/6)', async ({ browser, browserName }) => {
   test.setTimeout(120_000)

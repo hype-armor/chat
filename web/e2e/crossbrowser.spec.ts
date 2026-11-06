@@ -1,7 +1,7 @@
 // Phase 0 spike (d) as a test: SFrame calls across browser engines, whose
 // encoded-transform APIs differ (Chromium's encoded streams, Firefox's
 // RTCRtpScriptTransform). WebKit joins once it has fake media on Linux.
-import { type Browser, type Page, expect, firefox, test } from '@playwright/test'
+import { type Browser, type Page, expect, firefox, test } from './fixtures'
 import { createGroup, openChat, randomUsername, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER || !process.env.PW_ALL_BROWSERS, 'needs chat-server and Firefox (PW_ALL_BROWSERS)')
@@ -26,7 +26,7 @@ async function signUp(browser: Browser, name: string, username: string, baseURL:
 }
 
 const videoWidth = (page: Page, label: string) =>
-  page.getByLabel(label).evaluate((v) => (v as { videoWidth: number }).videoWidth)
+  page.getByLabel(label).evaluate((v) => (v as HTMLVideoElement).videoWidth)
 
 test('a 1:1 video call between Chromium and Firefox, SFrame both ways', async ({ browser, baseURL }) => {
   const fx = await firefox.launch({ firefoxUserPrefs: FIREFOX_PREFS })

@@ -1,4 +1,4 @@
-import { type Page, expect, test } from '@playwright/test'
+import { type Page, expect, test } from './fixtures'
 import { conversationAction, createGroup, memberAction, messages, openChat, randomUsername, signUp, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
@@ -11,7 +11,7 @@ test('two people exchange encrypted messages, and history survives a reload', as
   const bob = await signUp(browser, 'Bob', bobUsername)
 
   await startChat(alice, bobUsername)
-  await alice.getByLabel('Message').fill('Hello Bob')
+  await alice.getByRole('textbox', { name: 'Message', exact: true }).fill('Hello Bob')
   await alice.getByRole('button', { name: 'Send' }).click()
   await expect(messages(alice).filter({ hasText: 'Hello Bob' }).getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
   // Bob's profile arrives once he joins, replacing the username.
@@ -19,7 +19,7 @@ test('two people exchange encrypted messages, and history survives a reload', as
 
   await openChat(bob, /Alice/)
   await expect(messages(bob)).toHaveText([/Hello Bob/])
-  await bob.getByLabel('Message').fill('Hi Alice')
+  await bob.getByRole('textbox', { name: 'Message', exact: true }).fill('Hi Alice')
   await bob.getByRole('button', { name: 'Send' }).click()
   await expect(messages(alice)).toHaveText([/Hello Bob/, /Hi Alice/])
 
@@ -28,7 +28,7 @@ test('two people exchange encrypted messages, and history survives a reload', as
   await expect(bob.getByRole('status')).toHaveText('Connected')
   await bob.getByRole('button', { name: /Alice/ }).click()
   await expect(messages(bob)).toHaveText([/Hello Bob/, /Hi Alice/])
-  await alice.getByLabel('Message').fill('Still there?')
+  await alice.getByRole('textbox', { name: 'Message', exact: true }).fill('Still there?')
   await alice.getByRole('button', { name: 'Send' }).click()
   await expect(messages(bob)).toHaveText([/Hello Bob/, /Hi Alice/, /Still there\?/])
 })
@@ -380,7 +380,7 @@ test('groups: create, talk, and add someone later', async ({ browser }) => {
 
   await createGroup(ann, 'Trip', [benUsername, catUsername])
   await expect(ann.getByRole('heading', { name: 'Trip' })).toBeVisible()
-  await ann.getByLabel('Message').fill('Hi team')
+  await ann.getByRole('textbox', { name: 'Message', exact: true }).fill('Hi team')
   await ann.getByRole('button', { name: 'Send' }).click()
   await expect(messages(ann).filter({ hasText: 'Hi team' }).getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
 
@@ -388,7 +388,7 @@ test('groups: create, talk, and add someone later', async ({ browser }) => {
     await openChat(page, /Trip/)
     await expect(messages(page)).toHaveText([/Ann\s*Hi team/])
   }
-  await cat.getByLabel('Message').fill('Hello from Cat')
+  await cat.getByRole('textbox', { name: 'Message', exact: true }).fill('Hello from Cat')
   await cat.getByRole('button', { name: 'Send' }).click()
   await expect(messages(ann)).toHaveText([/Hi team/, /Cat\s*Hello from Cat/])
   await expect(messages(ben)).toHaveText([/Hi team/, /Hello from Cat/])
@@ -400,7 +400,7 @@ test('groups: create, talk, and add someone later', async ({ browser }) => {
   await expect(ann.locator('.conversation-bar').getByText('4 people', { exact: true })).toBeVisible()
   await openChat(dan, /Trip/)
   await expect(ben.locator('.conversation-bar').getByText('4 people', { exact: true })).toBeVisible()
-  await ben.getByLabel('Message').fill('Welcome Dan')
+  await ben.getByRole('textbox', { name: 'Message', exact: true }).fill('Welcome Dan')
   await ben.getByRole('button', { name: 'Send' }).click()
   await expect(messages(dan)).toHaveText([/Ben\s*Welcome Dan/])
   for (const page of [ann, cat]) await expect(messages(page).last()).toContainText('Welcome Dan')
@@ -445,7 +445,7 @@ test('group admin: rename, promote, remove, and members leaving', async ({ brows
   await expect(ben.locator('.conversation-title')).toContainText('2 people')
 
   // Only the remaining members get new messages.
-  await ben.getByLabel('Message').fill('Just us now')
+  await ben.getByRole('textbox', { name: 'Message', exact: true }).fill('Just us now')
   await ben.getByRole('button', { name: 'Send' }).click()
   await expect(messages(ann).last()).toContainText('Just us now')
   for (const page of [cat, dee]) await expect(messages(page).filter({ hasText: 'Just us now' })).toHaveCount(0)

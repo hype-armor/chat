@@ -1,0 +1,27 @@
+# Runs the Pi Pocket chat stack (deploy/compose) at boot.
+#
+# Install (as root, once):
+#   install -m 644 /srv/chat/deploy/systemd/pi-chat.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now pi-chat.service
+#
+# Root is required: the Docker socket is root-only. No other user is in the
+# docker group, so no non-root account can control containers.
+[Unit]
+Description=Pi Pocket chat stack (docker compose)
+Documentation=file:///srv/chat/deploy/compose/docker-compose.yml
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/srv/chat
+Environment=HOME=/root
+Environment=DOCKER_CONFIG=/root/.docker
+ExecStart=/usr/bin/docker compose -f deploy/compose/docker-compose.yml up -d
+ExecStop=/usr/bin/docker compose -f deploy/compose/docker-compose.yml stop
+TimeoutStartSec=900
+TimeoutStopSec=120
+# NoNewPrivileges is left off: the docker CLI needs it off to reach the daemon.
