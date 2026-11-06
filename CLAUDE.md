@@ -48,3 +48,6 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   after each test, including failures; the browser itself is worker-scoped.
 - Keep layout-activity probes test-only. Restore instrumented browser APIs in
   `finally`, and poll for a quiet window instead of fixed post-transition sleeps.
+- Playwright tracing already covers explicit client contexts. For signup-stall
+  diagnosis, use `docs/testing-webkit-navigation.md`; keep traces synthetic and
+  short-lived, and never post trace contents or generated keys in public comments.
