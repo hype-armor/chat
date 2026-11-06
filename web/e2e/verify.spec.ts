@@ -1,4 +1,5 @@
 import { expect, test } from './fixtures'
+import { trackLayoutActivity } from './activity'
 import { closeDetails, conversationAction, conversationDetails, linkDevice, messages, openChat, randomUsername, signUp, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
@@ -8,24 +9,36 @@ test('safety numbers match, and a new device of a verified contact is flagged (A
   const bobUsername = randomUsername()
   const alice = await signUp(browser, 'Alice', randomUsername())
   const bob = await signUp(browser, 'Bob', bobUsername)
-  await startChat(alice, bobUsername)
-  await expect(alice.getByLabel('Message', { exact: true })).toBeVisible({ timeout: 15_000 })
-  await alice.getByRole('textbox', { name: 'Message', exact: true }).fill('Hi Bob')
-  await alice.getByRole('button', { name: 'Send' }).click()
-  await expect(alice.getByRole('heading', { name: 'Bob' })).toBeVisible()
-  await openChat(bob, /Alice/)
-  await expect(messages(bob)).toHaveText([/Hi Bob/])
+  const activity = await trackLayoutActivity(bob)
+  let number: string
+  try {
+    await startChat(alice, bobUsername)
+    await expect(alice.getByLabel('Message', { exact: true })).toBeVisible({ timeout: 15_000 })
+    await alice.getByRole('textbox', { name: 'Message', exact: true }).fill('Hi Bob')
+    await alice.getByRole('button', { name: 'Send' }).click()
+    await expect(alice.getByRole('heading', { name: 'Bob' })).toBeVisible()
+    await openChat(bob, /Alice/)
+    await expect(messages(bob)).toHaveText([/Hi Bob/])
 
-  // Both see the same 60 digits.
-  await conversationAction(alice, 'Verify safety number')
-  await conversationAction(bob, 'Verify safety number')
-  await expect(conversationDetails(alice).getByTestId('safety-number')).toBeVisible()
-  const number = (await alice.getByTestId('safety-number').textContent())!.trim()
-  expect(number).toMatch(/^(\d{5} ){11}\d{5}$/)
-  await expect(bob.getByTestId('safety-number')).toHaveText(number)
-  await alice.getByRole('button', { name: 'Mark as verified' }).click()
-  await expect(alice.locator('.conversation header .badge')).toHaveText('Verified')
-  await closeDetails(bob)
+    // Both see the same 60 digits.
+    await conversationAction(alice, 'Verify safety number')
+    await conversationAction(bob, 'Verify safety number')
+    await expect(conversationDetails(alice).getByTestId('safety-number')).toBeVisible()
+    number = (await alice.getByTestId('safety-number').textContent())!.trim()
+    expect(number).toMatch(/^(\d{5} ){11}\d{5}$/)
+    await expect(bob.getByTestId('safety-number')).toHaveText(number)
+    await alice.getByRole('button', { name: 'Mark as verified' }).click()
+    await expect(alice.locator('.conversation header .badge')).toHaveText('Verified')
+    await closeDetails(bob)
+    await test.step('layout activity settles after closing details', async () => {
+      await expect.poll(activity.sample, {
+        message: 'Bob must stop resize, animation-frame and DOM-mutation activity before device linking',
+        timeout: 10_000,
+      }).toEqual({ resize: 0, frames: 0, mutations: 0 })
+    })
+  } finally {
+    await activity.dispose()
+  }
 
   // Bob links a laptop: Alice is told, and her verification no longer holds.
   const laptop = await linkDevice(browser, bob)

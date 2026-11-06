@@ -1,0 +1,92 @@
+name: WebKit navigation diagnostic
+
+# A new workflow cannot receive workflow_dispatch until it exists on main.
+# A maintainer must add this label deliberately. Pushes do not start this job.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+jobs:
+  navigation:
+    if: github.event.label.name == 'diagnose-webkit-navigation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        revision: [candidate, baseline]
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      CARGO_TERM_COLOR: always
+      CI: "1"
+      PW_ALL_BROWSERS: "1"
+      E2E_SERVER: "1"
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.revision == 'baseline' && 'db4e0a5ffb79925fd22766a6179c0f25bbbe4f56' || github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Read the same diagnostic configuration for both revisions
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: diagnostic-driver
+          sparse-checkout: web/playwright.navigation-diagnostic.config.ts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Record revisions and install the diagnostic configuration
+        env:
+          DRIVER_SHA: ${{ github.event.pull_request.head.sha }}
+          REVISION: ${{ matrix.revision }}
+        run: |
+          cp diagnostic-driver/web/playwright.navigation-diagnostic.config.ts web/
+          mkdir -p web/navigation-diagnostic
+          {
+            printf 'revision=%s\n' "$REVISION"
+            printf 'checkout=%s\n' "$(git rev-parse HEAD)"
+            printf 'diagnostic_driver=%s\n' "$DRIVER_SHA"
+            printf 'command=pnpm --filter web exec playwright test --config playwright.navigation-diagnostic.config.ts --project=webkit\n'
+          } > web/navigation-diagnostic/revisions.txt
+          cat web/navigation-diagnostic/revisions.txt
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: Install wasm-bindgen CLI
+        run: cargo install wasm-bindgen-cli --locked --version "$(scripts/wasm-bindgen-version.sh)"
+      - run: scripts/build-wasm.sh
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Install WebKit
+        run: pnpm --filter web exec playwright install --with-deps webkit
+      - name: Build isolated test services
+        run: cargo build -p chat-server -p chat-echo
+      - name: Run predecessor sequence and backup once, with failure tracing
+        run: pnpm --filter web exec playwright test --config playwright.navigation-diagnostic.config.ts --project=webkit
+      - name: Retain diagnostic evidence briefly
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webkit-navigation-${{ matrix.revision }}-${{ github.run_id }}
+          retention-days: 1
+          path: |
+            web/navigation-diagnostic/revisions.txt
+            web/navigation-diagnostic/report.json
+            web/navigation-diagnostic/test-results/**/trace.zip
+            target/e2e-server.log
+            target/e2e-echo.log
+          if-no-files-found: error
