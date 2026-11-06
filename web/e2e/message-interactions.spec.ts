@@ -6,6 +6,24 @@ test.skip(!process.env.E2E_UI_FIXTURES, 'use playwright.fixtures.config.ts; this
 
 // UI contracts only. The fixture substitutes an in-memory core and a local
 // BroadcastChannel. These tests do not prove encrypted transport or persistence.
+test('the exact Message textbox selector stays unique beside an own-message Reply button', async ({ page }) => {
+  await openFixture(page)
+  await fixtureSend(page, 'An own message with a reply action')
+  const reply = messages(page).last().getByRole('button', { name: 'Reply to your message', exact: true })
+  await expect(reply).toBeVisible()
+  // The old substring label selector also matches the rendered Reply button.
+  await expect(page.getByLabel('Message')).toHaveCount(2)
+  const composer = page.getByRole('textbox', { name: 'Message', exact: true })
+  await expect(composer).toHaveCount(1)
+  await expect(composer).toHaveJSProperty('tagName', 'TEXTAREA')
+  await composer.fill('A new draft, not a reply-button target')
+  await expect(composer).toHaveValue('A new draft, not a reply-button target')
+  await expect(composer).toBeFocused()
+  await expect(reply).toBeVisible()
+  await expect(messages(page)).toHaveCount(1)
+  await expect(page.getByRole('button', { name: 'Cancel reply', exact: true })).toHaveCount(0)
+})
+
 test('links expose isolated Open, Copy, and Share actions without fetching previews', async ({ page }) => {
   const url = 'https://example.invalid/reference?q=one&x=two#section'
   await page.addInitScript(() => {
