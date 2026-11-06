@@ -1159,6 +1159,12 @@ button.link.danger {
   overflow: hidden;
 }
 
+.map-unavailable {
+  display: grid;
+  place-items: center;
+  text-align: center;
+}
+
 .composer {
   position: relative;
 }

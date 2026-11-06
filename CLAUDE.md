@@ -37,6 +37,8 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
 - UI regression tests must cover native link selection, quoted replies, typing
   expiry, and scroll position during keyboard/media resize. Own sends reach the
   bottom; incoming messages must not displace a reader who scrolled up.
+  Map error fallbacks must preserve map dimensions so dialog controls do not move
+  during activation.
 - Run browser tests against isolated test services, never a live deployment.
 - For new or updated E2E composer selectors, use
   `getByRole('textbox', { name: 'Message', exact: true })`.
