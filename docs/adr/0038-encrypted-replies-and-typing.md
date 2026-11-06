@@ -60,6 +60,8 @@ A backward wall-clock change must not make a discarded update fresh again.
 The UI must also use monotonic elapsed time for typing refresh throttles.
 A newly accepted live-location card must establish the sender device's typing tombstone.
 Background updates to an existing live-location card must not stop a newer draft.
+A visible send must reserve its composition timestamp before asynchronous preparation or stopping a previous live session.
+Completion must not stop a newer draft.
 The worker must clear leases when permissions, membership, conversation state, or account state no longer permit display.
 The worker must bound this state and clear it when the conversation or account ends.
 The worker must apply current-membership, blocked-contact, and message-request checks before display.

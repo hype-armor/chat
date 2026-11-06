@@ -1853,9 +1853,10 @@ export class Engine {
     const untilStopped = durationMs === null
     const point = safeLocation(location.latitude, location.longitude, location.accuracyM, '')
     if (!point) throw new Error("That location doesn't look right")
+    // Replacing a session can wait on storage while the composer starts a newer draft.
+    const now = await this.exclusive(async () => this.compositionSentAt())
     await this.stopLive(conversationId)
     await this.exclusive(async () => {
-      const now = this.compositionSentAt()
       const session: LiveSession = {
         sessionId: toHex(randomId()),
         conversationId,

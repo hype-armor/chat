@@ -218,6 +218,49 @@ describe('engine typing integration', () => {
     expect(Number.isSafeInteger(cards[0].sentAt)).toBe(true)
   })
 
+  it('captures a replacement live card before a delayed stop can overlap a newer draft', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(50_000)
+    vi.spyOn(maps, 'prepareArea').mockImplementation(() => {})
+    const { engine, sendTyping, values } = setup()
+    engine['core']!.sendLiveLocation = vi.fn(() => new Uint8Array([5]))
+    engine['scheduleLiveSweep'] = vi.fn()
+    let release!: () => void
+    let stopping!: () => void
+    const stopped = new Promise<void>((resolve) => { stopping = resolve })
+    const stopBarrier = new Promise<void>((resolve) => { release = resolve })
+    vi.spyOn(engine, 'stopLive').mockImplementation(async () => {
+      stopping()
+      await stopBarrier
+    })
+    await engine.setTyping(conversationId, true)
+    const point = { latitude: 1, longitude: 2, accuracyM: 3 }
+    const replacing = engine.startLive(conversationId, 15 * 60_000, point)
+    await stopped
+    vi.advanceTimersByTime(3_000)
+    await engine.setTyping(conversationId, true)
+    const newerDraftAt = sendTyping.mock.calls[1][2] as number
+    const newerDraftExpiry = sendTyping.mock.calls[1][3] as number
+    release()
+    await replacing
+    const cards = values.get(`messages:${conversationId}`) as { sentAt: number; live: { sessionId: string; expiresAt: number } }[]
+    const card = cards[0]
+    expect(card.sentAt).toBeGreaterThan(sendTyping.mock.calls[0][2] as number)
+    expect(card.sentAt).toBeLessThan(newerDraftAt)
+
+    const receiver = setup()
+    receiver.engine['scheduleLiveSweep'] = vi.fn()
+    await receiver.apply({ typingActive: true, sentAtMs: newerDraftAt, typingExpiresAtMs: newerDraftExpiry })
+    expect(receiver.engine.typing(conversationId)).toEqual([{ account: peer, name: 'Alex' }])
+    await receiver.apply({ sentAtMs: card.sentAt, live: {
+      sessionId: fromHex(card.live.sessionId), expiresAtMs: card.live.expiresAt, untilStopped: false, stopped: false,
+      location: { ...point, label: '', free: () => {} }, free: () => {},
+    } })
+    expect(receiver.engine.typing(conversationId)).toEqual([{ account: peer, name: 'Alex' }])
+    receiver.engine['clearTyping']()
+    clearTimeout(receiver.engine['receiptTimer'])
+  })
+
   it('captures file composition time before preparation can overlap a newer draft', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(50_000)
