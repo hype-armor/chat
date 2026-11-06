@@ -7,8 +7,20 @@ export function messageLinks(text: string): MessagePart[] {
   let end = 0
   for (const match of text.matchAll(pattern)) {
     const start = match.index
-    let url = match[0].replace(/[.,!?;:]+$/, '')
-    while (url.endsWith(')') && (url.match(/\)/g)?.length ?? 0) > (url.match(/\(/g)?.length ?? 0)) url = url.slice(0, -1)
+    const candidate = match[0]
+    let excessClosing = 0
+    for (const character of candidate) {
+      if (character === '(') excessClosing--
+      else if (character === ')') excessClosing++
+    }
+    let boundary = candidate.length
+    // Keep the existing order: punctuation first, then unmatched closing parentheses.
+    while (boundary > 0 && '.,!?;:'.includes(candidate[boundary - 1])) boundary--
+    while (boundary > 0 && excessClosing > 0 && candidate[boundary - 1] === ')') {
+      boundary--
+      excessClosing--
+    }
+    const url = candidate.slice(0, boundary)
     try {
       const parsed = new URL(url)
       if (!parsed.hostname || parsed.username || parsed.password) continue

@@ -6,6 +6,41 @@ import { createTypingSender, trackRemoteTyping } from './typing'
 afterEach(() => vi.useRealTimers())
 
 describe('typing sender', () => {
+  it('keeps refreshing during continuous edits after the wall clock moves backward', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T12:00:00Z'))
+    const send = vi.fn(async (_active: boolean) => {})
+    const sender = createTypingSender(send, () => true)
+    sender.update('0', true, true)
+    for (let second = 1; second <= 10; second++) {
+      vi.advanceTimersByTime(1000)
+      if (second === 1) vi.setSystemTime(new Date('2025-01-01T12:00:00Z'))
+      sender.update(String(second), true, true)
+      expect(send).toHaveBeenCalledTimes(1 + Math.floor(second / 2))
+    }
+    expect(send.mock.calls.every(([active]) => active)).toBe(true)
+    sender.stop()
+    expect(send.mock.calls.at(-1)).toEqual([false])
+  })
+
+  it('resets the monotonic throttle on stop and clears the pending idle timer', () => {
+    vi.useFakeTimers()
+    const send = vi.fn(async (_active: boolean) => {})
+    const sender = createTypingSender(send, () => true)
+    sender.update('first', true, true)
+    vi.advanceTimersByTime(100)
+    sender.stop()
+    sender.stop()
+    sender.update('first', true, true)
+    expect(send.mock.calls).toEqual([[true], [false]])
+    sender.update('second', true, true)
+    expect(send.mock.calls).toEqual([[true], [false], [true]])
+    vi.advanceTimersByTime(4000)
+    expect(send.mock.calls).toEqual([[true], [false], [true], [false]])
+    vi.advanceTimersByTime(10000)
+    expect(send).toHaveBeenCalledTimes(4)
+  })
+
   it('throttles edits, stops after idle, and restarts only on another edit', () => {
     vi.useFakeTimers()
     const send = vi.fn(async (_active: boolean) => {})

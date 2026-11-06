@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Engine } from './engine'
 import { fromHex, makeIdentity } from './ids'
 import type { CoreEvent } from './protocol'
+import * as maps from './maps'
+import * as attachments from './attachments'
 
 const account = '11'.repeat(16)
 const device = '22'.repeat(16)
@@ -42,7 +44,10 @@ function setup() {
   return { engine, events, values, sendText, sendTyping, members, request, apply }
 }
 
-afterEach(() => vi.useRealTimers())
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.useRealTimers()
+})
 
 describe('engine typing integration', () => {
   it('throttles, persists the ratchet before sending, and never queues typing', async () => {
@@ -111,6 +116,134 @@ describe('engine typing integration', () => {
     await apply({ typingActive: true, sentAtMs: 51_999, typingExpiresAtMs: 61_999 })
     expect(engine.typing(conversationId)).toEqual([])
     engine['clearTyping']()
+  })
+
+  it('expires an active lease through wall-clock rollback and rejects its expired replay', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(50_000)
+    const { engine, apply } = setup()
+    const start = { typingActive: true, sentAtMs: 50_000, typingExpiresAtMs: 58_000 }
+    await apply(start)
+    vi.advanceTimersByTime(1_000)
+    vi.setSystemTime(10_000)
+    vi.advanceTimersByTime(6_750)
+    expect(engine.typing(conversationId)).toEqual([{ account: peer, name: 'Alex' }])
+    vi.advanceTimersByTime(250)
+    expect(engine.typing(conversationId)).toEqual([])
+    vi.advanceTimersByTime(2_250)
+    expect(engine['typingLeases'].size).toBe(0)
+    await apply(start)
+    expect(engine.typing(conversationId)).toEqual([])
+    engine['clearTyping']()
+  })
+
+  it.each([false, true])('a new live card creates a device tombstone with prior typing=%s', async (priorTyping) => {
+    vi.useFakeTimers()
+    vi.setSystemTime(50_000)
+    vi.spyOn(maps, 'prepareArea').mockImplementation(() => {})
+    const { engine, apply } = setup()
+    engine['scheduleLiveSweep'] = vi.fn()
+    if (priorTyping) await apply({ typingActive: true, sentAtMs: 50_000, typingExpiresAtMs: 58_000 })
+    await apply({ sentAtMs: 50_001, live: {
+      sessionId: fromHex('88'.repeat(16)), expiresAtMs: 950_000, untilStopped: false, stopped: false,
+      location: { latitude: 1, longitude: 2, accuracyM: 3, label: '', free: () => {} }, free: () => {},
+    } })
+    expect(engine['typingLeases'].size).toBe(1)
+    expect(engine.typing(conversationId)).toEqual([])
+    await apply({ typingActive: true, sentAtMs: 50_000, typingExpiresAtMs: 58_000 })
+    expect(engine.typing(conversationId)).toEqual([])
+    engine['clearTyping']()
+    clearTimeout(engine['receiptTimer'])
+  })
+
+  it('live heartbeats and stops do not interrupt a newer draft', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(50_000)
+    vi.spyOn(maps, 'prepareArea').mockImplementation(() => {})
+    const { engine, apply } = setup()
+    engine['scheduleLiveSweep'] = vi.fn()
+    const live = {
+      sessionId: fromHex('88'.repeat(16)), expiresAtMs: 950_000, untilStopped: false, stopped: false,
+      location: { latitude: 1, longitude: 2, accuracyM: 3, label: '', free: () => {} }, free: () => {},
+    }
+    await apply({ sentAtMs: 50_000, live })
+    await apply({ typingActive: true, sentAtMs: 50_001, typingExpiresAtMs: 58_001 })
+    await apply({ sentAtMs: 50_002, live }, '78'.repeat(16))
+    expect(engine.typing(conversationId)).toEqual([{ account: peer, name: 'Alex' }])
+    await apply({ sentAtMs: 50_003, live: { ...live, stopped: true, location: undefined } }, '79'.repeat(16))
+    expect(engine.typing(conversationId)).toEqual([{ account: peer, name: 'Alex' }])
+    engine['clearTyping']()
+    clearTimeout(engine['receiptTimer'])
+  })
+
+  it('rounds fractional monotonic receiver time to safe-integer typing wire timestamps', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(50_000)
+    const monotonic = vi.spyOn(performance, 'now').mockReturnValue(0)
+    const { engine, sendTyping } = setup()
+    await engine.setTyping(conversationId, true)
+    monotonic.mockReturnValue(3_000.25)
+    await engine.setTyping(conversationId, true)
+    monotonic.mockReturnValue(3_000.75)
+    await engine.setTyping(conversationId, false)
+    expect(sendTyping).toHaveBeenCalledTimes(3)
+    expect(sendTyping.mock.calls.map((args) => args[2])).toEqual([50_000, 53_001, 53_002])
+    for (const args of sendTyping.mock.calls) {
+      expect(Number.isSafeInteger(args[2])).toBe(true)
+      expect(Number.isSafeInteger(args[3])).toBe(true)
+      expect(args[2]).toBeGreaterThan(0)
+      expect((args[3] as number) - (args[2] as number)).toBe(8_000)
+    }
+  })
+
+  it.each(['location', 'live'] as const)('orders an immediate %s card after same-tick fractional typing', async (kind) => {
+    vi.useFakeTimers()
+    vi.setSystemTime(50_000)
+    const monotonic = vi.spyOn(performance, 'now').mockReturnValue(0)
+    vi.spyOn(maps, 'prepareArea').mockImplementation(() => {})
+    const { engine, sendTyping, values } = setup()
+    engine['core']!.sendLocation = vi.fn(() => new Uint8Array([4]))
+    engine['core']!.sendLiveLocation = vi.fn(() => new Uint8Array([5]))
+    engine['scheduleLiveSweep'] = vi.fn()
+    engine['typingNow']()
+    monotonic.mockReturnValue(0.25)
+    await engine.setTyping(conversationId, true)
+    const typingAt = sendTyping.mock.calls[0][2] as number
+    expect(typingAt).toBe(50_001)
+    const point = { latitude: 1, longitude: 2, accuracyM: 3 }
+    if (kind === 'location') await engine.sendLocation(conversationId, point)
+    else await engine.startLive(conversationId, 15 * 60_000, point)
+    const cards = values.get(`messages:${conversationId}`) as { sentAt: number }[]
+    expect(cards[0].sentAt).toBeGreaterThan(typingAt)
+    expect(Number.isSafeInteger(cards[0].sentAt)).toBe(true)
+  })
+
+  it('captures file composition time before preparation can overlap a newer draft', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(50_000)
+    const { engine, sendTyping, values } = setup()
+    engine['store'].putFile = vi.fn(async () => {})
+    engine['uploadAndSend'] = vi.fn(async () => {})
+    let release!: () => void
+    let preparing!: () => void
+    const started = new Promise<void>((resolve) => { preparing = resolve })
+    vi.spyOn(attachments, 'prepareImage').mockImplementation(async () => {
+      preparing()
+      await new Promise<void>((resolve) => { release = resolve })
+      return undefined
+    })
+    vi.spyOn(attachments, 'sealFile').mockResolvedValue({ body: new Blob(['sealed']), size: 1, digest: new Uint8Array(32) })
+    await engine.setTyping(conversationId, true)
+    const sending = engine.sendFile(conversationId, new File(['x'], 'file.txt', { type: 'text/plain' }), '')
+    await started
+    vi.advanceTimersByTime(3_000)
+    await engine.setTyping(conversationId, true)
+    const newerDraftAt = sendTyping.mock.calls[1][2] as number
+    release()
+    await sending
+    const cards = values.get(`messages:${conversationId}`) as { sentAt: number }[]
+    expect(cards[0].sentAt).toBeGreaterThan(sendTyping.mock.calls[0][2] as number)
+    expect(cards[0].sentAt).toBeLessThan(newerDraftAt)
   })
 
   it('records a message tombstone before any typing lease exists', async () => {

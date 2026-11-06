@@ -3,6 +3,18 @@ import type { ChatMessage } from '../core/protocol'
 
 export const nearMessageBottom = (height: number, top: number, viewport: number) => height - top - viewport <= 80
 
+/** Message children have ordered bottom edges. Search without copying the live collection. */
+export function firstVisibleMessage(children: ArrayLike<Element>, viewportTop: number): Element | undefined {
+  let low = 0
+  let high = children.length
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2)
+    if (children[middle].getBoundingClientRect().bottom > viewportTop) high = middle
+    else low = middle + 1
+  }
+  return low < children.length ? children[low] : undefined
+}
+
 /** Follow new content only while pinned. Local sends always override reading position. */
 export function useMessageScroll(messages: ChatMessage[], panelOpen: boolean) {
   const viewport = useRef<HTMLDivElement>(null)
@@ -24,7 +36,8 @@ export function useMessageScroll(messages: ChatMessage[], panelOpen: boolean) {
     lastScrollTop.current = list.scrollTop
     viewportSize.current = { width: list.clientWidth, height: list.clientHeight }
     const top = list.getBoundingClientRect().top
-    const element = Array.from(content.current?.children ?? []).find((child) => child.getBoundingClientRect().bottom > top)
+    const children = content.current?.children
+    const element = children ? firstVisibleMessage(children, top) : undefined
     anchor.current = element ? { element, offset: element.getBoundingClientRect().top - top } : undefined
   }, [])
 

@@ -53,8 +53,13 @@ This horizon uses the sender timestamp, not the receipt time.
 An older start has `expiresAt <= start.sentAt + 10000 <= tombstone.sentAt + 10000`.
 Thus, an older start must be expired after the tombstone horizon. Future clock tolerance does not extend this horizon.
 All lease operations must use a nondecreasing receiver time during the signed-in session.
+Monotonic elapsed time must advance this time even when the wall clock moves backward.
+An active lease must still expire within its remaining lifetime after a wall-clock rollback.
 The worker must retain the receiver time floor when individual leases or conversation maps become empty.
 A backward wall-clock change must not make a discarded update fresh again.
+The UI must also use monotonic elapsed time for typing refresh throttles.
+A newly accepted live-location card must establish the sender device's typing tombstone.
+Background updates to an existing live-location card must not stop a newer draft.
 The worker must clear leases when permissions, membership, conversation state, or account state no longer permit display.
 The worker must bound this state and clear it when the conversation or account ends.
 The worker must apply current-membership, blocked-contact, and message-request checks before display.

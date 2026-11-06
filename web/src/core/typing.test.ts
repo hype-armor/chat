@@ -1,10 +1,24 @@
 import { describe, expect, it } from 'vitest'
-import { TypingLeases } from './typing'
+import { TypingClock, TypingLeases } from './typing'
 
 const now = 50_000
 const allow = () => true
 
 describe('encrypted typing leases', () => {
+  it('advances the receiver clock with monotonic elapsed time during wall-clock rollback', () => {
+    const clock = new TypingClock()
+    const leases = new TypingLeases()
+    leases.update('a1', 'Alex', true, now, now + 8_000, clock.now(now, 0))
+    expect(leases.accounts(clock.now(now - 40_000, 7_999), allow)).toEqual(['Alex'])
+    expect(leases.accounts(clock.now(now - 40_000, 8_000), allow)).toEqual([])
+    expect(leases.empty(clock.now(now - 40_000, 10_001))).toBe(true)
+    leases.update('a1', 'Alex', true, now, now + 8_000, clock.now(now - 40_000, 10_002))
+    expect(leases.accounts(clock.now(now - 40_000, 10_003), allow)).toEqual([])
+    const fresh = new TypingLeases()
+    fresh.update('a1', 'Alex', true, now, now + 8_000, clock.now(now - 40_000, 10_004))
+    expect(fresh.accounts(clock.now(now - 40_000, 10_005), allow)).toEqual([])
+  })
+
   it('deduplicates devices by account and keeps other typists independent', () => {
     const leases = new TypingLeases()
     leases.update('a1', 'Alex', true, now, now + 8_000, now)

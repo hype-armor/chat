@@ -36,10 +36,12 @@ export function createTypingSender(send: (active: boolean) => Promise<void>, can
       draft = next
       if (!enabled || !focused || !next.trim() || !canSend()) { stop(); return }
       if (!edited) return
-      if (!active || Date.now() - lastSent >= 2000) {
+      // UI intervals use a monotonic clock. The worker owns wire timestamps.
+      const now = performance.now()
+      if (!active || now - lastSent >= 2000) {
         emit(true)
         active = true
-        lastSent = Date.now()
+        lastSent = now
       }
       clearTimeout(timer)
       timer = setTimeout(stop, 4000)

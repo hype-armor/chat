@@ -6,6 +6,19 @@ const MAX_CLOCK_SKEW_MS = 2_000
 
 type Lease = { account: string; sentAt: number; expiresAt: number }
 
+/** Advance expiry through wall-clock rollback, without making old sender times fresh. */
+export class TypingClock {
+  private floor = 0
+  private elapsedAt?: number
+
+  now(wallNow = Date.now(), elapsedNow = performance.now()): number {
+    const elapsed = this.elapsedAt === undefined ? 0 : Math.max(0, elapsedNow - this.elapsedAt)
+    this.elapsedAt = elapsedNow
+    this.floor = Math.max(wallNow, this.floor + elapsed)
+    return this.floor
+  }
+}
+
 export class TypingLeases {
   private devices = new Map<string, Lease>()
   private timeFloor = 0

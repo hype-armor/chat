@@ -10,6 +10,35 @@ describe('messageLinks', () => {
       'https://example.com/a_(b)', 'https://example.org?q=hello',
     ])
   })
+  it('trims tens of thousands of unmatched closing parentheses', () => {
+    const url = 'https://example.test/path'
+    const suffix = ')'.repeat(50_000) + '.,!?;:'
+    const text = `Read ${url}${suffix}`
+    const parts = messageLinks(text)
+    expect(parts).toEqual([{ text: 'Read ' }, { text: url, href: url }, { text: suffix }])
+    expect(parts.map((part) => part.text).join('')).toBe(text)
+  })
+  it('preserves mixed balanced parentheses before a large unmatched suffix', () => {
+    const url = 'https://example.test/' + '(a(b)c)d(e)'.repeat(5_000) + '(tail)'
+    const suffix = ')'.repeat(30_000) + '!'
+    const parts = messageLinks(url + suffix)
+    expect(parts).toEqual([{ text: url, href: url }, { text: suffix }])
+    expect(parts.map((part) => part.text).join('')).toBe(url + suffix)
+  })
+  it('preserves balanced trailing parentheses and the existing punctuation order', () => {
+    for (const [text, href, suffix] of [
+      ['https://example.test/a_(b).,!?;:', 'https://example.test/a_(b)', '.,!?;:'],
+      ['https://example.test/a_(b)).)', 'https://example.test/a_(b)).', ')'],
+      ['https://example.test/((a))', 'https://example.test/((a))', ''],
+      ['https://example.test/((a)', 'https://example.test/((a)', ''],
+      ['https://example.test/)(a)', 'https://example.test/)(a', ')'],
+    ]) {
+      const parts = messageLinks(text)
+      expect(parts.filter((part) => part.href)).toEqual([{ text: href, href }])
+      expect(parts.map((part) => part.text).join('')).toBe(text)
+      if (suffix) expect(parts.at(-1)).toEqual({ text: suffix })
+    }
+  })
   it('accepts HTTP(S), Unicode domains and explicit ports', () => {
     expect(messageLinks('http://example.test:8080 https://例え.jp/道').filter((part) => part.href)).toHaveLength(2)
   })

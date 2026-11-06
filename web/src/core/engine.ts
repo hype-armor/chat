@@ -117,8 +117,8 @@ import { type MediaTransformOptions, frameTransform } from './media'
 import { CALL_KINDS, type CallEnd, type CallRecord, GIVE_UP_MS, STALE_OFFER_MS, callNotice, safeSignalText } from './calls'
 import { acceptsGroupInfo, designatedCommitter, isGroupView, parseAdmins } from './roles'
 import { SecureStore } from './storage'
-import { TypingLeases, TYPING_REFRESH_MS, TYPING_TTL_MS } from './typing'
-import { hashHex, replyPreview, validContentHash, validReplyId } from './replies'
+import { TypingClock, TypingLeases, TYPING_REFRESH_MS, TYPING_TTL_MS } from './typing'
+import { buildReplyLookup, hashHex, replyPreview, validContentHash, validReplyId } from './replies'
 
 /** How long the server may take to answer a request before we reconnect. */
 const REQUEST_TIMEOUT_MS = 20_000
@@ -394,7 +394,7 @@ export class Engine {
   private typingPublished = new Map<string, string>()
   private typingConversation?: string
   /** These floors survive empty lease maps and reconnects, until sign-out. */
-  private typingTimeFloor = 0
+  private typingClock = new TypingClock()
   private typingSentAt = 0
 
   /** Serialises every mutation of core state and storage. */
@@ -779,7 +779,7 @@ export class Engine {
     ws?.close()
     await this.store.clear()
     this.setConnection('offline')
-    this.typingTimeFloor = 0
+    this.typingClock = new TypingClock()
     this.typingSentAt = 0
   }
 
@@ -1652,12 +1652,13 @@ export class Engine {
   async messages(conversationId: string): Promise<ChatMessage[]> {
     const now = Date.now()
     const list = await this.stored(conversationId)
+    const replyLookup = buildReplyLookup(list)
     return list.map(({ file, contentHash: _contentHash, replyToHash, ...m }) => ({
       ...m,
       // An ended session shows no point, even before the sweep forgets it.
       live: m.live && (m.live.ended || m.live.expiresAt <= now ? { ...m.live, ended: true, latest: undefined } : m.live),
       fromName: m.from === 'me' || m.kind === 'notice' ? undefined : this.nameOf(m.from),
-      reply: m.replyTo ? replyPreview(m.replyTo, list, (a) => a === 'me' ? 'You' : this.nameOf(a), replyToHash) : undefined,
+      reply: m.replyTo ? replyPreview(m.replyTo, replyLookup, (a) => a === 'me' ? 'You' : this.nameOf(a), replyToHash) : undefined,
       file: file && {
         name: file.name,
         mime: file.mime,
@@ -1673,8 +1674,14 @@ export class Engine {
   }
 
   private typingNow(): number {
-    this.typingTimeFloor = Math.max(this.typingTimeFloor, Date.now())
-    return this.typingTimeFloor
+    return this.typingClock.now()
+  }
+
+  /** Order a new visible send after prior composition, not after later upload work. */
+  private compositionSentAt(): number {
+    const sentAt = Math.max(Date.now(), this.typingSentAt + 1)
+    this.typingSentAt = sentAt
+    return sentAt
   }
 
   /** Current typists, resolved from authenticated current group identities. */
@@ -1688,6 +1695,17 @@ export class Engine {
     const accounts = this.typingLeases.get(conversationId)?.accounts(this.typingNow(), (device, account) =>
       owners.get(device) === account && account !== this.myAccount() && !this.state.blocked.includes(account)) ?? []
     return accounts.map((account) => ({ account, name: this.nameOf(account) }))
+  }
+
+  private stopTypingForMessage(conversationId: string, from: string, device: string, sentAt: number) {
+    const conv = this.conv(conversationId)
+    if (from === this.myAccount() || !conv || conv.status || conv.self || conv.request ||
+        this.state.blocked.includes(from) || this.state.typingIndicators === false || this.connection !== 'online') return
+    const leases = this.typingLeases.get(conversationId) ?? new TypingLeases()
+    leases.stopDevice(device, from, sentAt, this.typingNow())
+    this.typingLeases.set(conversationId, leases)
+    this.publishTyping(conversationId)
+    this.scheduleTypingSweep()
   }
 
   private publishTyping(conversationId: string) {
@@ -1752,7 +1770,7 @@ export class Engine {
     if (active && last?.active && now - last.at < TYPING_REFRESH_MS) return
     if (!active && !last?.active) return
     // Stops must order after starts, even within one millisecond or after a clock change.
-    const sentAt = Math.max(now, this.typingSentAt + 1)
+    const sentAt = Math.max(Math.ceil(now), this.typingSentAt + 1)
     this.typingSentAt = sentAt
     const envelope = this.core.sendTyping(fromHex(conversationId), active, sentAt, sentAt + TYPING_TTL_MS, randomId())
     // The MLS sender ratchet advances even if delivery subsequently fails.
@@ -1804,7 +1822,7 @@ export class Engine {
         id: toHex(randomId()),
         from: 'me',
         text: '',
-        sentAt: Date.now(),
+        sentAt: this.compositionSentAt(),
         status: 'sending',
         location: checked,
       }
@@ -1836,7 +1854,7 @@ export class Engine {
     if (!point) throw new Error("That location doesn't look right")
     await this.stopLive(conversationId)
     await this.exclusive(async () => {
-      const now = Date.now()
+      const now = this.compositionSentAt()
       const session: LiveSession = {
         sessionId: toHex(randomId()),
         conversationId,
@@ -2423,6 +2441,7 @@ export class Engine {
       this.state.liveSeen.push({ conversationId, messageId, expiresAt: view.expiresAtMs })
       this.scheduleLiveSweep()
     }
+    return true
   }
 
   async sendText(conversationId: string, text: string, replyTo?: string) {
@@ -2431,8 +2450,7 @@ export class Engine {
     await this.setTyping(conversationId, false)
     await this.exclusive(async () => {
       const messageId = randomId()
-      const sentAt = Math.max(Date.now(), this.typingSentAt + 1)
-      this.typingSentAt = sentAt
+      const sentAt = this.compositionSentAt()
       const target = replyTo && (await this.stored(conversationId)).find((m) => m.id === replyTo && m.kind !== 'notice')
       if (replyTo && (!validReplyId(replyTo) || !target)) throw new Error('The reply target is not in this conversation')
       if (target && !validContentHash(target.contentHash)) throw new Error('The original message cannot be verified on this device. Cancel the reply and send a new message.')
@@ -2559,6 +2577,8 @@ export class Engine {
     this.checkCanSend(conversationId)
     if (file.size === 0) throw new Error('That file is empty')
     if (file.size > MAX_ATTACHMENT_BYTES) throw new Error('Files can be up to 100 MB')
+    // Capture the user action before preparation and upload can overlap a newer draft.
+    const sentAt = await this.exclusive(async () => this.compositionSentAt())
     const image = await prepareImage(file, this.state.media.quality)
     // Clips: where they were filmed is blanked (ADR-0024).
     const data = image?.data ?? (isMp4(file.type) ? await scrubMp4(file) : file)
@@ -2577,7 +2597,7 @@ export class Engine {
         id: messageId,
         from: 'me',
         text: caption,
-        sentAt: Date.now(),
+        sentAt,
         status: 'sending',
         file: {
           name,
@@ -3039,11 +3059,13 @@ export class Engine {
       if (live) {
         if (!conv?.status && !this.state.blocked.includes(from)) {
           const reference = event.replyTo && toHex(event.replyTo)
-          await this.applyLive(conversationId, from, mine, messageId, event.sentAtMs, live, {
+          const added = await this.applyLive(conversationId, from, mine, messageId, event.sentAtMs, live, {
             contentHash: hashHex(event.contentHash),
             replyTo: reference && validReplyId(reference) ? reference : undefined,
             replyToHash: hashHex(event.replyToHash),
           })
+          // Only a new visible card ends composition. Background session updates do not.
+          if (added) this.stopTypingForMessage(conversationId, from, toHex(splitIdentity(event.sender).device), event.sentAtMs)
         }
         live.free()
         return
@@ -3069,13 +3091,7 @@ export class Engine {
         }
       }
       if (text !== undefined) {
-        if (!mine && conv && !conv.status && !conv.self && !conv.request && this.state.typingIndicators !== false && this.connection === 'online') {
-          const leases = this.typingLeases.get(conversationId) ?? new TypingLeases()
-          leases.stopDevice(toHex(splitIdentity(event.sender).device), from, event.sentAtMs, this.typingNow())
-          this.typingLeases.set(conversationId, leases)
-          this.publishTyping(conversationId)
-          this.scheduleTypingSweep()
-        }
+        this.stopTypingForMessage(conversationId, from, toHex(splitIdentity(event.sender).device), event.sentAtMs)
         const reference = event.replyTo && toHex(event.replyTo)
         const replyTo = reference && validReplyId(reference) ? reference : undefined
         if (!mine && conv) {
