@@ -169,4 +169,20 @@ describe('one card per live share', () => {
     expect(stored()[0].live?.latest).toBeUndefined()
     expect(engine['state'].liveSeen).toHaveLength(0)
   })
+
+  it('clears other members live points when this device leaves the group (issue #114)', async () => {
+    const { engine, stored } = fixture(peer)
+    const message = stored()[0]
+    message.live = { sessionId, expiresAt: now + MAX_LIVE_DURATION_MS, untilStopped: true, ended: false, latest: { ...point, at: now } }
+    await engine['store'].putJson(`messages:${conversationId}`, [message])
+    engine['state'].liveSeen.push({ conversationId, messageId, expiresAt: now + MAX_LIVE_DURATION_MS })
+    engine['core'] = { ...engine['core'], leave: vi.fn(() => new Uint8Array([2])) } as unknown as Engine['core']
+
+    await engine.leaveGroup(conversationId)
+
+    expect(engine['state'].conversations[conversationId].status).toBe('left')
+    expect(engine['state'].liveSeen).toEqual([])
+    expect(stored()[0].live).toMatchObject({ ended: true })
+    expect(stored()[0].live?.latest).toBeUndefined()
+  })
 })

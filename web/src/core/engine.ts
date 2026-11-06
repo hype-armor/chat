@@ -1632,6 +1632,7 @@ export class Engine {
       })
       conv.status = 'left'
       this.state.live = this.state.live.filter((l) => l.conversationId !== conversationId)
+      await this.endGroupLiveLocations(conversationId)
       await this.persist()
     })
     this.emitView()
@@ -3261,6 +3262,15 @@ export class Engine {
     this.state.pendingCommit = undefined
     await this.persist()
     this.emitView()
+  }
+
+  /** Clears all other members' live points in a conversation we left. Under the lock (issue #114). */
+  private async endGroupLiveLocations(conversationId: string) {
+    const seen = this.state.liveSeen.filter((l) => l.conversationId === conversationId)
+    this.state.liveSeen = this.state.liveSeen.filter((l) => l.conversationId !== conversationId)
+    const ids = new Set(seen.map((l) => l.messageId))
+    for (const m of await this.stored(conversationId)) if (m.live && !m.live.ended) ids.add(m.id)
+    for (const id of ids) await this.endLiveMessage(conversationId, id)
   }
 
   private async endRemovedPeerLiveLocations(conversationId: string, previousPeers: string[], peers: string[]) {

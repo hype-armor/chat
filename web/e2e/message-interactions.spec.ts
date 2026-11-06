@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import { fixtureAction, fixtureSend, openFixture } from './interaction-fixture-support'
 import { messages } from './support'
 

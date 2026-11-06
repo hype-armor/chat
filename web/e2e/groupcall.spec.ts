@@ -1,4 +1,4 @@
-import { type Browser, type Page, expect, test } from '@playwright/test'
+import { type Browser, type Page, expect, test } from './fixtures'
 import { createGroup, openChat, randomUsername } from './support'
 
 test.skip(!process.env.E2E_SERVER || !process.env.E2E_LIVEKIT, 'needs chat-server and LiveKit (E2E_LIVEKIT)')
