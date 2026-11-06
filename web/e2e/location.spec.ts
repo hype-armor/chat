@@ -1,4 +1,4 @@
-import { type Browser, expect, test } from '@playwright/test'
+import { type Browser, expect, test } from './fixtures'
 import { messages, openChat, openSettings, randomUsername, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
