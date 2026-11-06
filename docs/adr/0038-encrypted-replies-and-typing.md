@@ -62,6 +62,7 @@ A newly accepted live-location card must establish the sender device's typing to
 Background updates to an existing live-location card must not stop a newer draft.
 A visible send must reserve its composition timestamp before asynchronous preparation or stopping a previous live session.
 Completion must not stop a newer draft.
+Text sends must serialize the typing stop and message creation in one mutation.
 The worker must clear leases when permissions, membership, conversation state, or account state no longer permit display.
 The worker must bound this state and clear it when the conversation or account ends.
 The worker must apply current-membership, blocked-contact, and message-request checks before display.

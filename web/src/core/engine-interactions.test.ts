@@ -218,6 +218,41 @@ describe('engine typing integration', () => {
     expect(Number.isSafeInteger(cards[0].sentAt)).toBe(true)
   })
 
+  it('keeps text before newer typing queued during stop persistence', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(50_000)
+    const { engine, sendTyping, values } = setup()
+    await engine.setTyping(conversationId, true)
+    let release!: () => void
+    let persisting!: () => void
+    const stopped = new Promise<void>((resolve) => { persisting = resolve })
+    const storageBarrier = new Promise<void>((resolve) => { release = resolve })
+    vi.mocked(engine['store'].putBytes).mockImplementationOnce(async () => {
+      persisting()
+      await storageBarrier
+    })
+    const sending = engine.sendText(conversationId, 'Older text')
+    await stopped
+    vi.advanceTimersByTime(3_000)
+    const newerTyping = engine.setTyping(conversationId, true)
+    release()
+    await Promise.all([sending, newerTyping])
+    expect(sendTyping.mock.calls.map((args) => args[1])).toEqual([true, false, true])
+    const newerDraftAt = sendTyping.mock.calls[2][2] as number
+    const newerDraftExpiry = sendTyping.mock.calls[2][3] as number
+    const messages = values.get(`messages:${conversationId}`) as { text: string; sentAt: number }[]
+    expect(messages[0].text).toBe('Older text')
+    expect(messages[0].sentAt).toBeLessThan(newerDraftAt)
+
+    const receiver = setup()
+    await receiver.apply({ typingActive: true, sentAtMs: newerDraftAt, typingExpiresAtMs: newerDraftExpiry })
+    expect(receiver.engine.typing(conversationId)).toEqual([{ account: peer, name: 'Alex' }])
+    await receiver.apply({ text: messages[0].text, sentAtMs: messages[0].sentAt })
+    expect(receiver.engine.typing(conversationId)).toEqual([{ account: peer, name: 'Alex' }])
+    receiver.engine['clearTyping']()
+    clearTimeout(receiver.engine['receiptTimer'])
+  })
+
   it('captures a replacement live card before a delayed stop can overlap a newer draft', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(50_000)

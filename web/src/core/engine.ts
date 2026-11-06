@@ -2449,8 +2449,9 @@ export class Engine {
   async sendText(conversationId: string, text: string, replyTo?: string) {
     const { core } = this.ready()
     this.checkCanSend(conversationId)
-    await this.setTyping(conversationId, false)
     await this.exclusive(async () => {
+      // Keep the stop and message ahead of typing requests from a newer draft.
+      await this.sendTypingLocked(conversationId, false)
       const messageId = randomId()
       const sentAt = this.compositionSentAt()
       const target = replyTo && (await this.stored(conversationId)).find((m) => m.id === replyTo && m.kind !== 'notice')
