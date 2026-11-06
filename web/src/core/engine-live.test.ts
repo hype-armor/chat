@@ -142,20 +142,3 @@ describe('one card per live share', () => {
     expect(engine['state'].liveSeen).toHaveLength(0)
   })
 })
-
-describe('a removed member’s live location', () => {
-  it('leaves the chat: its card is dropped, not shown as ended', async () => {
-    const { engine, stored } = fixture(peer)
-    const other = { id: 'aa'.repeat(16), from: 'me', text: 'hi', sentAt: now, status: 'sent' as const }
-    await engine['store'].putJson(`messages:${conversationId}`, [...stored(), other])
-    engine['state'].liveSeen.push({ conversationId, messageId, expiresAt: now + MAX_LIVE_DURATION_MS })
-    await engine['endRemovedPeerLiveLocations'](conversationId, [peer], [])
-    expect(stored().map((m) => m.id)).toEqual([other.id])
-    expect(engine['state'].liveSeen).toHaveLength(0)
-  })
-  it('does nothing when no member left', async () => {
-    const { engine, stored } = fixture(peer)
-    await engine['endRemovedPeerLiveLocations'](conversationId, [peer], [peer])
-    expect(stored()).toHaveLength(1)
-  })
-})

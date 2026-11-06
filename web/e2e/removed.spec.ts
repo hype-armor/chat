@@ -40,5 +40,8 @@ test("a removed member's late message reaches nobody", async ({ browser, browser
   await expect(ben.getByText('You were removed from this group.')).toBeVisible({ timeout: 30_000 })
   await ann.getByLabel('Message', { exact: true }).fill('Still just me')
   await ann.getByRole('button', { name: 'Send' }).click()
-  await expect(messages(ann)).toHaveText([/Still just me/])
+  // Ben's share stays as an ended card; his late message must not appear.
+  await expect(messages(ann).filter({ hasText: 'Still just me' })).toHaveCount(1)
+  await expect(messages(ann).filter({ hasText: 'Am I still here?' })).toHaveCount(0)
+  await expect(liveLocation).toHaveText('📍 Live location ended')
 })
