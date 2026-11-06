@@ -16,6 +16,8 @@ let stored: ChatMessage[] = []
 let dropTypingStops = false
 let holdNextSend = false
 let rejectPendingSend: ((error: Error) => void) | undefined
+let rejectMapInfo: ((error: Error) => void) | undefined
+const liveStarts: { conversationId: string; durationMs: number | null; location: { latitude: number; longitude: number; accuracyM: number } }[] = []
 const leases = new TypingLeases()
 let lastTyping = ''
 const typists = () => leases.accounts(Date.now(), () => true).map((account) => ({ account, name: account }))
@@ -57,6 +59,13 @@ const core = {
   avatar: async () => undefined,
   avatarPhoto: async () => undefined,
   pushStatus: async () => ({ enabled: false }),
+  mapInfo: () => new Promise((_resolve, reject) => {
+    rejectMapInfo = reject
+    document.documentElement.dataset.mapStylePending = 'true'
+  }),
+  startLive: async (conversationId: string, durationMs: number | null, location: { latitude: number; longitude: number; accuracyM: number }) => {
+    liveStarts.push({ conversationId, durationMs, location })
+  },
   setTyping: async (_id: string, active: boolean) => channel.postMessage({ type: 'typing', active }),
   sendText: async (_id: string, text: string, replyTo?: string) => {
     if (holdNextSend) {
@@ -77,6 +86,11 @@ const view: Extract<AppView, { phase: 'ready' }> = {
 }
 Object.assign(window, {
   interactionFixture: {
+    liveStarts,
+    failMap() {
+      rejectMapInfo?.(new Error('Delayed map style failure from fixture'))
+      rejectMapInfo = undefined
+    },
     dropTypingStops(value: number) { dropTypingStops = value === 1 },
     holdNextSend() { holdNextSend = true },
     rejectSend() { rejectPendingSend?.(new Error('Fixture send failed')); rejectPendingSend = undefined },

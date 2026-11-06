@@ -8,7 +8,7 @@ test('reporting and blocking someone, then unblocking them (FR-ID-8)', async ({ 
   const alice = await signUp(browser, 'Alice', randomUsername())
   const bob = await signUp(browser, 'Bob', bobUsername)
   await startChat(alice, bobUsername)
-  await alice.getByLabel('Message').fill('Buy cheap watches')
+  await alice.getByRole('textbox', { name: 'Message', exact: true }).fill('Buy cheap watches')
   await alice.getByRole('button', { name: 'Send' }).click()
   // Bob accepts the chat, then thinks better of it.
   await openChat(bob, /Alice/)
@@ -22,10 +22,10 @@ test('reporting and blocking someone, then unblocking them (FR-ID-8)', async ({ 
   await bob.getByRole('button', { name: 'Send report' }).click()
   await expect(bob.getByText('Report sent. Thank you.')).toBeVisible()
   await expect(bob.getByRole('note')).toContainText('You blocked Alice')
-  await expect(bob.getByLabel('Message')).toBeHidden()
+  await expect(bob.getByRole('textbox', { name: 'Message', exact: true })).toBeHidden()
 
   // Her messages no longer show up.
-  await alice.getByLabel('Message').fill('Last chance!')
+  await alice.getByRole('textbox', { name: 'Message', exact: true }).fill('Last chance!')
   await alice.getByRole('button', { name: 'Send' }).click()
   await expect(messages(alice).filter({ hasText: 'Last chance!' }).getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
   const blocked = await openSetting(bob, 'Blocked people')
@@ -35,8 +35,8 @@ test('reporting and blocking someone, then unblocking them (FR-ID-8)', async ({ 
 
   // After unblocking, new messages arrive again.
   await bob.getByRole('button', { name: 'Unblock Alice' }).click()
-  await expect(bob.getByLabel('Message')).toBeVisible()
-  await alice.getByLabel('Message').fill('Sorry about that')
+  await expect(bob.getByRole('textbox', { name: 'Message', exact: true })).toBeVisible()
+  await alice.getByRole('textbox', { name: 'Message', exact: true }).fill('Sorry about that')
   await alice.getByRole('button', { name: 'Send' }).click()
   await expect(messages(bob)).toHaveText([/Buy cheap watches/, /Sorry about that/])
 })
