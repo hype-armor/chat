@@ -165,7 +165,7 @@ test('live-location controls remain available across conversations and Settings 
   await expect(bobIndicator).toBeVisible()
 
   await startChat(alice, carolUsername)
-  await expect(alice.getByLabel('Message', { exact: true })).toBeVisible()
+  await expect(alice.getByRole('heading', { name: 'Carol', exact: true })).toBeVisible({ timeout: 15_000 })
   await alice.getByRole('button', { name: 'Add attachment' }).click()
   await alice.getByRole('menuitem', { name: 'Location', exact: true }).click()
   await alice.getByRole('dialog', { name: 'Share this location?' }).getByRole('button', { name: '15 min' }).click()
