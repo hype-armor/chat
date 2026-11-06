@@ -1,7 +1,7 @@
 // Browser-only UI fixture. No worker, encryption, storage, or server transport.
 import { createRoot } from 'react-dom/client'
 import { Chat } from '../ui/Chat'
-import type { CoreClient } from '../core/client'
+import { canEncryptCalls, type CoreClient } from '../core/client'
 import type { AppView, ChatMessage } from '../core/protocol'
 import { TypingLeases, TYPING_TTL_MS } from '../core/typing'
 import '../styles.css'
@@ -104,6 +104,7 @@ Object.assign(window, {
   interactionFixture: {
     liveStarts,
     callActions,
+    canEncryptCalls,
     incomingCall(group: boolean) {
       emit({ type: 'call', signal: {
         conversationId: 'chat', callId: crypto.randomUUID().replaceAll('-', ''),

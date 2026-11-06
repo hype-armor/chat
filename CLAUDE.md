@@ -44,7 +44,9 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   `PW_ALL_BROWSERS=1 pnpm --filter web exec playwright test -c playwright.fixtures.config.ts`.
   These fixtures do not prove call transport. The narrow-header echo-call test
   needs the isolated server and echo bot. Set `E2E_UI_FIXTURE_PORT` to a free
-  dedicated port when another session runs UI fixtures.
+  dedicated port when another session runs UI fixtures. Call UI fixtures must
+  assert the fail-closed error and keyboard dismissal when `canEncryptCalls()`
+  is false. Do not bypass the encrypted-media capability guard.
 - Details modals must make background app regions inert, including the sidebar
   and notices outside Chat. Call dialogs take priority and must receive keyboard
   focus without interference from details focus restoration.
