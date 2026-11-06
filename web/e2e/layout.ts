@@ -97,8 +97,15 @@ export async function expectLayout(page: Page, screen: string, chat = false) {
 
 /** A transient dialog must survive the poll; dismissal is not a layout fix. */
 export async function expectDialogLayout(page: Page, dialog: Locator, screen: string, chat = false) {
-  await expectLayout(page, screen, chat)
-  expect(await dialog.isVisible(), 'dialog must remain visible after layout polling').toBe(true)
+  let lastReport: Awaited<ReturnType<typeof layoutReport>> = []
+  await expect.poll(async () => {
+    const report = await layoutReport(page, chat)
+    if (report.length) lastReport = report
+    return report
+  }, { message: screen }).toEqual([])
+  expect(await dialog.isVisible(),
+    `${screen}: dialog must remain visible after layout polling; last layout defects: ${JSON.stringify(lastReport, null, 2)}`,
+  ).toBe(true)
 }
 
 export const layoutViewports = [
