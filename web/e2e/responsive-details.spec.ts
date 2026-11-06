@@ -43,7 +43,7 @@ for (const width of [768, 1024, 1100, 1280]) {
       await expect(details.getByRole('button', { name: 'Leave group' })).toBeFocused()
       await page.keyboard.press('Tab')
       await expect(details.getByRole('button', { name: 'Close details' })).toBeFocused()
-      await page.getByRole('button', { name: 'Settings', exact: true }).evaluate((element) => (element as HTMLElement).focus())
+      await page.getByRole('button', { name: 'Settings', exact: true, includeHidden: true }).evaluate((element) => (element as HTMLElement).focus())
       await expect(details.getByRole('button', { name: 'Close details' })).toBeFocused()
     } else {
       expect((await chat.boundingBox())!.width).toBeGreaterThanOrEqual(28 * 16)

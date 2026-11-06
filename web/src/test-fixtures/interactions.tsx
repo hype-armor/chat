@@ -19,6 +19,7 @@ let dropTypingStops = false
 let holdNextSend = false
 let rejectPendingSend: ((error: Error) => void) | undefined
 let rejectMapInfo: ((error: Error) => void) | undefined
+const callActions: string[] = []
 const liveStarts: { conversationId: string; durationMs: number | null; location: { latitude: number; longitude: number; accuracyM: number } }[] = []
 const leases = new TypingLeases()
 let lastTyping = ''
@@ -65,8 +66,12 @@ const core = {
   ],
   groupCallStatus: async () => undefined,
   // Keep fixture calls at setup. These tests make no media or transport claim.
-  iceServers: () => new Promise(() => {}),
-  callSignal: () => new Promise(() => {}),
+  iceServers: () => { callActions.push('answer'); return new Promise(() => {}) },
+  callSignal: (_id: string, signal: { kind: string }) => {
+    callActions.push(signal.kind)
+    return signal.kind === 'offer' ? new Promise(() => {}) : Promise.resolve()
+  },
+  groupCallJoin: () => { callActions.push('join'); return new Promise(() => {}) },
   recordCall: () => {},
   avatarPhoto: async () => undefined,
   pushStatus: async () => ({ enabled: false }),
@@ -98,6 +103,13 @@ const view: Extract<AppView, { phase: 'ready' }> = {
 Object.assign(window, {
   interactionFixture: {
     liveStarts,
+    callActions,
+    incomingCall(group: boolean) {
+      emit({ type: 'call', signal: {
+        conversationId: 'chat', callId: crypto.randomUUID().replaceAll('-', ''),
+        fromDevice: 'remote-device', title, kind: 'offer', sdp: 'UI fixture offer', video: false, group,
+      } })
+    },
     failMap() {
       rejectMapInfo?.(new Error('Delayed map style failure from fixture'))
       rejectMapInfo = undefined

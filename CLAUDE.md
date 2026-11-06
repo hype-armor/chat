@@ -43,7 +43,11 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
 - Run responsive UI and interaction fixtures with
   `PW_ALL_BROWSERS=1 pnpm --filter web exec playwright test -c playwright.fixtures.config.ts`.
   These fixtures do not prove call transport. The narrow-header echo-call test
-  needs the isolated server and echo bot.
+  needs the isolated server and echo bot. Set `E2E_UI_FIXTURE_PORT` to a free
+  dedicated port when another session runs UI fixtures.
+- Details modals must make background app regions inert, including the sidebar
+  and notices outside Chat. Call dialogs take priority and must receive keyboard
+  focus without interference from details focus restoration.
 - For new or updated E2E composer selectors, use
   `getByRole('textbox', { name: 'Message', exact: true })`.
   Partial label matches also select Reply buttons once messages exist.
