@@ -249,19 +249,38 @@ test('preserves clipping inside a modal dialog', async ({ page }) => {
   expect(await layoutReport(page)).toEqual([])
 })
 
-test('dialog layout polling cannot pass after an overflowing dialog disappears', async ({ page }) => {
+test('disappearing overflow dialogs fail with their last geometry and screen label', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 640 })
   await page.setContent(`<!doctype html>
     <dialog style="position: fixed; left: 300px; width: 100px; max-width: none; margin: 0">Refused</dialog>
   `)
   const dialog = page.locator('dialog')
-  await dialog.evaluate((element) => element.showModal())
-  expect(await layoutReport(page)).toEqual(expect.arrayContaining([
+  await dialog.evaluate((element) => {
+    element.showModal()
+    const measure = element.getBoundingClientRect.bind(element)
+    element.getBoundingClientRect = () => {
+      element.dataset.measured = 'true'
+      return measure()
+    }
+  })
+  const screen = 'transient refusal: 320×640 dark'
+  const failure = expectDialogLayout(page, dialog, screen).then(() => '', (error: Error) => error.message)
+  // Wait for a measured poll, then change geometry to verify the last report wins.
+  await expect(dialog).toHaveAttribute('data-measured', 'true')
+  await dialog.evaluate((element) => {
+    element.style.left = '280px'
+    element.dataset.measured = 'false'
+  })
+  await expect(dialog).toHaveAttribute('data-measured', 'true')
+  const lastReport = await layoutReport(page)
+  expect(lastReport).toEqual(expect.arrayContaining([
     expect.objectContaining({ problem: 'off-screen content' }),
   ]))
-  await dialog.evaluate((element) => { setTimeout(() => element.close(), 250) })
-  await expect(expectDialogLayout(page, dialog, 'transient refusal'))
-    .rejects.toThrow(/dialog must remain visible after layout polling/)
+  await dialog.evaluate((element) => element.close())
+  const message = await failure
+  expect(message).toContain('dialog must remain visible after layout polling')
+  expect(message).toContain(screen)
+  expect(message).toContain(JSON.stringify(lastReport, null, 2))
   expect(await layoutReport(page)).toEqual([])
 })
 
