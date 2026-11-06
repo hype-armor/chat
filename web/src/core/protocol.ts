@@ -44,6 +44,8 @@ export type AppView =
       alerts: { id: string; text: string }[]
       /** Whether this user sends read receipts (FR-MSG-5). */
       readReceipts: boolean
+      /** Whether this device sends and shows encrypted typing indicators. */
+      typingIndicators: boolean
       /** Calls go only through the server's relay (FR-CALL-9). */
       relayCalls: boolean
       /** Sharing anonymous call statistics (ADR-0032). */
@@ -154,7 +156,21 @@ export type LiveInfo = {
   ended: boolean
 }
 
+export type Typist = { account: string; name: string }
+
+export type ReplyPreview = {
+  messageId: string
+  from?: string
+  fromName?: string
+  text: string
+  unavailable?: boolean
+}
+
 export type ChatMessage = {
+  /** Encrypted reference to a message in this conversation. */
+  replyTo?: string
+  /** Resolved by the worker, never trusted from a sender. */
+  reply?: ReplyPreview
   id: string
   /** 'me' or the sender's account id (hex); empty for notices. */
   from: string
@@ -226,7 +242,10 @@ export type CoreRequest =
   | { type: 'removeMember'; conversationId: string; account: string }
   | { type: 'leaveGroup'; conversationId: string }
   | { type: 'messages'; conversationId: string }
-  | { type: 'sendText'; conversationId: string; text: string }
+  | { type: 'sendText'; conversationId: string; text: string; replyTo?: string }
+  | { type: 'setTyping'; conversationId: string; active: boolean }
+  | { type: 'typing'; conversationId: string }
+  | { type: 'setTypingIndicators'; on: boolean }
   | { type: 'sendLocation'; conversationId: string; location: LocationInfo }
   | { type: 'startLive'; conversationId: string; durationMs: number | null; location: LocationInfo }
   | { type: 'liveUpdate'; location: LocationInfo }
@@ -281,6 +300,7 @@ export type CoreRequest =
   | { type: 'bench'; members: number }
 
 export type CoreResponseBody =
+  | { type: 'typing'; typists: Typist[] }
   | { type: 'view'; view: AppView }
   | { type: 'ok' }
   | { type: 'conversation'; conversationId: string }
@@ -309,6 +329,7 @@ export type CoreResponseBody =
 
 /** Pushed by the worker without a request. */
 export type CoreEvent =
+  | { type: 'typing'; conversationId: string; typists: Typist[] }
   | { type: 'view'; view: AppView }
   | { type: 'messages'; conversationId: string }
   /** An attachment upload or download moved on (ADR-0025). */

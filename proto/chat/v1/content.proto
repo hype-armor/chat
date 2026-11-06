@@ -17,7 +17,22 @@ message Content {
     Location location = 8;
     LiveLocation live_location = 9;
     Call call = 10;
+    Typing typing = 12;
   }
+  // Original envelope message id in this conversation, exactly 16 bytes.
+  // Absent for an ordinary message. Only used on user-visible messages.
+  optional bytes reply_to = 11;
+  // SHA-256 of the original authenticated sender and encoded Content.
+  // Exactly 32 bytes. Receivers must verify this before showing a quote.
+  optional bytes reply_to_hash = 13;
+}
+
+// Ephemeral state, not history. Identity comes from the authenticated MLS
+// sender. Content.sent_at_ms orders updates per sender device. Both start
+// and stop events expire: 0 < expires_at_ms - sent_at_ms <= 10 seconds.
+message Typing {
+  bool active = 1;
+  uint64 expires_at_ms = 2;
 }
 
 message Text {

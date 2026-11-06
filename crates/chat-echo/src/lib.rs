@@ -261,6 +261,8 @@ impl Echo {
     ) -> chat_core::Result<Outgoing> {
         let content = Content {
             sent_at_ms: now_ms,
+            reply_to: None,
+            reply_to_hash: None,
             body: Some(body),
         };
         let envelope = self.client.send(conversation_id, &content, random_id())?;
@@ -333,6 +335,8 @@ mod tests {
     fn say(alice: &mut Client, id: &[u8], body: content::Body) -> Envelope {
         let content = Content {
             sent_at_ms: 5,
+            reply_to: None,
+            reply_to_hash: None,
             body: Some(body),
         };
         alice.send(id, &content, random_id()).unwrap()

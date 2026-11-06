@@ -48,7 +48,15 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
     case 'messages':
       return { type: 'messages', messages: await engine.messages(request.conversationId) }
     case 'sendText':
-      await engine.sendText(request.conversationId, request.text)
+      await engine.sendText(request.conversationId, request.text, request.replyTo)
+      return { type: 'ok' }
+    case 'setTyping':
+      await engine.setTyping(request.conversationId, request.active)
+      return { type: 'ok' }
+    case 'typing':
+      return { type: 'typing', typists: engine.typing(request.conversationId) }
+    case 'setTypingIndicators':
+      await engine.setTypingIndicators(request.on)
       return { type: 'ok' }
     case 'sendLocation':
       await engine.sendLocation(request.conversationId, request.location)

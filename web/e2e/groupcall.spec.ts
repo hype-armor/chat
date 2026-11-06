@@ -16,7 +16,7 @@ async function signUp(browser: Browser, browserName: string, name: string, usern
 }
 
 const width = (page: Page, label: string) =>
-  page.getByLabel(label).evaluate((v) => (v as { videoWidth: number }).videoWidth)
+  page.getByLabel(label).evaluate((v) => (v as HTMLVideoElement).videoWidth)
 
 test('a group video call through LiveKit, SFrame-encrypted (FR-CALL-2/3/6)', async ({ browser, browserName }) => {
   test.setTimeout(120_000)

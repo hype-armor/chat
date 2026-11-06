@@ -3,7 +3,7 @@
 use chat_proto::v1::{
     Ack, Attachment, Authenticate, Call, ClientFrame, Content, ContentType, DeviceSync, Envelope,
     GroupInfo, LiveLocation, Location, Ping, Profile, Receipt, SendEnvelope, ServerFrame, Text,
-    client_frame, content, receipt, server_frame,
+    Typing, client_frame, content, receipt, server_frame,
 };
 use js_sys::{Array, Uint8Array};
 use prost::Message;
@@ -161,6 +161,7 @@ impl PendingClient {
             .ok_or_else(|| JsError::new("pending key already used"))?;
         Ok(CoreClient {
             inner: Client::new(pending.into_device(identity).map_err(js_err)?),
+            last_sent_content_hash: None,
         })
     }
 
@@ -222,6 +223,17 @@ pub struct EventView {
     pub sent_at_ms: f64,
     #[wasm_bindgen(getter_with_clone)]
     pub text: Option<String>,
+    /// Original message id, only for valid user-visible reply references.
+    #[wasm_bindgen(getter_with_clone, js_name = replyTo)]
+    pub reply_to: Option<Vec<u8>>,
+    #[wasm_bindgen(getter_with_clone, js_name = replyToHash)]
+    pub reply_to_hash: Option<Vec<u8>>,
+    #[wasm_bindgen(getter_with_clone, js_name = contentHash)]
+    pub content_hash: Option<Vec<u8>>,
+    #[wasm_bindgen(js_name = typingActive)]
+    pub typing_active: Option<bool>,
+    #[wasm_bindgen(js_name = typingExpiresAtMs)]
+    pub typing_expires_at_ms: Option<f64>,
     #[wasm_bindgen(getter_with_clone, js_name = displayName)]
     pub display_name: Option<String>,
     /// A `Profile`'s photo (JPEG), if the sender has one.
@@ -315,6 +327,11 @@ impl EventView {
             sender: Vec::new(),
             sent_at_ms: 0.0,
             text: None,
+            reply_to: None,
+            reply_to_hash: None,
+            content_hash: None,
+            typing_active: None,
+            typing_expires_at_ms: None,
             display_name: None,
             avatar: None,
             group_name: None,
@@ -535,6 +552,7 @@ pub fn sealed_length(len: f64) -> f64 {
 #[wasm_bindgen]
 pub struct CoreClient {
     inner: Client,
+    last_sent_content_hash: Option<Vec<u8>>,
 }
 
 #[wasm_bindgen]
@@ -542,12 +560,19 @@ impl CoreClient {
     pub fn restore(snapshot: &[u8]) -> Result<CoreClient, JsError> {
         Ok(Self {
             inner: Client::restore(snapshot).map_err(js_err)?,
+            last_sent_content_hash: None,
         })
     }
 
     /// Contains private keys: encrypt before storing.
     pub fn snapshot(&self) -> Result<Vec<u8>, JsError> {
         self.inner.snapshot().map_err(js_err)
+    }
+
+    /// Read immediately after a successful serialized visible-message send.
+    #[wasm_bindgen(getter, js_name = lastSentContentHash)]
+    pub fn last_sent_content_hash(&self) -> Option<Vec<u8>> {
+        self.last_sent_content_hash.clone()
     }
 
     pub fn identity(&self) -> Vec<u8> {
@@ -738,7 +763,7 @@ impl CoreClient {
         })
     }
 
-    /// Returns the encoded `Envelope`.
+    /// Returns the encoded `Envelope`. The optional reply id must have 16 bytes.
     #[wasm_bindgen(js_name = sendText)]
     pub fn send_text(
         &mut self,
@@ -746,12 +771,16 @@ impl CoreClient {
         body: String,
         sent_at_ms: f64,
         message_id: Vec<u8>,
+        reply_to: Option<Vec<u8>>,
+        reply_to_hash: Option<Vec<u8>>,
     ) -> Result<Vec<u8>, JsError> {
-        self.send(
+        self.send_with_reply(
             conversation_id,
             sent_at_ms,
             content::Body::Text(Text { body }),
             message_id,
+            reply_to,
+            reply_to_hash,
         )
     }
 
@@ -763,12 +792,16 @@ impl CoreClient {
         attachment: &AttachmentView,
         sent_at_ms: f64,
         message_id: Vec<u8>,
+        reply_to: Option<Vec<u8>>,
+        reply_to_hash: Option<Vec<u8>>,
     ) -> Result<Vec<u8>, JsError> {
-        self.send(
+        self.send_with_reply(
             conversation_id,
             sent_at_ms,
             content::Body::Attachment(attachment.clone().into()),
             message_id,
+            reply_to,
+            reply_to_hash,
         )
     }
 
@@ -784,8 +817,10 @@ impl CoreClient {
         label: String,
         sent_at_ms: f64,
         message_id: Vec<u8>,
+        reply_to: Option<Vec<u8>>,
+        reply_to_hash: Option<Vec<u8>>,
     ) -> Result<Vec<u8>, JsError> {
-        self.send(
+        self.send_with_reply(
             conversation_id,
             sent_at_ms,
             content::Body::Location(Location {
@@ -795,6 +830,8 @@ impl CoreClient {
                 label,
             }),
             message_id,
+            reply_to,
+            reply_to_hash,
         )
     }
 
@@ -830,6 +867,36 @@ impl CoreClient {
                 stopped: location.is_none(),
                 until_stopped,
                 location,
+            }),
+            message_id,
+        )
+    }
+
+    /// Ephemeral typing state. The worker must drop stale or superseded events.
+    #[wasm_bindgen(js_name = sendTyping)]
+    pub fn send_typing(
+        &mut self,
+        conversation_id: &[u8],
+        active: bool,
+        sent_at_ms: f64,
+        expires_at_ms: f64,
+        message_id: Vec<u8>,
+    ) -> Result<Vec<u8>, JsError> {
+        let sent =
+            exact_timestamp(sent_at_ms).ok_or_else(|| JsError::new("invalid typing timestamp"))?;
+        let expires =
+            exact_timestamp(expires_at_ms).ok_or_else(|| JsError::new("invalid typing expiry"))?;
+        if !valid_typing_times(sent, expires) {
+            return Err(JsError::new(
+                "typing lifetime must be 1..10000 milliseconds",
+            ));
+        }
+        self.send(
+            conversation_id,
+            sent_at_ms,
+            content::Body::Typing(Typing {
+                active,
+                expires_at_ms: expires,
             }),
             message_id,
         )
@@ -942,7 +1009,28 @@ impl CoreClient {
                 let mut view = EventView::new("message", conversation_id);
                 view.sender = sender;
                 view.sent_at_ms = content.sent_at_ms as f64;
+                if matches!(
+                    &content.body,
+                    Some(
+                        content::Body::Text(_)
+                            | content::Body::Attachment(_)
+                            | content::Body::Location(_)
+                            | content::Body::LiveLocation(_)
+                    )
+                ) {
+                    view.content_hash = Some(crate::client::content_hash(&view.sender, &content));
+                    view.reply_to = content.reply_to.filter(|id| id.len() == 16);
+                    view.reply_to_hash = content.reply_to_hash.filter(|hash| hash.len() == 32);
+                }
                 match content.body {
+                    Some(content::Body::Typing(t)) => {
+                        if valid_typing_times(content.sent_at_ms, t.expires_at_ms) {
+                            view.typing_active = Some(t.active);
+                            view.typing_expires_at_ms = Some(t.expires_at_ms as f64);
+                        } else {
+                            view.kind = "ignored".to_owned();
+                        }
+                    }
                     Some(content::Body::Text(t)) => view.text = Some(t.body),
                     Some(content::Body::Profile(p)) => {
                         view.display_name = Some(p.display_name);
@@ -1012,15 +1100,111 @@ impl CoreClient {
         body: content::Body,
         message_id: Vec<u8>,
     ) -> Result<Vec<u8>, JsError> {
+        self.send_with_reply(conversation_id, sent_at_ms, body, message_id, None, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn send_with_reply(
+        &mut self,
+        conversation_id: &[u8],
+        sent_at_ms: f64,
+        body: content::Body,
+        message_id: Vec<u8>,
+        reply_to: Option<Vec<u8>>,
+        reply_to_hash: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, JsError> {
+        self.last_sent_content_hash = None;
+        let reply_to = reply_to.filter(|id| !id.is_empty());
+        let reply_to_hash = reply_to_hash.filter(|hash| !hash.is_empty());
+        if !valid_reply_metadata(reply_to.as_deref(), reply_to_hash.as_deref()) {
+            return Err(JsError::new(
+                "a reply requires both a 16-byte id and a 32-byte content hash",
+            ));
+        }
         let content = Content {
             sent_at_ms: sent_at_ms as u64,
             body: Some(body),
+            reply_to,
+            reply_to_hash,
         };
-        Ok(self
+        let envelope = self
             .inner
             .send(conversation_id, &content, message_id)
-            .map_err(js_err)?
-            .encode_to_vec())
+            .map_err(js_err)?;
+        if matches!(
+            &content.body,
+            Some(
+                content::Body::Text(_)
+                    | content::Body::Attachment(_)
+                    | content::Body::Location(_)
+                    | content::Body::LiveLocation(_)
+            )
+        ) {
+            self.last_sent_content_hash =
+                Some(crate::client::content_hash(self.inner.identity(), &content));
+        }
+        Ok(envelope.encode_to_vec())
+    }
+}
+
+fn valid_reply_metadata(id: Option<&[u8]>, hash: Option<&[u8]>) -> bool {
+    matches!((id, hash), (None, None))
+        || matches!((id, hash), (Some(id), Some(hash)) if id.len() == 16 && hash.len() == 32)
+}
+
+// Timestamps must survive the JavaScript number boundary without rounding.
+fn exact_timestamp(value: f64) -> Option<u64> {
+    (value.is_finite() && (1.0..=9_007_199_254_740_991.0).contains(&value) && value.fract() == 0.0)
+        .then_some(value as u64)
+}
+
+fn valid_typing_times(sent: u64, expires: u64) -> bool {
+    sent > 0
+        && expires <= 9_007_199_254_740_991
+        && expires
+            .checked_sub(sent)
+            .is_some_and(|ttl| (1..=10_000).contains(&ttl))
+}
+
+#[cfg(test)]
+mod interaction_tests {
+    use super::*;
+
+    #[test]
+    fn outgoing_replies_require_an_identifier_and_hash_together() {
+        assert!(valid_reply_metadata(None, None));
+        assert!(valid_reply_metadata(Some(&[1; 16]), Some(&[2; 32])));
+        assert!(!valid_reply_metadata(Some(&[1; 16]), None));
+        assert!(!valid_reply_metadata(None, Some(&[2; 32])));
+        assert!(!valid_reply_metadata(Some(&[1; 15]), Some(&[2; 32])));
+        assert!(!valid_reply_metadata(Some(&[1; 16]), Some(&[2; 31])));
+    }
+
+    #[test]
+    fn typing_timestamps_are_exact_and_bounded() {
+        for value in [
+            f64::NAN,
+            f64::INFINITY,
+            -1.0,
+            0.0,
+            1.5,
+            9_007_199_254_740_992.0,
+        ] {
+            assert_eq!(exact_timestamp(value), None);
+        }
+        assert_eq!(exact_timestamp(1000.0), Some(1000));
+        assert!(valid_typing_times(1000, 1001));
+        assert!(valid_typing_times(1000, 11000));
+        for (sent, expires) in [
+            (0, 1),
+            (1000, 999),
+            (1000, 1000),
+            (1000, 11001),
+            (u64::MAX, 1),
+            (1, u64::MAX),
+        ] {
+            assert!(!valid_typing_times(sent, expires));
+        }
     }
 }
 

@@ -18,6 +18,7 @@ Architecture Decision Records (ADRs) under [`adr/`](adr/).
 | 10 | [Deployment: Kubernetes](10-deployment-kubernetes.md) | Cluster layout, security baseline, US hosting notes |
 | 11 | [Server API](11-api.md) | REST endpoints and WebSocket protocol |
 | 12 | [Performance](12-performance.md) | Delivery latency load test, results and server metrics |
+| — | [Chat interaction comparison](ui-feature-comparison.md) | Scoped reference-app comparison, UI gaps, and regression coverage |
 | — | [ADR index](adr/README.md) | Decision log |
 
 ## Conventions

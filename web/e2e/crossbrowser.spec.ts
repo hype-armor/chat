@@ -26,7 +26,7 @@ async function signUp(browser: Browser, name: string, username: string, baseURL:
 }
 
 const videoWidth = (page: Page, label: string) =>
-  page.getByLabel(label).evaluate((v) => (v as { videoWidth: number }).videoWidth)
+  page.getByLabel(label).evaluate((v) => (v as HTMLVideoElement).videoWidth)
 
 test('a 1:1 video call between Chromium and Firefox, SFrame both ways', async ({ browser, baseURL }) => {
   const fx = await firefox.launch({ firefoxUserPrefs: FIREFOX_PREFS })

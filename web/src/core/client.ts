@@ -135,8 +135,20 @@ export class CoreClient {
     return expect(await this.call({ type: 'messages', conversationId }), 'messages').messages
   }
 
-  async sendText(conversationId: string, text: string) {
-    expect(await this.call({ type: 'sendText', conversationId, text }), 'ok')
+  async sendText(conversationId: string, text: string, replyTo?: string) {
+    expect(await this.call({ type: 'sendText', conversationId, text, replyTo }), 'ok')
+  }
+
+  async setTyping(conversationId: string, active: boolean) {
+    expect(await this.call({ type: 'setTyping', conversationId, active }), 'ok')
+  }
+
+  async typing(conversationId: string) {
+    return expect(await this.call({ type: 'typing', conversationId }), 'typing').typists
+  }
+
+  async setTypingIndicators(on: boolean) {
+    expect(await this.call({ type: 'setTypingIndicators', on }), 'ok')
   }
 
   /** New device: a code to show; the view turns 'ready' once approved. */

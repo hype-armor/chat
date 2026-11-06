@@ -117,6 +117,8 @@ import { type MediaTransformOptions, frameTransform } from './media'
 import { CALL_KINDS, type CallEnd, type CallRecord, GIVE_UP_MS, STALE_OFFER_MS, callNotice, safeSignalText } from './calls'
 import { acceptsGroupInfo, designatedCommitter, isGroupView, parseAdmins } from './roles'
 import { SecureStore } from './storage'
+import { TypingClock, TypingLeases, TYPING_REFRESH_MS, TYPING_TTL_MS } from './typing'
+import { buildReplyLookup, hashHex, replyPreview, validContentHash, validReplyId } from './replies'
 
 /** How long the server may take to answer a request before we reconnect. */
 const REQUEST_TIMEOUT_MS = 20_000
@@ -150,7 +152,12 @@ type StoredFile = Omit<FileInfo, 'thumbnail'> & {
 }
 
 /** A message as stored; `messages()` hands the UI a `ChatMessage` without keys. */
-type StoredMessage = Omit<ChatMessage, 'file'> & { file?: StoredFile }
+type StoredMessage = Omit<ChatMessage, 'file' | 'reply'> & {
+  file?: StoredFile
+  /** Hashes bind previews to authenticated MLS content, not mutable outer IDs. */
+  contentHash?: string
+  replyToHash?: string
+}
 
 type Account = {
   username: string
@@ -264,6 +271,7 @@ type State = {
   blocked: string[]
   /** Whether to send read receipts (FR-MSG-5); delivery receipts always go. */
   readReceipts: boolean
+  typingIndicators?: boolean
   /** Calls only through the TURN relay, hiding this device's IP address (FR-CALL-9). */
   relayCalls?: boolean
   /** Opt-in call statistics (ADR-0032): today's tallies, sent once a day. */
@@ -380,6 +388,14 @@ export class Engine {
   /** Receipts to send, per conversation, batched (see `queueReceipt`). */
   private receipts = new Map<string, { delivered: string[]; read: string[] }>()
   private receiptTimer?: ReturnType<typeof setTimeout>
+  private typingLeases = new Map<string, TypingLeases>()
+  private typingSent = new Map<string, { active: boolean; at: number }>()
+  private typingTimer?: ReturnType<typeof setInterval>
+  private typingPublished = new Map<string, string>()
+  private typingConversation?: string
+  /** These floors survive empty lease maps and reconnects, until sign-out. */
+  private typingClock = new TypingClock()
+  private typingSentAt = 0
 
   /** Serialises every mutation of core state and storage. */
   private lock: Promise<unknown> = Promise.resolve()
@@ -440,6 +456,7 @@ export class Engine {
       conversations,
       alerts: this.state.alerts,
       readReceipts: this.state.readReceipts,
+      typingIndicators: this.state.typingIndicators !== false,
       relayCalls: this.state.relayCalls ?? false,
       callStats: !!this.state.callStats,
       backup: this.state.backup ? { lastAt: this.state.backup.lastAt } : undefined,
@@ -762,6 +779,8 @@ export class Engine {
     ws?.close()
     await this.store.clear()
     this.setConnection('offline')
+    this.typingClock = new TypingClock()
+    this.typingSentAt = 0
   }
 
   /** Runs `syncOwnDevices` soon, coalescing bursts (e.g. many joins). */
@@ -1633,11 +1652,14 @@ export class Engine {
   /** Messages for the UI: sender names resolved, attachment keys left out. */
   async messages(conversationId: string): Promise<ChatMessage[]> {
     const now = Date.now()
-    return (await this.stored(conversationId)).map(({ file, ...m }) => ({
+    const list = await this.stored(conversationId)
+    const replyLookup = buildReplyLookup(list)
+    return list.map(({ file, contentHash: _contentHash, replyToHash, ...m }) => ({
       ...m,
       // An ended session shows no point, even before the sweep forgets it.
       live: m.live && (m.live.ended || m.live.expiresAt <= now ? { ...m.live, ended: true, latest: undefined } : m.live),
       fromName: m.from === 'me' || m.kind === 'notice' ? undefined : this.nameOf(m.from),
+      reply: m.replyTo ? replyPreview(m.replyTo, replyLookup, (a) => a === 'me' ? 'You' : this.nameOf(a), replyToHash) : undefined,
       file: file && {
         name: file.name,
         mime: file.mime,
@@ -1650,6 +1672,115 @@ export class Engine {
         downloaded: file.downloaded,
       },
     }))
+  }
+
+  private typingNow(): number {
+    return this.typingClock.now()
+  }
+
+  /** Order a new visible send after prior composition, not after later upload work. */
+  private compositionSentAt(): number {
+    const sentAt = Math.max(Date.now(), this.typingSentAt + 1)
+    this.typingSentAt = sentAt
+    return sentAt
+  }
+
+  /** Current typists, resolved from authenticated current group identities. */
+  typing(conversationId: string): import('./protocol').Typist[] {
+    const conv = this.conv(conversationId)
+    if (!conv || conv.status || conv.self || conv.request || this.state.typingIndicators === false || this.connection !== 'online') {
+      this.typingLeases.delete(conversationId)
+      return []
+    }
+    const owners = this.deviceAccounts(conversationId)
+    const accounts = this.typingLeases.get(conversationId)?.accounts(this.typingNow(), (device, account) =>
+      owners.get(device) === account && account !== this.myAccount() && !this.state.blocked.includes(account)) ?? []
+    return accounts.map((account) => ({ account, name: this.nameOf(account) }))
+  }
+
+  private stopTypingForMessage(conversationId: string, from: string, device: string, sentAt: number) {
+    const conv = this.conv(conversationId)
+    if (from === this.myAccount() || !conv || conv.status || conv.self || conv.request ||
+        this.state.blocked.includes(from) || this.state.typingIndicators === false || this.connection !== 'online') return
+    const leases = this.typingLeases.get(conversationId) ?? new TypingLeases()
+    leases.stopDevice(device, from, sentAt, this.typingNow())
+    this.typingLeases.set(conversationId, leases)
+    this.publishTyping(conversationId)
+    this.scheduleTypingSweep()
+  }
+
+  private publishTyping(conversationId: string) {
+    const typists = this.typing(conversationId)
+    const signature = JSON.stringify(typists)
+    if ((this.typingPublished.get(conversationId) ?? '[]') === signature) return
+    this.typingPublished.set(conversationId, signature)
+    this.emit({ type: 'typing', conversationId, typists })
+  }
+
+  private scheduleTypingSweep() {
+    this.typingTimer ??= setInterval(() => {
+      for (const id of this.typingLeases.keys()) {
+        this.publishTyping(id)
+        if (this.typingLeases.get(id)?.empty(this.typingNow())) this.typingLeases.delete(id)
+      }
+      if (!this.typingLeases.size) {
+        clearInterval(this.typingTimer)
+        this.typingTimer = undefined
+      }
+    }, 250)
+  }
+
+  private clearTyping() {
+    clearInterval(this.typingTimer)
+    this.typingTimer = undefined
+    this.typingLeases.clear()
+    this.typingSent.clear()
+    this.typingConversation = undefined
+    for (const id of this.typingPublished.keys()) this.publishTyping(id)
+    this.typingPublished.clear()
+  }
+
+  async setTypingIndicators(on: boolean) {
+    this.ready()
+    await this.exclusive(async () => {
+      if (!on && this.typingConversation) await this.sendTypingLocked(this.typingConversation, false)
+      this.state.typingIndicators = on
+      if (!on) this.clearTyping()
+      await this.persist()
+    })
+    this.emitView()
+  }
+
+  /** Best effort only: no typing envelope ever enters the persistent outbox. */
+  async setTyping(conversationId: string, active: boolean) {
+    await this.exclusive(async () => {
+      if (active && this.typingConversation && this.typingConversation !== conversationId) {
+        await this.sendTypingLocked(this.typingConversation, false)
+      }
+      await this.sendTypingLocked(conversationId, active)
+    })
+  }
+
+  private async sendTypingLocked(conversationId: string, active: boolean) {
+    const conv = this.conv(conversationId)
+    if (!this.core || !this.account || !conv || conv.status || conv.self || conv.request ||
+        this.state.typingIndicators === false || this.connection !== 'online' || this.state.pendingCommit ||
+        (conv.peers.length === 1 && this.state.blocked.includes(conv.peers[0]))) return
+    const now = this.typingNow()
+    const last = this.typingSent.get(conversationId)
+    if (active && last?.active && now - last.at < TYPING_REFRESH_MS) return
+    if (!active && !last?.active) return
+    // Stops must order after starts, even within one millisecond or after a clock change.
+    const sentAt = Math.max(Math.ceil(now), this.typingSentAt + 1)
+    this.typingSentAt = sentAt
+    const envelope = this.core.sendTyping(fromHex(conversationId), active, sentAt, sentAt + TYPING_TTL_MS, randomId())
+    // The MLS sender ratchet advances even if delivery subsequently fails.
+    await this.persist()
+    this.typingSent.set(conversationId, { active, at: now })
+    if (active) this.typingConversation = conversationId
+    else if (this.typingConversation === conversationId) this.typingConversation = undefined
+    // No retries. Silent uses an existing generic delivery option, not a typing marker.
+    void this.request((id) => encodeSend(id, envelope, this.recipients(conversationId).map(fromHex), true, [])).catch(() => undefined)
   }
 
   private async stored(conversationId: string): Promise<StoredMessage[]> {
@@ -1692,7 +1823,7 @@ export class Engine {
         id: toHex(randomId()),
         from: 'me',
         text: '',
-        sentAt: Date.now(),
+        sentAt: this.compositionSentAt(),
         status: 'sending',
         location: checked,
       }
@@ -1722,9 +1853,10 @@ export class Engine {
     const untilStopped = durationMs === null
     const point = safeLocation(location.latitude, location.longitude, location.accuracyM, '')
     if (!point) throw new Error("That location doesn't look right")
+    // Replacing a session can wait on storage while the composer starts a newer draft.
+    const now = await this.exclusive(async () => this.compositionSentAt())
     await this.stopLive(conversationId)
     await this.exclusive(async () => {
-      const now = Date.now()
       const session: LiveSession = {
         sessionId: toHex(randomId()),
         conversationId,
@@ -2238,6 +2370,7 @@ export class Engine {
     messageId: string,
     sentAt: number,
     view: LiveLocationView,
+    reference: Pick<StoredMessage, 'contentHash' | 'replyTo' | 'replyToHash'> = {},
   ) {
     const sessionId = view.sessionId.length === 16 ? toHex(view.sessionId) : undefined
     const place = view.location
@@ -2295,6 +2428,7 @@ export class Engine {
       id: messageId,
       from: sender,
       text: '',
+      ...reference,
       sentAt,
       status: mine ? 'sent' : 'received',
       live: {
@@ -2309,22 +2443,32 @@ export class Engine {
       this.state.liveSeen.push({ conversationId, messageId, expiresAt: view.expiresAtMs })
       this.scheduleLiveSweep()
     }
+    return true
   }
 
-  async sendText(conversationId: string, text: string) {
+  async sendText(conversationId: string, text: string, replyTo?: string) {
     const { core } = this.ready()
     this.checkCanSend(conversationId)
     await this.exclusive(async () => {
+      // Keep the stop and message ahead of typing requests from a newer draft.
+      await this.sendTypingLocked(conversationId, false)
       const messageId = randomId()
-      const sentAt = Date.now()
-      const envelope = core.sendText(fromHex(conversationId), text, sentAt, messageId)
+      const sentAt = this.compositionSentAt()
+      const target = replyTo && (await this.stored(conversationId)).find((m) => m.id === replyTo && m.kind !== 'notice')
+      if (replyTo && (!validReplyId(replyTo) || !target)) throw new Error('The reply target is not in this conversation')
+      if (target && !validContentHash(target.contentHash)) throw new Error('The original message cannot be verified on this device. Cancel the reply and send a new message.')
+      const message: StoredMessage = {
+        id: toHex(messageId), from: 'me', text, replyTo,
+        replyToHash: target ? target.contentHash : undefined, sentAt, status: 'sending',
+      }
+      const envelope = this.encode(core, conversationId, message)
       this.state.outbox.push({
         messageId: toHex(messageId),
         conversationId,
         envelope: toBase64(envelope),
         recipients: this.recipients(conversationId),
       })
-      await this.appendMessage(conversationId, { id: toHex(messageId), from: 'me', text, sentAt, status: 'sending' })
+      await this.appendMessage(conversationId, message)
       // The ratchet advanced: persist before anything leaves the device.
       await this.persist()
     })
@@ -2368,7 +2512,19 @@ export class Engine {
 
   /** Encrypts one of our messages for the group as it is now. */
   private encode(core: CoreClient, conversationId: string, m: StoredMessage): Uint8Array {
+    const envelope = this.encodeBody(core, conversationId, m)
+    // No other send can run between encryption and this getter: the caller holds the lock.
+    m.contentHash = hashHex(core.lastSentContentHash)
+    return envelope
+  }
+
+  private encodeBody(core: CoreClient, conversationId: string, m: StoredMessage): Uint8Array {
     const id = fromHex(m.id)
+    if (m.replyTo && (!validReplyId(m.replyTo) || !validContentHash(m.replyToHash))) {
+      throw new Error('The original message cannot be verified on this device. Cancel the reply and send a new message.')
+    }
+    const replyTo = m.replyTo ? fromHex(m.replyTo) : undefined
+    const replyToHash = m.replyToHash ? fromHex(m.replyToHash) : undefined
     if (m.live) {
       const p = m.live.latest
       return core.sendLiveLocation(
@@ -2386,9 +2542,9 @@ export class Engine {
     }
     if (m.location) {
       const l = m.location
-      return core.sendLocation(fromHex(conversationId), l.latitude, l.longitude, l.accuracyM, l.label ?? '', m.sentAt, id)
+      return core.sendLocation(fromHex(conversationId), l.latitude, l.longitude, l.accuracyM, l.label ?? '', m.sentAt, id, replyTo, replyToHash)
     }
-    if (!m.file) return core.sendText(fromHex(conversationId), m.text, m.sentAt, id)
+    if (!m.file) return core.sendText(fromHex(conversationId), m.text, m.sentAt, id, replyTo, replyToHash)
     const f = m.file
     if (!f.blobId) throw new Error('not uploaded yet')
     const view = new AttachmentView(
@@ -2406,7 +2562,7 @@ export class Engine {
       !!f.voiceNote,
     )
     try {
-      return core.sendAttachment(fromHex(conversationId), view, m.sentAt, id)
+      return core.sendAttachment(fromHex(conversationId), view, m.sentAt, id, replyTo, replyToHash)
     } finally {
       view.free()
     }
@@ -2424,6 +2580,8 @@ export class Engine {
     this.checkCanSend(conversationId)
     if (file.size === 0) throw new Error('That file is empty')
     if (file.size > MAX_ATTACHMENT_BYTES) throw new Error('Files can be up to 100 MB')
+    // Capture the user action before preparation and upload can overlap a newer draft.
+    const sentAt = await this.exclusive(async () => this.compositionSentAt())
     const image = await prepareImage(file, this.state.media.quality)
     // Clips: where they were filmed is blanked (ADR-0024).
     const data = image?.data ?? (isMp4(file.type) ? await scrubMp4(file) : file)
@@ -2442,7 +2600,7 @@ export class Engine {
         id: messageId,
         from: 'me',
         text: caption,
-        sentAt: Date.now(),
+        sentAt,
         status: 'sending',
         file: {
           name,
@@ -2831,6 +2989,16 @@ export class Engine {
       const from = splitIdentity(event.sender).account
       const conv = this.state.conversations[conversationId]
       const mine = from === this.myAccount()
+      if (event.typingActive !== undefined) {
+        if (!mine && conv && !conv.status && !conv.self && !conv.request && !this.state.blocked.includes(from) && this.state.typingIndicators !== false && this.connection === 'online') {
+          const leases = this.typingLeases.get(conversationId) ?? new TypingLeases()
+          leases.update(toHex(splitIdentity(event.sender).device), from, event.typingActive, event.sentAtMs, event.typingExpiresAtMs ?? NaN, this.typingNow())
+          this.typingLeases.set(conversationId, leases)
+          this.publishTyping(conversationId)
+          this.scheduleTypingSweep()
+        }
+        return
+      }
       if (event.deviceSync !== undefined) {
         // Only this account's own devices may edit the local account (blocked
         // list, display name): audit H1. A device linked a moment ago is not
@@ -2893,7 +3061,14 @@ export class Engine {
       const live = event.live
       if (live) {
         if (!conv?.status && !this.state.blocked.includes(from)) {
-          await this.applyLive(conversationId, from, mine, messageId, event.sentAtMs, live)
+          const reference = event.replyTo && toHex(event.replyTo)
+          const added = await this.applyLive(conversationId, from, mine, messageId, event.sentAtMs, live, {
+            contentHash: hashHex(event.contentHash),
+            replyTo: reference && validReplyId(reference) ? reference : undefined,
+            replyToHash: hashHex(event.replyToHash),
+          })
+          // Only a new visible card ends composition. Background session updates do not.
+          if (added) this.stopTypingForMessage(conversationId, from, toHex(splitIdentity(event.sender).device), event.sentAtMs)
         }
         live.free()
         return
@@ -2919,6 +3094,9 @@ export class Engine {
         }
       }
       if (text !== undefined) {
+        this.stopTypingForMessage(conversationId, from, toHex(splitIdentity(event.sender).device), event.sentAtMs)
+        const reference = event.replyTo && toHex(event.replyTo)
+        const replyTo = reference && validReplyId(reference) ? reference : undefined
         if (!mine && conv) {
           conv.unread = (conv.unread ?? 0) + 1
           if (!conv.request) this.queueReceipt(conversationId, 'delivered', messageId)
@@ -2928,6 +3106,9 @@ export class Engine {
           id: messageId,
           from: mine ? 'me' : from,
           text,
+          replyTo,
+          replyToHash: hashHex(event.replyToHash),
+          contentHash: hashHex(event.contentHash),
           sentAt: event.sentAtMs,
           status: mine ? 'sent' : 'received',
           file: attachment,
@@ -3346,6 +3527,7 @@ export class Engine {
 
   private setConnection(state: ConnectionState) {
     this.connection = state
+    if (state !== 'online') this.clearTyping()
     this.emitView()
     if (state === 'online') void this.reportCallStats()
   }
