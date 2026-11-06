@@ -64,7 +64,9 @@ export async function layoutReport(page: Page, chat = false) {
             const bounds = ancestor.getBoundingClientRect()
             // Client geometry is untransformed. Convert it with the border-box
             // scale so borders and nested, axis-aligned scales share viewport units.
-            const scaleX = ancestor.offsetWidth ? bounds.width / ancestor.offsetWidth : 1
+            const layoutWidth = 'offsetWidth' in ancestor && typeof ancestor.offsetWidth === 'number'
+              ? ancestor.offsetWidth : 0
+            const scaleX = layoutWidth > 0 ? bounds.width / layoutWidth : 1
             left = Math.max(left, bounds.left + ancestor.clientLeft * scaleX)
             right = Math.min(right, bounds.left + (ancestor.clientLeft + ancestor.clientWidth) * scaleX)
           }

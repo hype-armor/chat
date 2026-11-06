@@ -61,6 +61,23 @@ test('an off-screen clipping ancestor does not hide a layout defect', async ({ p
   ]))
 })
 
+for (const left of [0, 300]) {
+  test(`SVG clipping preserves the non-HTML width fallback at ${left}px`, async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 640 })
+    await page.setContent(`<!doctype html>
+      <svg style="position: fixed; left: ${left}px; top: 0; overflow: hidden" width="100" height="40">
+        <rect id="svg-child" width="200" height="20" />
+      </svg>
+    `)
+    expect(await page.locator('svg').evaluate((svg) => 'offsetWidth' in svg)).toBe(false)
+    const report = await layoutReport(page)
+    if (left === 0) expect(report).toEqual([])
+    else expect(report).toEqual(expect.arrayContaining([
+      expect.objectContaining({ problem: 'off-screen content', element: expect.stringContaining('#svg-child ') }),
+    ]))
+  })
+}
+
 for (const [borderLeft, borderRight] of [[0, 0], [12, 20]]) {
   for (const origin of ['top left', 'center'] as const) {
     test(`scaled clipping uses viewport coordinates: borders ${borderLeft}/${borderRight}, origin ${origin}`, async ({ page }) => {
