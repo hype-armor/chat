@@ -41,6 +41,7 @@ Items marked **[ASSUMPTION]** need stakeholder confirmation (see doc 09).
 | FR-MSG-13 | Encrypted backup of keys and history with a user-held recovery key, because browsers can evict site storage. | S |
 | FR-MSG-11 | Mentions (@user) and per-conversation mute/notification settings. | S |
 | FR-MSG-12 | Local full-text search of message history (on-device only). | S |
+| FR-MSG-14 | Keep each conversation’s unsent text across navigation and app restarts in encrypted device-local storage. Exclude drafts from backup and synchronization. | M |
 
 Quoted replies and typing indicators use the encrypted content extensions
 in [ADR-0038](adr/0038-encrypted-replies-and-typing.md). Reply previews must

@@ -86,6 +86,9 @@ import {
 } from './keys'
 import type {
   AppView,
+  Draft,
+  DraftSave,
+  TextSent,
   CallSignal,
   ChatMessage,
   IceServer,
@@ -250,6 +253,8 @@ type State = {
   /** Account id (hex) → username number, for contacts this user looked up. */
   usernames: Record<string, string>
   outbox: Outgoing[]
+  /** Device-local revision fences. Never include in backup or device sync. */
+  draftClears: Record<string, number>
   early: Early[]
   /** Conversation id → accounts that proposed leaving, awaiting a commit. */
   leaving: Record<string, string[]>
@@ -313,6 +318,7 @@ const emptyState = (): State => ({
   avatars: {},
   usernames: {},
   outbox: [],
+  draftClears: {},
   early: [],
   leaving: {},
   seen: [],
@@ -399,6 +405,10 @@ export class Engine {
 
   /** Serialises every mutation of core state and storage. */
   private lock: Promise<unknown> = Promise.resolve()
+  private draftEpoch = 0
+  private draftChanges = new Map<string, Draft>()
+  /** A concurrent flush must not transmit a text action before local acceptance. */
+  private acceptingText = new Set<string>()
 
   constructor(private readonly emit: (event: CoreEvent) => void) {}
 
@@ -534,6 +544,8 @@ export class Engine {
   /** `prepare` runs after the new identity exists and before connecting. */
   private async register(reg: Registered, displayName: string, prepare?: () => Promise<void>) {
     await this.exclusive(async () => {
+      this.draftEpoch++
+      this.draftChanges.clear()
       this.core = this.pending!.intoClient(makeIdentity(reg.account_id, reg.device_id))
       this.pending = undefined
       this.notice = undefined
@@ -639,6 +651,7 @@ export class Engine {
       }
       // This device is the account's own: its key must not raise an alert.
       Object.assign(this.state, restored, {
+        draftClears: {},
         backup: { lastAt: backup.createdAt },
         expectedOwn: [deviceHex(reg.device_id)],
       })
@@ -770,17 +783,22 @@ export class Engine {
 
   /** Called when the server no longer knows this device (it was removed). */
   private async signOut(notice: string) {
-    this.account = undefined
-    this.core = undefined
-    this.state = emptyState()
-    this.notice = notice
-    const ws = this.ws
-    this.ws = undefined
-    ws?.close()
-    await this.store.clear()
-    this.setConnection('offline')
-    this.typingClock = new TypingClock()
-    this.typingSentAt = 0
+    // Invalidate queued draft RPCs now, then clear after an in-flight write ends.
+    this.draftEpoch++
+    await this.exclusive(async () => {
+      this.account = undefined
+      this.core = undefined
+      this.state = emptyState()
+      this.draftChanges.clear()
+      this.notice = notice
+      const ws = this.ws
+      this.ws = undefined
+      ws?.close()
+      await this.store.clear()
+      this.setConnection('offline')
+      this.typingClock = new TypingClock()
+      this.typingSentAt = 0
+    })
   }
 
   /** Runs `syncOwnDevices` soon, coalescing bursts (e.g. many joins). */
@@ -1631,6 +1649,7 @@ export class Engine {
         recipients: this.recipients(conversationId),
       })
       conv.status = 'left'
+      await this.invalidateDraft(conversationId)
       this.state.live = this.state.live.filter((l) => l.conversationId !== conversationId)
       await this.endGroupLiveLocations(conversationId)
       await this.persist()
@@ -1651,29 +1670,32 @@ export class Engine {
 
   /** Messages for the UI: sender names resolved, attachment keys left out. */
   async messages(conversationId: string): Promise<ChatMessage[]> {
-    const now = Date.now()
-    const list = await this.stored(conversationId)
-    const replyLookup = buildReplyLookup(list)
-    return list.map(({ file, contentHash, replyToHash, ...m }) => ({
-      ...m,
-      canReply: m.kind !== 'notice' && validReplyId(m.id) && validContentHash(contentHash) &&
-        replyLookup.get(m.id)?.contentHash === contentHash,
-      // An ended session shows no point, even before the sweep forgets it.
-      live: m.live && (m.live.ended || m.live.expiresAt <= now ? { ...m.live, ended: true, latest: undefined } : m.live),
-      fromName: m.from === 'me' || m.kind === 'notice' ? undefined : this.nameOf(m.from),
-      reply: m.replyTo ? replyPreview(m.replyTo, replyLookup, (a) => a === 'me' ? 'You' : this.nameOf(a), replyToHash) : undefined,
-      file: file && {
-        name: file.name,
-        mime: file.mime,
-        size: file.size,
-        width: file.width,
-        height: file.height,
-        thumbnail: file.thumbnail ? plain(fromBase64(file.thumbnail)) : undefined,
-        durationMs: file.durationMs,
-        voiceNote: file.voiceNote,
-        downloaded: file.downloaded,
-      },
-    }))
+    return this.exclusive(async () => {
+      const now = Date.now()
+      const list = await this.stored(conversationId)
+      await this.recoverUnacceptedMessages(conversationId, list)
+      const replyLookup = buildReplyLookup(list)
+      return list.map(({ file, contentHash, replyToHash, ...m }) => ({
+        ...m,
+        canReply: m.kind !== 'notice' && validReplyId(m.id) && validContentHash(contentHash) &&
+          replyLookup.get(m.id)?.contentHash === contentHash,
+        // An ended session shows no point, even before the sweep forgets it.
+        live: m.live && (m.live.ended || m.live.expiresAt <= now ? { ...m.live, ended: true, latest: undefined } : m.live),
+        fromName: m.from === 'me' || m.kind === 'notice' ? undefined : this.nameOf(m.from),
+        reply: m.replyTo ? replyPreview(m.replyTo, replyLookup, (a) => a === 'me' ? 'You' : this.nameOf(a), replyToHash) : undefined,
+        file: file && {
+          name: file.name,
+          mime: file.mime,
+          size: file.size,
+          width: file.width,
+          height: file.height,
+          thumbnail: file.thumbnail ? plain(fromBase64(file.thumbnail)) : undefined,
+          durationMs: file.durationMs,
+          voiceNote: file.voiceNote,
+          downloaded: file.downloaded,
+        },
+      }))
+    })
   }
 
   private typingNow(): number {
@@ -2448,10 +2470,88 @@ export class Engine {
     return true
   }
 
-  async sendText(conversationId: string, text: string, replyTo?: string) {
+  /** A device-local read. A late UI response must not replace newer typing. */
+  async getDraft(conversationId: string): Promise<Draft> {
+    const session = this.draftSession()
+    return this.exclusive(async () => {
+      this.assertDraftSession(session)
+      if (!this.conv(conversationId)) throw new Error('Conversation not found')
+      const draft = await this.readDraft(conversationId, session.accountId)
+      this.assertDraftSession(session)
+      return this.conv(conversationId)?.status ? { text: '', revision: draft.revision } : draft
+    })
+  }
+
+  /** CAS is serialized within this engine only. It does not synchronize tabs. */
+  async saveDraft(conversationId: string, text: string, expectedRevision: number): Promise<DraftSave> {
+    const session = this.draftSession()
+    if (typeof text !== 'string') throw new Error('Draft text must be a string')
+    this.requireDraftRevision(expectedRevision)
+    return this.exclusive(async () => {
+      this.assertDraftSession(session)
+      const conv = this.conv(conversationId)
+      if (!conv || conv.status) throw new Error('This conversation cannot accept a draft')
+      const current = await this.readDraft(conversationId, session.accountId)
+      this.assertDraftSession(session)
+      if (current.revision !== expectedRevision) return { applied: false, draft: current }
+      const draft = { text, revision: this.nextDraftRevision(current.revision) }
+      await this.store.putJson(this.draftKey(conversationId, session.accountId), draft)
+      this.assertDraftSession(session)
+      this.emit({ type: 'draft', conversationId, draft })
+      return { applied: true, draft }
+    })
+  }
+
+  private draftSession() {
+    return { accountId: this.ready().account.accountId, epoch: this.draftEpoch }
+  }
+
+  private assertDraftSession(session: { accountId: string; epoch: number }) {
+    if (session.epoch !== this.draftEpoch || session.accountId !== this.account?.accountId) throw new Error('The draft session ended')
+  }
+
+  private draftKey(conversationId: string, accountId: string) {
+    return `draft:${accountId}:${conversationId}`
+  }
+
+  private requireDraftRevision(revision: number) {
+    if (!Number.isSafeInteger(revision) || revision < 0) throw new Error('Invalid draft revision')
+  }
+
+  private nextDraftRevision(revision: number) {
+    this.requireDraftRevision(revision)
+    if (revision === Number.MAX_SAFE_INTEGER) throw new Error('Draft revision limit reached')
+    return revision + 1
+  }
+
+  private async readDraft(conversationId: string, accountId: string): Promise<Draft> {
+    const saved = await this.store.getJson<Draft>(this.draftKey(conversationId, accountId))
+    const fence = Object.hasOwn(this.state.draftClears, conversationId) ? this.state.draftClears[conversationId] : 0
+    this.requireDraftRevision(fence)
+    if (!saved) return { text: '', revision: fence }
+    this.requireDraftRevision(saved.revision)
+    if (typeof saved.text !== 'string') throw new Error('Invalid saved draft')
+    return saved.revision > fence ? saved : { text: '', revision: fence }
+  }
+
+  /** Caller owns the engine lock and persists the fence with its lifecycle change. */
+  private async invalidateDraft(conversationId: string) {
+    const draft = await this.readDraft(conversationId, this.ready().account.accountId)
+    const cleared = { text: '', revision: this.nextDraftRevision(draft.revision) }
+    this.state.draftClears[conversationId] = cleared.revision
+    this.draftChanges.set(conversationId, cleared)
+  }
+
+  async sendText(conversationId: string, text: string, replyTo?: string, draftRevision?: number): Promise<TextSent> {
     const { core } = this.ready()
-    this.checkCanSend(conversationId)
-    await this.exclusive(async () => {
+    const session = this.draftSession()
+    if (draftRevision !== undefined) this.requireDraftRevision(draftRevision)
+    const result = await this.exclusive(async (): Promise<TextSent> => {
+      this.assertDraftSession(session)
+      this.checkCanSend(conversationId)
+      if (!this.conv(conversationId)) throw new Error('Conversation not found')
+      const current = draftRevision === undefined ? undefined : await this.readDraft(conversationId, session.accountId)
+      this.assertDraftSession(session)
       // Keep the stop and message ahead of typing requests from a newer draft.
       await this.sendTypingLocked(conversationId, false)
       const messageId = randomId()
@@ -2464,17 +2564,61 @@ export class Engine {
         replyToHash: target ? target.contentHash : undefined, sentAt, status: 'sending',
       }
       const envelope = this.encode(core, conversationId, message)
+      this.acceptingText.add(message.id)
       this.state.outbox.push({
         messageId: toHex(messageId),
         conversationId,
         envelope: toBase64(envelope),
         recipients: this.recipients(conversationId),
       })
-      await this.appendMessage(conversationId, message)
-      // The ratchet advanced: persist before anything leaves the device.
-      await this.persist()
+      try {
+        await this.appendMessage(conversationId, message)
+        // The ratchet advanced: persist before anything leaves the device.
+        this.assertDraftSession(session)
+        return await this.persistDraftAcceptance(conversationId, text, draftRevision, current, session.accountId)
+      } catch (error) {
+        // Never transmit an action that the UI saw rejected. Keep the advanced ratchet.
+        this.state.outbox = this.state.outbox.filter((item) => item.messageId !== message.id)
+        await this.setStatus(conversationId, message.id, 'failed', 'Not accepted on this device. Try again.').catch(() => undefined)
+        throw error
+      } finally {
+        this.acceptingText.delete(message.id)
+      }
     })
     void this.flushOutbox()
+    return result
+  }
+
+  /** The caller holds the engine lock and has added the outbox or upload-resume entry. */
+  private async persistDraftAcceptance(conversationId: string, text: string, draftRevision: number | undefined, current: Draft | undefined, accountId: string): Promise<TextSent> {
+    const consumed = current !== undefined && current.revision === draftRevision && current.text.trim() === text.trim()
+    const previousFence = this.state.draftClears[conversationId]
+    const previousChange = this.draftChanges.get(conversationId)
+    if (consumed) {
+      const cleared = { text: '', revision: this.nextDraftRevision(current.revision) }
+      this.state.draftClears[conversationId] = cleared.revision
+      this.draftChanges.set(conversationId, cleared)
+    }
+    try {
+      // The local send queue and clearing fence share this encrypted app record.
+      await this.persist()
+    } catch (error) {
+      if (consumed) {
+        if (previousFence === undefined) delete this.state.draftClears[conversationId]
+        else this.state.draftClears[conversationId] = previousFence
+        if (previousChange === undefined) this.draftChanges.delete(conversationId)
+        else this.draftChanges.set(conversationId, previousChange)
+      }
+      throw error
+    }
+    if (consumed) {
+      // Cleanup is best effort. A durable accepted send must remain accepted.
+      await this.store.deleteBytes(this.draftKey(conversationId, accountId)).catch(() => undefined)
+    }
+    if (!current) return {}
+    if (!consumed) return { draft: current }
+    const consumedRevision = this.state.draftClears[conversationId]
+    return { draft: { text: '', revision: consumedRevision }, consumedRevision }
   }
 
   /**
@@ -2577,13 +2721,19 @@ export class Engine {
    * file is sealed under a new key and kept here sealed, then uploaded; the
    * key goes to the group in an MLS message.
    */
-  async sendFile(conversationId: string, file: File, caption: string, media?: MediaInfo) {
-    this.ready()
+  async sendFile(conversationId: string, file: File, caption: string, media?: MediaInfo, draftRevision?: number): Promise<TextSent> {
+    const session = this.draftSession()
+    if (draftRevision !== undefined) this.requireDraftRevision(draftRevision)
     this.checkCanSend(conversationId)
     if (file.size === 0) throw new Error('That file is empty')
     if (file.size > MAX_ATTACHMENT_BYTES) throw new Error('Files can be up to 100 MB')
     // Capture the user action before preparation and upload can overlap a newer draft.
-    const sentAt = await this.exclusive(async () => this.compositionSentAt())
+    const sentAt = await this.exclusive(async () => {
+      this.assertDraftSession(session)
+      if (!this.conv(conversationId)) throw new Error('Conversation not found')
+      this.checkCanSend(conversationId)
+      return this.compositionSentAt()
+    })
     const image = await prepareImage(file, this.state.media.quality)
     // Clips: where they were filmed is blanked (ADR-0024).
     const data = image?.data ?? (isMp4(file.type) ? await scrubMp4(file) : file)
@@ -2596,9 +2746,12 @@ export class Engine {
     const size = image ? { width: image.width, height: image.height } : safeSize(clip?.width, clip?.height)
     const name = safeName(image && image.data !== file ? renamed(file.name, mime) : file.name)
     const messageId = toHex(randomId())
-    await this.store.putFile(messageId, sealed.body)
-    await this.exclusive(() =>
-      this.appendMessage(conversationId, {
+    const result = await this.exclusive(async () => {
+      this.assertDraftSession(session)
+      this.checkCanSend(conversationId)
+      const current = draftRevision === undefined ? undefined : await this.readDraft(conversationId, session.accountId)
+      this.assertDraftSession(session)
+      const message: StoredMessage = {
         id: messageId,
         from: 'me',
         text: caption,
@@ -2616,9 +2769,29 @@ export class Engine {
           key: toBase64(key),
           digest: toBase64(sealed.digest),
         },
-      }),
-    )
+      }
+      const previousTransfers = this.state.transfers
+      let historyStored = false
+      try {
+        await this.store.putFile(messageId, sealed.body)
+        await this.appendMessage(conversationId, message)
+        historyStored = true
+        this.assertDraftSession(session)
+        this.state.transfers = [...previousTransfers, { conversationId, messageId, kind: 'upload' }]
+        return await this.persistDraftAcceptance(conversationId, caption, draftRevision, current, session.accountId)
+      } catch (error) {
+        this.state.transfers = previousTransfers
+        if (historyStored) {
+          // Keep the sealed body for explicit retry; never leave an unqueued sending card.
+          await this.setStatus(conversationId, messageId, 'failed', 'Not accepted on this device. Try again.').catch(() => undefined)
+        } else {
+          await this.store.putFile(messageId, undefined).catch(() => undefined)
+        }
+        throw error
+      }
+    })
     void this.uploadAndSend(conversationId, messageId)
+    return result
   }
 
   /** Remembers a transfer to resume, or forgets it (`add` false). */
@@ -2942,6 +3115,7 @@ export class Engine {
       if (!this.core!.isActive(event.conversationId)) {
         // A commit removed us (or committed our own departure). End local live points.
         conv.status ??= 'removed'
+        await this.invalidateDraft(conversationId)
         const localSessions = this.state.live.filter((l) => l.conversationId === conversationId)
         const seenSessions = this.state.liveSeen.filter((l) => l.conversationId === conversationId)
         this.state.live = this.state.live.filter((l) => l.conversationId !== conversationId)
@@ -2975,6 +3149,7 @@ export class Engine {
           recipients: this.recipients(conversationId),
         })
         conv.status = 'left'
+        await this.invalidateDraft(conversationId)
         this.emitView()
       }
     } else if (event.kind === 'message') {
@@ -3134,6 +3309,7 @@ export class Engine {
     try {
       while (this.state.outbox.length > 0 && this.connection === 'online') {
         const item = this.state.outbox[0]
+        if (this.acceptingText.has(item.messageId)) return
         const result = await this.request((id) =>
           encodeSend(
             id,
@@ -3504,11 +3680,31 @@ export class Engine {
     this.emit({ type: 'messages', conversationId })
   }
 
+  /** Recover only loaded history. The caller holds the lock, excluding provisional acceptance. */
+  private async recoverUnacceptedMessages(conversationId: string, list: StoredMessage[]) {
+    const queued = new Set([
+      ...this.state.outbox.map((item) => item.messageId),
+      ...this.state.transfers.filter((item) => item.kind === 'upload').map((item) => item.messageId),
+    ])
+    let changed = false
+    for (const message of list) {
+      if (message.from !== 'me' || message.status !== 'sending' || queued.has(message.id)) continue
+      // The sealed body, if any, remains available for an explicit retry.
+      message.status = 'failed'
+      message.error = 'Not accepted on this device. Try again.'
+      changed = true
+    }
+    // This is derived display recovery, not send acceptance. Keep readable history available.
+    if (changed) await this.store.putJson(`messages:${conversationId}`, list).catch(() => undefined)
+  }
+
   private async persist() {
     this.backupDirty = true
     this.state.seen = this.recent.toJSON()
     await this.store.putBytes('core', this.core!.snapshot())
     await this.store.putJson('app', this.state)
+    for (const [conversationId, draft] of this.draftChanges) this.emit({ type: 'draft', conversationId, draft })
+    this.draftChanges.clear()
   }
 
   private exclusive<T>(fn: () => Promise<T>): Promise<T> {

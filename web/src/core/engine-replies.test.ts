@@ -15,6 +15,7 @@ describe('conversation reply lookup', () => {
       { ...base, id: '55'.repeat(16), kind: 'notice', contentHash: hash },
       { ...base, id: '66'.repeat(16), status: 'sending' },
     ]
+    engine['state'].outbox.push({ messageId: '66'.repeat(16), conversationId: 'conversation-a', envelope: '', recipients: [] })
     engine['stored'] = vi.fn(async () => history)
     const messages = await engine.messages('conversation-a')
     expect(messages.map((message) => message.canReply)).toEqual([true, false, false, false, false, false])
