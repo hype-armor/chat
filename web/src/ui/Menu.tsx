@@ -4,6 +4,8 @@ export type MenuItem = {
   label: string
   onSelect: () => void
   danger?: boolean
+  /** A toggle item. Omit for an ordinary command. */
+  checked?: boolean
 }
 
 export function Menu({
@@ -29,10 +31,11 @@ export function Menu({
 
   useEffect(() => {
     if (!open) return
-    const buttons = menu.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')
+    const buttons = menu.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"], [role="menuitemcheckbox"]')
     buttons?.[initialFocus.current === -1 ? buttons.length - 1 : 0]?.focus()
-    const outside = (event: MouseEvent) => {
-      if (event.target instanceof Node && !root.current?.contains(event.target)) close()
+    const outside = (event: Event) => {
+      // An outside gesture can open another menu. Do not steal its focus.
+      if (event.target instanceof Node && !root.current?.contains(event.target)) setOpen(false)
     }
     const escape = (event: globalThis.KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -40,10 +43,12 @@ export function Menu({
         close()
       }
     }
-    document.addEventListener('click', outside)
+    document.addEventListener('pointerdown', outside)
+    document.addEventListener('focusin', outside)
     document.addEventListener('keydown', escape)
     return () => {
-      document.removeEventListener('click', outside)
+      document.removeEventListener('pointerdown', outside)
+      document.removeEventListener('focusin', outside)
       document.removeEventListener('keydown', escape)
     }
   }, [open])
@@ -53,7 +58,7 @@ export function Menu({
       close()
       return
     }
-    const buttons = Array.from(menu.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])
+    const buttons = Array.from(menu.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"], [role="menuitemcheckbox"]') ?? [])
     const current = buttons.indexOf(document.activeElement as HTMLButtonElement)
     let next: number
     switch (event.key) {
@@ -106,7 +111,8 @@ export function Menu({
           {items.map((item) => (
             <button
               type="button"
-              role="menuitem"
+              role={item.checked === undefined ? 'menuitem' : 'menuitemcheckbox'}
+              aria-checked={item.checked}
               tabIndex={-1}
               key={item.label}
               className={item.danger ? 'danger' : undefined}
@@ -115,7 +121,7 @@ export function Menu({
                 item.onSelect()
               }}
             >
-              {item.label}
+              {item.checked && <span aria-hidden="true">✓ </span>}{item.label}
             </button>
           ))}
         </div>

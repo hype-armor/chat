@@ -7,6 +7,7 @@ import { Invite } from './Invite'
 import { Backup } from './Backup'
 import { Avatar, useAvatarPhoto } from './Avatar'
 import { Menu, type MenuItem } from './Menu'
+import { MessageActions } from './MessageActions'
 import { Attachment } from './Attachment'
 import { Recorder } from './Recorder'
 import { Media } from './Media'
@@ -1258,7 +1259,14 @@ function Conversation({
     const controller = isGroup ? groupCalls : calls
     void controller.start(id, title, video).catch((e) => setAttachError(String(e.message ?? e)))
   }
+  const toggleTyping = () => {
+    setTypingError('')
+    void core.setTypingIndicators(!typingEnabled).catch((error: unknown) => {
+      setTypingError(error instanceof Error ? error.message : 'Could not change typing indicators')
+    })
+  }
   const menuItems: MenuItem[] = [
+    { label: 'Typing indicators', checked: typingEnabled, onSelect: toggleTyping },
     ...(compactHeader && canCall ? [
       { label: isGroup ? 'Group voice call' : 'Voice call', onSelect: () => startCall(false) },
       { label: isGroup ? 'Group video call' : 'Video call', onSelect: () => startCall(true) },
@@ -1476,10 +1484,17 @@ function Conversation({
                   {m.text}
                 </li>
               ) : (
-                <li
+                <MessageActions
                   className={`${m.from === 'me' ? 'mine' : 'theirs'}${first ? ' run-first' : ''}${last ? ' run-last' : ''}`}
-                  data-testid="message"
                   title={new Date(m.sentAt).toLocaleString()}
+                  author={m.from === 'me' ? 'You' : m.fromName ?? title}
+                  enabled={active && !blocked && !request && m.canReply === true}
+                  onReply={() => {
+                    if (m.canReply !== true) return
+                    setAttachError(undefined)
+                    editReply(quoteMessage(m))
+                    composer.current?.focus({ preventScroll: true })
+                  }}
                 >
                   <span className={isGroup && m.from !== 'me' && first ? 'sender small' : 'visually-hidden'}>
                     {m.from === 'me' ? 'You' : m.fromName ?? (isGroup ? m.from : title)}
@@ -1497,10 +1512,6 @@ function Conversation({
                   {m.live && <LiveCard core={core} conversationId={id} message={m} live={m.live} />}
                   {m.reply && <ReplyPreview quote={m.reply} />}
                   {m.text && <MessageText text={m.text} />}
-                  {active && !blocked && !request && <button type="button" className="link small message-reply" aria-label={`Reply to ${m.from === 'me' ? 'your message' : m.fromName ?? title}`} onClick={() => {
-                    editReply(quoteMessage(m))
-                    composer.current?.focus({ preventScroll: true })
-                  }}>Reply</button>}
                   <span className={last || m.status === 'failed' ? 'meta small' : 'visually-hidden'}>
                     <time
                       className={last ? undefined : 'visually-hidden'}
@@ -1529,7 +1540,7 @@ function Conversation({
                       Retry
                     </button>
                   )}
-                </li>
+                </MessageActions>
               )}
             </Fragment>
           ))}
@@ -1587,13 +1598,6 @@ function Conversation({
         }} />}
         <div className="typing-controls">
           <span role="status" aria-live="polite">{typingNames.length > 0 ? `${typingNames.join(', ')} ${typingNames.length === 1 ? 'is' : 'are'} typing…` : ''}</span>
-          <label className="small"><input type="checkbox" checked={typingEnabled} onChange={(e) => {
-            const enabled = e.target.checked
-            setTypingError('')
-            void core.setTypingIndicators(enabled).catch((error: unknown) => {
-              setTypingError(error instanceof Error ? error.message : 'Could not change typing indicators')
-            })
-          }} /> Typing indicators</label>
           {typingError && <span role="alert">{typingError}</span>}
         </div>
         <div className="composer-row">

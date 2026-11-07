@@ -167,6 +167,8 @@ export type ReplyPreview = {
 }
 
 export type ChatMessage = {
+  /** Worker-derived eligibility. Only true permits composing a verified reply. */
+  canReply?: boolean
   /** Encrypted reference to a message in this conversation. */
   replyTo?: string
   /** Resolved by the worker, never trusted from a sender. */

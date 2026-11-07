@@ -1,0 +1,30 @@
+.messages > li[aria-haspopup='menu']:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 3px;
+}
+
+.message-actions-menu {
+  position: fixed;
+  z-index: 40;
+  display: grid;
+  min-width: 9rem;
+  max-width: calc(100vw - 1rem);
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  color: var(--fg);
+  box-shadow: 0 0.25rem 1rem #0003;
+}
+
+.message-actions-menu button {
+  min-height: 2.75rem;
+  background: none;
+  color: inherit;
+  text-align: left;
+}
+
+.message-actions-menu button:hover,
+.message-actions-menu button:focus-visible {
+  background: var(--theirs);
+}

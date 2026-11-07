@@ -1654,8 +1654,10 @@ export class Engine {
     const now = Date.now()
     const list = await this.stored(conversationId)
     const replyLookup = buildReplyLookup(list)
-    return list.map(({ file, contentHash: _contentHash, replyToHash, ...m }) => ({
+    return list.map(({ file, contentHash, replyToHash, ...m }) => ({
       ...m,
+      canReply: m.kind !== 'notice' && validReplyId(m.id) && validContentHash(contentHash) &&
+        replyLookup.get(m.id)?.contentHash === contentHash,
       // An ended session shows no point, even before the sweep forgets it.
       live: m.live && (m.live.ended || m.live.expiresAt <= now ? { ...m.live, ended: true, latest: undefined } : m.live),
       fromName: m.from === 'me' || m.kind === 'notice' ? undefined : this.nameOf(m.from),
