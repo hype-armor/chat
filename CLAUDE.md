@@ -42,6 +42,9 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   Map error fallbacks must preserve map dimensions so dialog controls do not move
   during activation.
 - Run browser tests against isolated test services, never a live deployment.
+- Rust Docker build stages must retain the shared BuildKit Cargo lock and CPU-sized
+  job budget. Use `scripts/compose-build.sh` for sequential image builds and run
+  `scripts/test-compose-build.sh` after changes to build controls.
 - Run responsive UI and interaction fixtures with
   `PW_ALL_BROWSERS=1 pnpm --filter web exec playwright test -c playwright.fixtures.config.ts`.
   These fixtures do not prove call transport. The narrow-header echo-call test

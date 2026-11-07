@@ -5,7 +5,11 @@
 FROM rust:1.99-bookworm AS wasm
 WORKDIR /src
 COPY . .
-RUN cargo install wasm-bindgen-cli --locked --version "$(scripts/wasm-bindgen-version.sh)" \
+ARG CARGO_BUILD_JOBS
+# One CPU-sized Cargo build at a time, even when Compose builds images in parallel.
+RUN --mount=type=cache,id=chat-cargo-build-slot,target=/var/lock/chat-cargo-build,sharing=locked \
+    export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-$(nproc)}" \
+ && cargo install wasm-bindgen-cli --locked --version "$(scripts/wasm-bindgen-version.sh)" \
  && scripts/build-wasm.sh
 
 # 2. TypeScript/React app
