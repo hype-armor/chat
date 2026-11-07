@@ -35,7 +35,9 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   Typing indicators use encrypted, expiring events, not history or persistent retries
   (ADR-0038). Never include draft text in typing events.
 - UI regression tests must cover native link selection, quoted replies, typing
-  expiry, and scroll position during keyboard/media resize. Own sends reach the
+  expiry, message/link action gestures, non-selectable message metadata, and scroll position
+  during keyboard/media resize.
+  Reply actions require worker-confirmed eligibility. Own sends reach the
   bottom; incoming messages must not displace a reader who scrolled up.
   Map error fallbacks must preserve map dimensions so dialog controls do not move
   during activation.
@@ -54,7 +56,7 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   focus without interference from details focus restoration.
 - For new or updated E2E composer selectors, use
   `getByRole('textbox', { name: 'Message', exact: true })`.
-  Partial label matches also select Reply buttons once messages exist.
+  Partial label matches can select other message controls.
 - E2E specs import `test` from `web/e2e/fixtures.ts`, not directly from
   `@playwright/test`. The fixture closes manually created client contexts
   after each test, including failures; the browser itself is worker-scoped.

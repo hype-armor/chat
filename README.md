@@ -72,6 +72,13 @@ CSP, real server delivery, native share sheets, or physical phone keyboards.
 See the [interaction comparison](docs/ui-feature-comparison.md) and
 [ADR-0038](docs/adr/0038-encrypted-replies-and-typing.md).
 
+Open message actions with a long press, right-click, or Shift+F10 on a focused message.
+Reply appears only when this device has the original verification data.
+Older messages remain readable but do not show an unavailable Reply action.
+The conversation menu contains the optional typing-indicator setting.
+Link actions appear only after a link long press, right-click, or keyboard context-menu command.
+Ordinary link clicks still open the link. Share appears only when the browser supports it.
+
 Full stack with PostgreSQL, Valkey, SeaweedFS (S3) and LiveKit:
 
 ```sh

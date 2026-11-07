@@ -406,6 +406,25 @@ describe('engine encrypted replies', () => {
     await expect(engine.sendText(secondId, 'Wrong conversation', targetId)).rejects.toThrow('not in this conversation')
   })
 
+  it('rejects a direct reply to legacy history even when a stored eligibility hint permits it', async () => {
+    const { engine, values, sendText } = setup()
+    const legacy = { id: targetId, from: peer, text: 'Legacy original', sentAt: 1, status: 'received', canReply: true }
+    values.set(`messages:${conversationId}`, [legacy])
+
+    // Bypass UI eligibility and call the worker without any draft or typing setup.
+    await expect(engine.sendText(conversationId, 'Reply', targetId)).rejects.toThrow('cannot be verified')
+    expect(sendText).not.toHaveBeenCalled()
+    expect(engine['state'].outbox).toEqual([])
+    expect(engine['flushOutbox']).not.toHaveBeenCalled()
+    expect(values.get(`messages:${conversationId}`)).toEqual([legacy])
+    expect(legacy).not.toHaveProperty('contentHash')
+
+    // Reject only the unverified reply; a standalone message can still be sent.
+    await engine.sendText(conversationId, 'Standalone message')
+    expect(sendText).toHaveBeenCalledTimes(1)
+    expect(engine['state'].outbox).toHaveLength(1)
+  })
+
   it('does not verify substituted IDs or legacy targets without authenticated content hashes', async () => {
     const { engine, apply, values } = setup()
     values.set(`messages:${conversationId}`, [{ id: targetId, from: peer, text: 'Substituted original', sentAt: 1, status: 'received', contentHash: 'cc'.repeat(32) }])

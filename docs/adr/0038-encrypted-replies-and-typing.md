@@ -31,6 +31,17 @@ The UI must show an unavailable-original label when resolution or hash verificat
 Missing hashes, malformed hashes, and legacy originals without stored hashes must produce the same unavailable-original result.
 New outgoing replies must supply both a valid reference and its verified original content hash.
 A preview must not fetch attachments or retain expired location coordinates.
+The worker must expose reply eligibility without exposing original content hashes.
+The UI must require `canReply === true` before it enters reply composition.
+Missing legacy verification data must not cause a late send failure from an advertised reply action.
+The UI must omit Reply for ineligible messages, without adding an explanation or changing the current draft or selected quote.
+A pending message can become eligible after encryption records its original hash.
+Reply appears in the message action menu, opened by long press, right-click, or the keyboard context-menu command.
+Links must use a separate long-press action menu for Open, Copy link, and supported Share.
+A link gesture must not open the message Reply menu. Ordinary link clicks and pre-existing text selections must retain their behavior.
+Media and other native controls must retain their own interactions.
+Timestamps, sender labels, date separators, and delivery metadata must not support text selection. Message bodies and links must remain selectable.
+The conversation menu contains the typing-indicator toggle; the composer does not show an inline checkbox.
 
 Add `Content.typing`, tag 12, with `Typing.active` and `Typing.expires_at_ms`.
 Use `Content.sent_at_ms` to order updates from each authenticated sender device.
