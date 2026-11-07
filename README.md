@@ -79,6 +79,10 @@ The conversation menu contains the optional typing-indicator setting.
 Link actions appear only after a link long press, right-click, or keyboard context-menu command.
 Ordinary link clicks still open the link. Share appears only when the browser supports it.
 
+Unsent text is saved separately for each chat in encrypted storage on this device.
+It returns after switching chats or reopening the app in the same browser profile.
+Drafts are not synchronized or included in backups. Browser data removal or eviction can erase them.
+
 ### CPU-sized container builds
 
 Use `scripts/compose-build.sh` to build `server`, `web`, `echo-invite`, and `echo` sequentially.

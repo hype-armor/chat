@@ -47,9 +47,12 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
       return { type: 'ok' }
     case 'messages':
       return { type: 'messages', messages: await engine.messages(request.conversationId) }
+    case 'getDraft':
+      return { type: 'draft', draft: await engine.getDraft(request.conversationId) }
+    case 'saveDraft':
+      return { type: 'draftSaved', ...await engine.saveDraft(request.conversationId, request.text, request.expectedRevision) }
     case 'sendText':
-      await engine.sendText(request.conversationId, request.text, request.replyTo)
-      return { type: 'ok' }
+      return { type: 'textSent', ...await engine.sendText(request.conversationId, request.text, request.replyTo, request.draftRevision) }
     case 'setTyping':
       await engine.setTyping(request.conversationId, request.active)
       return { type: 'ok' }
@@ -91,8 +94,7 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
       return { type: 'tile', data: data as Uint8Array<ArrayBuffer> | undefined }
     }
     case 'sendFile':
-      await engine.sendFile(request.conversationId, request.file, request.caption, request.media)
-      return { type: 'ok' }
+      return { type: 'fileSent', ...await engine.sendFile(request.conversationId, request.file, request.caption, request.media, request.draftRevision) }
     case 'openAttachment':
       return { type: 'file', blob: await engine.openAttachment(request.conversationId, request.messageId) }
     case 'setAvatar':

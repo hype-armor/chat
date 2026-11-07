@@ -42,7 +42,7 @@ describe('CoreClient', () => {
       { type: 'setTyping', conversationId: 'conversation', active: true },
       { type: 'setTypingIndicators', on: false },
     ])
-    for (const { id } of worker.sent) worker.reply({ id, body: { type: 'ok' } })
+    for (const { id, request } of worker.sent) worker.reply({ id, body: { type: request.type === 'sendText' ? 'textSent' : 'ok' } })
     await Promise.all([sending, typing, disabling])
     const initial = client.typing('conversation')
     const typists = [{ account: 'authenticated-account', name: 'Alex' }]
@@ -52,6 +52,52 @@ describe('CoreClient', () => {
     client.subscribe((event) => seen.push(event))
     worker.reply({ id: 0, event: { type: 'typing', conversationId: 'conversation', typists } })
     expect(seen).toEqual([{ type: 'typing', conversationId: 'conversation', typists }])
+  })
+
+  it('carries local draft revisions and returns save conflicts and send consumption', async () => {
+    const worker = new FakeWorker()
+    const client = new CoreClient(worker)
+    const loading = client.getDraft('first')
+    const saving = client.saveDraft('first', '  exact whitespace\n', 7)
+    const sending = client.sendText('first', 'exact whitespace', undefined, 8)
+    expect(worker.sent.map(({ request }) => request)).toEqual([
+      { type: 'getDraft', conversationId: 'first' },
+      { type: 'saveDraft', conversationId: 'first', text: '  exact whitespace\n', expectedRevision: 7 },
+      { type: 'sendText', conversationId: 'first', text: 'exact whitespace', replyTo: undefined, draftRevision: 8 },
+    ])
+    worker.reply({ id: worker.sent[0].id, body: { type: 'draft', draft: { text: 'old', revision: 7 } } })
+    worker.reply({ id: worker.sent[1].id, body: { type: 'draftSaved', applied: false, draft: { text: 'other', revision: 8 } } })
+    worker.reply({ id: worker.sent[2].id, body: { type: 'textSent', draft: { text: '', revision: 9 }, consumedRevision: 9 } })
+    await expect(loading).resolves.toEqual({ text: 'old', revision: 7 })
+    await expect(saving).resolves.toEqual({ applied: false, draft: { text: 'other', revision: 8 } })
+    await expect(sending).resolves.toEqual({ draft: { text: '', revision: 9 }, consumedRevision: 9 })
+    const events: CoreEvent[] = []
+    client.subscribe((event) => events.push(event))
+    worker.reply({ id: 0, event: { type: 'draft', conversationId: 'first', draft: { text: '', revision: 9 } } })
+    expect(events).toEqual([{ type: 'draft', conversationId: 'first', draft: { text: '', revision: 9 } }])
+  })
+
+  it('carries a caption revision without changing the existing media argument', async () => {
+    const worker = new FakeWorker()
+    const client = new CoreClient(worker)
+    const file = new File(['body'], 'note.txt')
+    const sending = client.sendFile('conversation', file, 'caption', { durationMs: 1000 }, 3)
+    expect(worker.sent[0].request).toEqual({ type: 'sendFile', conversationId: 'conversation', file, caption: 'caption', media: { durationMs: 1000 }, draftRevision: 3 })
+    worker.reply({ id: worker.sent[0].id, body: { type: 'fileSent', draft: { text: '', revision: 4 }, consumedRevision: 4 } })
+    await expect(sending).resolves.toEqual({ draft: { text: '', revision: 4 }, consumedRevision: 4 })
+    const legacy = client.sendFile('conversation', file, '')
+    worker.reply({ id: worker.sent[1].id, body: { type: 'fileSent' } })
+    await expect(legacy).resolves.toEqual({})
+  })
+
+  it.each(['text', 'file'] as const)('does not infer consumption from an empty %s response snapshot', async (kind) => {
+    const worker = new FakeWorker()
+    const client = new CoreClient(worker)
+    const sending = kind === 'text'
+      ? client.sendText('conversation', 'caption', undefined, 1)
+      : client.sendFile('conversation', new File(['body'], 'note.txt'), 'caption', undefined, 1)
+    worker.reply({ id: worker.sent[0].id, body: { type: kind === 'text' ? 'textSent' : 'fileSent', draft: { text: '', revision: 2 } } })
+    await expect(sending).resolves.toEqual({ draft: { text: '', revision: 2 } })
   })
 
   it('rejects with the worker error message', async () => {

@@ -229,6 +229,15 @@ export type IceServer = { urls: string[]; username?: string; credential?: string
 export type CoreStatus = { version: string; selfTest: boolean }
 export type BenchResult = { members: number; setupMs: number; commitMs: number; commitBytes: number }
 
+/** Device-local text only. Revision CAS is scoped to one engine, not concurrent tabs. */
+export type Draft = { text: string; revision: number }
+export type DraftSave = { applied: boolean; draft: Draft }
+export type TextSent = {
+  draft?: Draft
+  /** The fence created by this accepted operation, not an inferred empty snapshot. */
+  consumedRevision?: number
+}
+
 export type CoreRequest =
   | { type: 'view' }
   | { type: 'signUp'; username: string; displayName: string; invite?: string }
@@ -244,7 +253,9 @@ export type CoreRequest =
   | { type: 'removeMember'; conversationId: string; account: string }
   | { type: 'leaveGroup'; conversationId: string }
   | { type: 'messages'; conversationId: string }
-  | { type: 'sendText'; conversationId: string; text: string; replyTo?: string }
+  | { type: 'getDraft'; conversationId: string }
+  | { type: 'saveDraft'; conversationId: string; text: string; expectedRevision: number }
+  | { type: 'sendText'; conversationId: string; text: string; replyTo?: string; draftRevision?: number }
   | { type: 'setTyping'; conversationId: string; active: boolean }
   | { type: 'typing'; conversationId: string }
   | { type: 'setTypingIndicators'; on: boolean }
@@ -260,7 +271,7 @@ export type CoreRequest =
   | { type: 'deviceNames'; conversationId: string }
   | { type: 'mapInfo' }
   | { type: 'tile'; z: number; x: number; y: number }
-  | { type: 'sendFile'; conversationId: string; file: File; caption: string; media?: MediaInfo }
+  | { type: 'sendFile'; conversationId: string; file: File; caption: string; media?: MediaInfo; draftRevision?: number }
   /** Sets this account's profile picture; no file removes it. */
   | { type: 'setAvatar'; file?: File }
   | { type: 'avatar'; account: string }
@@ -302,6 +313,10 @@ export type CoreRequest =
   | { type: 'bench'; members: number }
 
 export type CoreResponseBody =
+  | { type: 'draft'; draft: Draft }
+  | ({ type: 'draftSaved' } & DraftSave)
+  | ({ type: 'textSent' } & TextSent)
+  | ({ type: 'fileSent' } & TextSent)
   | { type: 'typing'; typists: Typist[] }
   | { type: 'view'; view: AppView }
   | { type: 'ok' }
@@ -331,6 +346,7 @@ export type CoreResponseBody =
 
 /** Pushed by the worker without a request. */
 export type CoreEvent =
+  | { type: 'draft'; conversationId: string; draft: Draft }
   | { type: 'typing'; conversationId: string; typists: Typist[] }
   | { type: 'view'; view: AppView }
   | { type: 'messages'; conversationId: string }

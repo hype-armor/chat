@@ -1,6 +1,9 @@
 import { scriptUrl } from '../trusted-types'
 import type {
   AppView,
+  Draft,
+  DraftSave,
+  TextSent,
   BenchResult,
   ChatMessage,
   CoreEvent,
@@ -135,8 +138,18 @@ export class CoreClient {
     return expect(await this.call({ type: 'messages', conversationId }), 'messages').messages
   }
 
-  async sendText(conversationId: string, text: string, replyTo?: string) {
-    expect(await this.call({ type: 'sendText', conversationId, text, replyTo }), 'ok')
+  async getDraft(conversationId: string): Promise<Draft> {
+    return expect(await this.call({ type: 'getDraft', conversationId }), 'draft').draft
+  }
+
+  async saveDraft(conversationId: string, text: string, expectedRevision: number): Promise<DraftSave> {
+    const { applied, draft } = expect(await this.call({ type: 'saveDraft', conversationId, text, expectedRevision }), 'draftSaved')
+    return { applied, draft }
+  }
+
+  async sendText(conversationId: string, text: string, replyTo?: string, draftRevision?: number): Promise<TextSent> {
+    const { draft, consumedRevision } = expect(await this.call({ type: 'sendText', conversationId, text, replyTo, draftRevision }), 'textSent')
+    return { ...(draft === undefined ? {} : { draft }), ...(consumedRevision === undefined ? {} : { consumedRevision }) }
   }
 
   async setTyping(conversationId: string, active: boolean) {
@@ -246,8 +259,9 @@ export class CoreClient {
   }
 
   /** Sends a photo or file; `caption` may be empty. */
-  async sendFile(conversationId: string, file: File, caption: string, media?: MediaInfo) {
-    expect(await this.call({ type: 'sendFile', conversationId, file, caption, media }), 'ok')
+  async sendFile(conversationId: string, file: File, caption: string, media?: MediaInfo, draftRevision?: number): Promise<TextSent> {
+    const { draft, consumedRevision } = expect(await this.call({ type: 'sendFile', conversationId, file, caption, media, draftRevision }), 'fileSent')
+    return { ...(draft === undefined ? {} : { draft }), ...(consumedRevision === undefined ? {} : { consumedRevision }) }
   }
 
   /** Sets this account's profile picture; without a file, removes it. */
