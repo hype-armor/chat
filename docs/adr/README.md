@@ -45,3 +45,4 @@ revisited; do it with a new ADR that supersedes the old one.
 | [0036](0036-visible-web-push-for-pwas.md) | Show Web Push for suspended and active PWAs | Accepted |
 | [0037](0037-live-location-until-stopped.md) | Until-stopped live location uses renewable leases | Accepted |
 | [0038](0038-encrypted-replies-and-typing.md) | Quoted replies and transient typing inside MLS content | Accepted |
+| [0039](0039-encrypted-local-chat-drafts.md) | Encrypted device-local drafts with revision-fenced send acceptance | Accepted |

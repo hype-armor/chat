@@ -1,4 +1,4 @@
-import { Fragment, type FormEvent, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { Fragment, type FormEvent, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CoreClient } from '../core/client'
 import type { AppView, ChatMessage, ConversationSummary, GroupCallStatus, MemberInfo } from '../core/protocol'
 import { SetupActions, SetupBanner, useSetup } from './Banners'
@@ -33,6 +33,7 @@ import {
 import { useBannerHeight, useVisualViewport } from './useVisualViewport'
 import { MessageText } from './MessageText'
 import { useMessageScroll } from './useMessageScroll'
+import { ConversationDrafts, useConversationDraft } from './useConversationDrafts'
 import { useModalBackground } from './useModalBackground'
 import { ReplyPreview, quoteMessage, useRemoteTyping, useSendTyping } from './messageInteractions'
 import type { ReplyPreview as ReplyQuote } from '../core/protocol'
@@ -100,6 +101,11 @@ export function Chat({
   onDiagnostics: () => void
 }) {
   useVisualViewport()
+  const drafts = useMemo(() => new ConversationDrafts(core), [core, view.me.account])
+  useLayoutEffect(() => {
+    drafts.activate()
+    return () => drafts.invalidate()
+  }, [drafts])
   const [selected, setSelected] = useState<string>()
   const [panel, setPanel] = useState<'chats' | 'settings' | 'chat' | 'group'>('chats')
   const hasLiveSharing = view.liveSharing.length > 0
@@ -265,6 +271,7 @@ export function Chat({
           <Conversation
             key={conversation.id}
             core={core}
+            drafts={drafts}
             calls={calls}
             groupCalls={groupCalls}
             id={conversation.id}
@@ -1112,6 +1119,7 @@ function AddPeople({ core, id, onDone }: { core: CoreClient; id: string; onDone:
 
 function Conversation({
   core,
+  drafts,
   calls,
   groupCalls,
   id,
@@ -1128,6 +1136,7 @@ function Conversation({
   onBack,
 }: {
   core: CoreClient
+  drafts: ConversationDrafts
   calls: CallController
   groupCalls: GroupCallController
   id: string
@@ -1220,18 +1229,10 @@ function Conversation({
     }
   }, [panelOpen, detailsVersion, calls, groupCalls])
   const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [draft, setDraft] = useState('')
-  const [replyTo, setReplyTo] = useState<ReplyQuote>()
-  const draftVersion = useRef(0)
-  const [failedDrafts, setFailedDrafts] = useState<Array<{ version: number; text: string; quote?: ReplyQuote; error: string }>>([])
-  const editDraft = (text: string) => {
-    draftVersion.current++
-    setDraft(text)
-  }
-  const editReply = (quote: ReplyQuote | undefined) => {
-    draftVersion.current++
-    setReplyTo(quote)
-  }
+  const draftState = useConversationDraft(drafts, id)
+  const { text: draft, quote: replyTo, failed: failedDrafts } = draftState
+  const editDraft = (text: string) => drafts.edit(id, text)
+  const editReply = (quote: ReplyQuote | undefined) => drafts.reply(id, quote)
   const typingEnabled = typingIndicators
   const [composerFocused, setComposerFocused] = useState(false)
   const [typingError, setTypingError] = useState('')
@@ -1333,32 +1334,11 @@ function Conversation({
   }, [recording])
 
   const send = async () => {
-    const text = draft.trim()
-    if (!text) return
-    const quote = replyTo
-    const originalDraft = draft
-    const submittedVersion = ++draftVersion.current
-    setDraft('')
-    setReplyTo(undefined)
+    if (!draft.trim()) return
     setAttachError(undefined)
-    // Keyboard activation unmounts the focused Send button; pointer sends keep focus here.
     composer.current?.focus({ preventScroll: true })
-    try {
-      scrollToBottom()
-      await core.sendText(id, text, quote?.messageId)
-      scrollToBottom()
-    } catch (e) {
-      const error = e instanceof Error ? e.message : String(e)
-      if (draftVersion.current === submittedVersion) {
-        // Restore the submitted pair only while this submission still owns the composer.
-        draftVersion.current++
-        setDraft(originalDraft)
-        setReplyTo(quote)
-      } else {
-        setFailedDrafts((current) => [...current, { version: submittedVersion, text: originalDraft, quote, error }])
-      }
-      setAttachError(error)
-    }
+    scrollToBottom()
+    if (await drafts.send(id)) scrollToBottom()
   }
 
   // The draft, if any, goes with the file as its caption.
@@ -1372,11 +1352,19 @@ function Conversation({
     setAttaching(true)
     setAttachError(undefined)
     try {
-      const media = recorded ?? (await probeClip(file).catch(() => undefined))
-      scrollToBottom()
-      await core.sendFile(id, file, draft.trim(), media)
-      scrollToBottom()
-      editDraft('')
+      const caption = await drafts.captureCaption(id)
+      if (!caption || !drafts.isActive()) return
+      if (caption.quote) {
+        setAttachError('Send or cancel your text reply before attaching a file.')
+        return
+      }
+      const accepted = await drafts.sendCaption(id, caption, async (revision) => {
+        const media = recorded ?? (await probeClip(file).catch(() => undefined))
+        if (!drafts.isActive()) throw new Error('The account session changed.')
+        scrollToBottom()
+        return core.sendFile(id, file, caption.text.trim(), media, revision)
+      })
+      if (accepted) scrollToBottom()
     } catch (e) {
       setAttachError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -1575,6 +1563,10 @@ function Conversation({
         }}
         hidden={!active || blocked || request}
       >
+        {draftState.issue && <div role="alert">
+          <p>{draftState.issue.message}</p>
+          {draftState.issue.kind !== 'send' && <button type="button" className="link small" onClick={() => drafts.retry(id)}>Retry draft</button>}
+        </div>}
         <div className="failed-drafts" hidden={failedDrafts.length === 0}>
         {failedDrafts.map((failed) => <section className="failed-draft" aria-label="Failed draft" key={failed.version}>
           <strong>Message was not sent</strong>
@@ -1583,13 +1575,10 @@ function Conversation({
           <p className="failed-draft-text">{failed.text}</p>
           <p className="small">Send or clear your current draft before restoring this message.</p>
           <button type="button" className="link small" disabled={draft !== '' || !!replyTo || recording || attaching} onClick={() => {
-            draftVersion.current++
-            setDraft(failed.text)
-            setReplyTo(failed.quote)
-            setFailedDrafts((current) => current.filter((item) => item.version !== failed.version))
+            drafts.restore(id, failed.version)
             composer.current?.focus({ preventScroll: true })
           }}>Restore failed draft</button>
-          <button type="button" className="link small" onClick={() => setFailedDrafts((current) => current.filter((item) => item.version !== failed.version))}>Discard failed draft</button>
+          <button type="button" className="link small" onClick={() => drafts.discard(id, failed.version)}>Discard failed draft</button>
         </section>)}
         </div>
         {replyTo && <ReplyPreview quote={replyTo} cancel={() => {
@@ -1648,7 +1637,7 @@ function Conversation({
             value={draft}
             onFocus={() => setComposerFocused(true)}
             onBlur={() => setComposerFocused(false)}
-            onChange={(e) => editDraft(e.target.value)}
+            onInput={(e) => editDraft(e.currentTarget.value)}
             onKeyDown={(e) => {
               if (
                 e.key === 'Enter' && !e.shiftKey &&

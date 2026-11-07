@@ -15,13 +15,22 @@ export async function openFixture(page: Page, name = 'Alice', room = 'single') {
   await expect(page.getByTestId('fixture-error')).toHaveCount(0)
 }
 
-export async function fixtureAction(page: Page, method: 'seed' | 'incoming' | 'legacyMessage' | 'makeReplyAvailable' | 'missingReply' | 'dropTypingStops' | 'holdNextSend' | 'rejectSend', value?: string | number) {
+export async function fixtureAction(page: Page, method: 'seed' | 'incoming' | 'legacyMessage' | 'makeReplyAvailable' | 'missingReply' | 'dropTypingStops' | 'holdNextSend' | 'rejectSend' | 'acceptSend' | 'seedDraft' | 'failDraftLoad' | 'failDraftSave' | 'conflictDraftSave' | 'holdDraftLoad' | 'releaseDraftLoad' | 'holdDraftSave' | 'releaseDraftSave' | 'restartUI' | 'addChat', value?: string | number) {
   await page.evaluate(({ method, value }) => {
     const fixture = (window as unknown as {
       interactionFixture: Record<string, (value?: string | number) => void>
     }).interactionFixture
     fixture[method](value)
   }, { method, value })
+}
+
+export async function fixtureDraft(page: Page, id = 'chat') {
+  return page.evaluate((id) => (window as unknown as { interactionFixture: { draft(id: string): { text: string; revision: number } } }).interactionFixture.draft(id), id)
+}
+
+export async function fixturePending(page: Page, kind: 'send' | 'load' | 'save') {
+  const method = kind === 'send' ? 'pendingSend' : kind === 'load' ? 'draftLoadPending' : 'draftSavePending'
+  return page.evaluate((method) => (window as unknown as { interactionFixture: Record<string, () => boolean> }).interactionFixture[method](), method)
 }
 
 export async function fixtureSend(page: Page, text: string) {

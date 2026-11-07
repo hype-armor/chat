@@ -2,7 +2,7 @@
 import { createRoot } from 'react-dom/client'
 import { Chat } from '../ui/Chat'
 import { canEncryptCalls, type CoreClient } from '../core/client'
-import type { AppView, ChatMessage } from '../core/protocol'
+import type { AppView, ChatMessage, Draft } from '../core/protocol'
 import { TypingLeases, TYPING_TTL_MS } from '../core/typing'
 import '../styles.css'
 
@@ -18,6 +18,20 @@ let stored: ChatMessage[] = []
 let dropTypingStops = false
 let holdNextSend = false
 let rejectPendingSend: ((error: Error) => void) | undefined
+let acceptPendingSend: (() => void) | undefined
+// Retained fake worker records survive restartUI(), not a page/process restart.
+// Production durability is covered by worker/storage tests, not browser storage.
+const draftRecords = new Map<string, Draft>()
+const attachmentCaptions: { id: string; text: string; name: string; revision?: number }[] = []
+const draftRecord = (id: string) => ({ ...(draftRecords.get(id) ?? { text: '', revision: 0 }) })
+let failDraftLoad = false
+let failDraftSave = false
+let conflictDraftSave = false
+let holdDraftLoad = false
+let releaseDraftLoad: (() => void) | undefined
+let holdDraftSave = false
+let releaseDraftSave: (() => void) | undefined
+let fixtureSession = 0
 let rejectMapInfo: ((error: Error) => void) | undefined
 const callActions: string[] = []
 const liveStarts: { conversationId: string; durationMs: number | null; location: { latitude: number; longitude: number; accuracyM: number } }[] = []
@@ -55,7 +69,32 @@ const receive = (data: { type: string; message?: ChatMessage; active?: boolean }
 channel.onmessage = ({ data }) => receive(data)
 const core = {
   subscribe: (listener: (event: unknown) => void) => { subscribers.add(listener); return () => subscribers.delete(listener) },
-  messages: async () => resolveMessages(),
+  messages: async (id: string) => id === 'chat' ? resolveMessages() : [],
+  getDraft: async (id: string) => {
+    if (failDraftLoad) throw new Error('Fixture draft load failed')
+    const draft = draftRecord(id)
+    if (holdDraftLoad) {
+      holdDraftLoad = false
+      await new Promise<void>((resolve) => { releaseDraftLoad = resolve })
+    }
+    return draft
+  },
+  saveDraft: async (id: string, text: string, expectedRevision: number) => {
+    if (holdDraftSave) {
+      holdDraftSave = false
+      await new Promise<void>((resolve) => { releaseDraftSave = resolve })
+    }
+    if (failDraftSave) throw new Error('Fixture draft save failed')
+    if (conflictDraftSave) {
+      conflictDraftSave = false
+      draftRecords.set(id, { text: 'Other saved text', revision: draftRecord(id).revision + 1 })
+    }
+    const previous = draftRecord(id)
+    if (expectedRevision !== previous.revision) return { applied: false, draft: previous }
+    const draft = { text, revision: expectedRevision + 1 }
+    draftRecords.set(id, draft)
+    return { applied: true, draft }
+  },
   markRead: async () => {},
   typing: async () => typists(),
   setTypingIndicators: async (on: boolean) => { view.typingIndicators = on; renderFixture() },
@@ -83,15 +122,27 @@ const core = {
     liveStarts.push({ conversationId, durationMs, location })
   },
   setTyping: async (_id: string, active: boolean) => channel.postMessage({ type: 'typing', active }),
-  sendText: async (_id: string, text: string, replyTo?: string) => {
+  sendFile: async (id: string, file: File, caption: string, _media: unknown, draftRevision?: number) => {
+    attachmentCaptions.push({ id, text: caption, name: file.name, revision: draftRevision })
+    // Model local acceptance and caption fencing, not media storage or upload.
+    return core.sendText(id, caption, undefined, draftRevision)
+  },
+  sendText: async (id: string, text: string, replyTo?: string, draftRevision?: number) => {
     if (holdNextSend) {
       holdNextSend = false
-      await new Promise<void>((_resolve, reject) => { rejectPendingSend = reject })
+      await new Promise<void>((resolve, reject) => { acceptPendingSend = resolve; rejectPendingSend = reject })
     }
     const message: ChatMessage = { id: crypto.randomUUID(), from: 'me', text, replyTo, sentAt: Date.now(), status: 'sent', canReply: true }
     stored.push(message)
     refresh()
     channel.postMessage({ type: 'message', message })
+    const previous = draftRecord(id)
+    let consumedRevision: number | undefined
+    if (previous.revision === draftRevision && previous.text.trim() === text) {
+      consumedRevision = previous.revision + 1
+      draftRecords.set(id, { text: '', revision: consumedRevision })
+    }
+    return { draft: draftRecord(id), consumedRevision }
   },
 } as unknown as CoreClient
 const view: Extract<AppView, { phase: 'ready' }> = {
@@ -104,6 +155,7 @@ Object.assign(window, {
   interactionFixture: {
     liveStarts,
     callActions,
+    attachmentCaptions,
     canEncryptCalls,
     incomingCall(group: boolean) {
       emit({ type: 'call', signal: {
@@ -117,6 +169,26 @@ Object.assign(window, {
     },
     dropTypingStops(value: number) { dropTypingStops = value === 1 },
     holdNextSend() { holdNextSend = true },
+    acceptSend() { acceptPendingSend?.(); acceptPendingSend = undefined; rejectPendingSend = undefined },
+    pendingSend() { return !!rejectPendingSend },
+    draft(id = 'chat') { return draftRecord(id) },
+    seedDraft(text: string) { draftRecords.set('chat', { text, revision: draftRecord('chat').revision + 1 }) },
+    failDraftLoad(value: number) { failDraftLoad = value === 1 },
+    failDraftSave(value: number) { failDraftSave = value === 1 },
+    conflictDraftSave() { conflictDraftSave = true },
+    holdDraftLoad() { holdDraftLoad = true },
+    draftLoadPending() { return !!releaseDraftLoad },
+    draftSavePending() { return !!releaseDraftSave },
+    releaseDraftLoad() { releaseDraftLoad?.(); releaseDraftLoad = undefined },
+    holdDraftSave() { holdDraftSave = true },
+    releaseDraftSave() { releaseDraftSave?.(); releaseDraftSave = undefined },
+    restartUI() { fixtureSession++; renderFixture() },
+    addChat() {
+      if (!view.conversations.some((conversation) => conversation.id === 'other')) {
+        view.conversations.push({ ...view.conversations[0], id: 'other', title: 'Other chat', peer: 'Other' })
+        renderFixture()
+      }
+    },
     rejectSend() { rejectPendingSend?.(new Error('Fixture send failed')); rejectPendingSend = undefined },
     seed(count: number) {
       stored = Array.from({ length: count }, (_, i) => ({ id: `history-${i}`, from: remote, fromName: remote, text: `History ${i}`, sentAt: Date.now() - (count - i) * 1000, status: 'received' as const, canReply: true }))
@@ -148,6 +220,6 @@ window.addEventListener('error', (event) => {
 })
 const fixtureRoot = createRoot(document.getElementById('root')!)
 function renderFixture() {
-  fixtureRoot.render(<Chat core={core} view={{ ...view }} showDiagnostics={false} onDiagnostics={() => {}} />)
+  fixtureRoot.render(<Chat key={fixtureSession} core={core} view={{ ...view }} showDiagnostics={false} onDiagnostics={() => {}} />)
 }
 renderFixture()
