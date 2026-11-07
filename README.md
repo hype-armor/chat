@@ -83,10 +83,34 @@ Unsent text is saved separately for each chat in encrypted storage on this devic
 It returns after switching chats or reopening the app in the same browser profile.
 Drafts are not synchronized or included in backups. Browser data removal or eviction can erase them.
 
+### CPU-sized container builds
+
+Use `scripts/compose-build.sh` to build `server`, `web`, `echo-invite`, and `echo` sequentially.
+It detects the available CPUs with `nproc` and passes that job count to Cargo.
+On a 1-CPU host, only 1 Cargo build runs with 1 compilation job at a time.
+Choose services or reduce the job budget explicitly:
+
+```sh
+scripts/compose-build.sh                  # server, web, echo-invite, echo; builds only
+scripts/compose-build.sh server web       # selected images
+CARGO_BUILD_JOBS=1 scripts/compose-build.sh # explicit budget
+```
+
+The Rust Dockerfile stages also share a BuildKit lock, so parallel image builds
+on the same builder cannot run multiple Cargo phases at once. Each phase uses
+its detected CPU count unless `--build-arg CARGO_BUILD_JOBS=N` overrides it.
+The limit covers the web image's `wasm-bindgen-cli` installation and WASM build.
+These Dockerfiles require BuildKit. Separate builders do not share the lock.
+The budget limits Cargo jobs, not every compiler thread or container CPU usage.
+The helper additionally serializes entire image builds. It does not restart
+containers, delete volumes, or change already-running builds. Run Docker commands
+from a root-capable shell when the Docker socket is restricted.
+
 Full stack with PostgreSQL, Valkey, SeaweedFS (S3) and LiveKit:
 
 ```sh
-docker compose -f deploy/compose/docker-compose.yml up --build
+scripts/compose-build.sh server web
+docker compose -f deploy/compose/docker-compose.yml up -d --no-build
 # first invite (sign-up is invite-only):
 docker compose -f deploy/compose/docker-compose.yml exec server \
   chat-server create-invite http://localhost:8000
