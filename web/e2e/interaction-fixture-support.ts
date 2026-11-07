@@ -1,4 +1,10 @@
-import { type Page, expect } from '@playwright/test'
+import { type Locator, type Page, expect } from '@playwright/test'
+
+export async function replyToMessage(page: Page, message: Locator) {
+  await message.focus()
+  await message.press('Shift+F10')
+  await page.getByRole('menu', { name: 'Message actions', exact: true }).getByRole('menuitem', { name: 'Reply', exact: true }).click()
+}
 
 export async function openFixture(page: Page, name = 'Alice', room = 'single') {
   // Block all transport requests. A fixture test must never reach a chat server.
@@ -9,7 +15,7 @@ export async function openFixture(page: Page, name = 'Alice', room = 'single') {
   await expect(page.getByTestId('fixture-error')).toHaveCount(0)
 }
 
-export async function fixtureAction(page: Page, method: 'seed' | 'incoming' | 'missingReply' | 'dropTypingStops' | 'holdNextSend' | 'rejectSend', value?: string | number) {
+export async function fixtureAction(page: Page, method: 'seed' | 'incoming' | 'legacyMessage' | 'makeReplyAvailable' | 'missingReply' | 'dropTypingStops' | 'holdNextSend' | 'rejectSend', value?: string | number) {
   await page.evaluate(({ method, value }) => {
     const fixture = (window as unknown as {
       interactionFixture: Record<string, (value?: string | number) => void>

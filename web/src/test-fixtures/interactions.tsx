@@ -58,7 +58,7 @@ const core = {
   messages: async () => resolveMessages(),
   markRead: async () => {},
   typing: async () => typists(),
-  setTypingIndicators: async () => {},
+  setTypingIndicators: async (on: boolean) => { view.typingIndicators = on; renderFixture() },
   avatar: async () => undefined,
   members: async () => [
     { account: name, name, isMe: true, isAdmin: true, blocked: false },
@@ -88,7 +88,7 @@ const core = {
       holdNextSend = false
       await new Promise<void>((_resolve, reject) => { rejectPendingSend = reject })
     }
-    const message: ChatMessage = { id: crypto.randomUUID(), from: 'me', text, replyTo, sentAt: Date.now(), status: 'sent' }
+    const message: ChatMessage = { id: crypto.randomUUID(), from: 'me', text, replyTo, sentAt: Date.now(), status: 'sent', canReply: true }
     stored.push(message)
     refresh()
     channel.postMessage({ type: 'message', message })
@@ -119,14 +119,23 @@ Object.assign(window, {
     holdNextSend() { holdNextSend = true },
     rejectSend() { rejectPendingSend?.(new Error('Fixture send failed')); rejectPendingSend = undefined },
     seed(count: number) {
-      stored = Array.from({ length: count }, (_, i) => ({ id: `history-${i}`, from: remote, fromName: remote, text: `History ${i}`, sentAt: Date.now() - (count - i) * 1000, status: 'received' as const }))
+      stored = Array.from({ length: count }, (_, i) => ({ id: `history-${i}`, from: remote, fromName: remote, text: `History ${i}`, sentAt: Date.now() - (count - i) * 1000, status: 'received' as const, canReply: true }))
       refresh()
     },
     incoming(text: string) {
-      receive({ type: 'message', message: { id: crypto.randomUUID(), from: remote, text, sentAt: Date.now(), status: 'received' } })
+      receive({ type: 'message', message: { id: crypto.randomUUID(), from: remote, text, sentAt: Date.now(), status: 'received', canReply: true } })
+    },
+    legacyMessage(value?: number) {
+      receive({ type: 'message', message: { id: crypto.randomUUID(), from: remote, text: 'Legacy message without verification data', sentAt: Date.now(), status: 'received', canReply: value === 1 ? undefined : false } })
+    },
+    makeReplyAvailable() {
+      // Simulate eligibility changing after worker encryption, not UI verification.
+      const message = stored.find((message) => message.canReply === false)
+      if (message) message.canReply = true
+      refresh()
     },
     missingReply() {
-      stored.push({ id: 'missing-reply', from: remote, fromName: remote, text: 'Reply without local original', replyTo: 'not-on-this-device', sentAt: Date.now(), status: 'received' })
+      stored.push({ id: 'missing-reply', from: remote, fromName: remote, text: 'Reply without local original', replyTo: 'not-on-this-device', sentAt: Date.now(), status: 'received', canReply: true })
       refresh()
     },
   },
@@ -137,4 +146,8 @@ window.addEventListener('error', (event) => {
   error.textContent = event.message
   document.body.append(error)
 })
-createRoot(document.getElementById('root')!).render(<Chat core={core} view={view} showDiagnostics={false} onDiagnostics={() => {}} />)
+const fixtureRoot = createRoot(document.getElementById('root')!)
+function renderFixture() {
+  fixtureRoot.render(<Chat core={core} view={{ ...view }} showDiagnostics={false} onDiagnostics={() => {}} />)
+}
+renderFixture()
