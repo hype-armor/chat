@@ -56,13 +56,14 @@ for (const width of [390, 641, 768, 1280, 1920]) {
         await expect(card).toBeVisible()
         await expect(card.locator('.file-icon text')).toHaveText('PDF')
         await expect(card).toContainText('13 B')
-        await expect(card.getByRole('button', { name: 'Download', exact: true })).toBeEnabled()
+        // The overlay makes the underlying chat inert, but its geometry must stay readable.
+        await expect(card.getByRole('button', { name: 'Download', exact: true, includeHidden: true })).toBeEnabled()
         await expect(card.locator('.file-name')).toHaveCSS('-webkit-line-clamp', '2')
         await expect(card.locator('.file-name')).toHaveAttribute('title', name)
         const bounds = (await card.boundingBox())!
         expect(bounds.x).toBeGreaterThanOrEqual(list.x)
         expect(bounds.x + bounds.width).toBeLessThanOrEqual(list.x + list.width)
-        const download = (await card.getByRole('button', { name: 'Download', exact: true }).boundingBox())!
+        const download = (await card.getByRole('button', { name: 'Download', exact: true, includeHidden: true }).boundingBox())!
         expect(download.x + download.width).toBeLessThanOrEqual(bounds.x + bounds.width)
         expect(await alice.locator('.messages-viewport').evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true)
         expect(await alice.evaluate('document.documentElement.scrollWidth')).toBe(width)

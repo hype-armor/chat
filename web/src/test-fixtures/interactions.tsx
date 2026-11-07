@@ -1,7 +1,7 @@
 // Browser-only UI fixture. No worker, encryption, storage, or server transport.
 import { createRoot } from 'react-dom/client'
 import { Chat } from '../ui/Chat'
-import type { CoreClient } from '../core/client'
+import { canEncryptCalls, type CoreClient } from '../core/client'
 import type { AppView, ChatMessage } from '../core/protocol'
 import { TypingLeases, TYPING_TTL_MS } from '../core/typing'
 import '../styles.css'
@@ -9,6 +9,8 @@ import '../styles.css'
 const params = new URLSearchParams(location.search)
 const name = params.get('name') ?? 'Alice'
 const remote = name === 'Alice' ? 'Bob' : 'Alice'
+const isGroup = params.get('group') === '1'
+const title = params.get('title') ?? remote
 const room = params.get('room') ?? 'fixture'
 const channel = new BroadcastChannel(`interaction-fixture-${room}`)
 const subscribers = new Set<(event: unknown) => void>()
@@ -17,6 +19,7 @@ let dropTypingStops = false
 let holdNextSend = false
 let rejectPendingSend: ((error: Error) => void) | undefined
 let rejectMapInfo: ((error: Error) => void) | undefined
+const callActions: string[] = []
 const liveStarts: { conversationId: string; durationMs: number | null; location: { latitude: number; longitude: number; accuracyM: number } }[] = []
 const leases = new TypingLeases()
 let lastTyping = ''
@@ -57,6 +60,19 @@ const core = {
   typing: async () => typists(),
   setTypingIndicators: async () => {},
   avatar: async () => undefined,
+  members: async () => [
+    { account: name, name, isMe: true, isAdmin: true, blocked: false },
+    { account: remote, name: remote, isMe: false, isAdmin: false, blocked: false },
+  ],
+  groupCallStatus: async () => undefined,
+  // Keep fixture calls at setup. These tests make no media or transport claim.
+  iceServers: () => { callActions.push('answer'); return new Promise(() => {}) },
+  callSignal: (_id: string, signal: { kind: string }) => {
+    callActions.push(signal.kind)
+    return signal.kind === 'offer' ? new Promise(() => {}) : Promise.resolve()
+  },
+  groupCallJoin: () => { callActions.push('join'); return new Promise(() => {}) },
+  recordCall: () => {},
   avatarPhoto: async () => undefined,
   pushStatus: async () => ({ enabled: false }),
   mapInfo: () => new Promise((_resolve, reject) => {
@@ -80,13 +96,21 @@ const core = {
 } as unknown as CoreClient
 const view: Extract<AppView, { phase: 'ready' }> = {
   phase: 'ready', me: { account: name, username: name, displayName: name }, connection: 'online',
-  conversations: [{ id: 'chat', title: remote, isGroup: false, amAdmin: false, status: 'active', memberCount: 2, peer: remote, request: false, unread: 0, lastAt: Date.now() }],
+  conversations: [{ id: 'chat', title, isGroup, amAdmin: isGroup, status: 'active', memberCount: 2, peer: isGroup ? undefined : remote, request: false, unread: 0, lastAt: Date.now() }],
   alerts: [], readReceipts: true, typingIndicators: true, relayCalls: true, callStats: false,
   media: { photos: 'never', audio: 'never', video: 'never', files: 'never', quality: 'standard' }, liveSharing: [],
 }
 Object.assign(window, {
   interactionFixture: {
     liveStarts,
+    callActions,
+    canEncryptCalls,
+    incomingCall(group: boolean) {
+      emit({ type: 'call', signal: {
+        conversationId: 'chat', callId: crypto.randomUUID().replaceAll('-', ''),
+        fromDevice: 'remote-device', title, kind: 'offer', sdp: 'UI fixture offer', video: false, group,
+      } })
+    },
     failMap() {
       rejectMapInfo?.(new Error('Delayed map style failure from fixture'))
       rejectMapInfo = undefined

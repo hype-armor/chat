@@ -58,7 +58,21 @@ export async function conversationAction(page: Page, action: string) {
   await page.getByRole('menuitem', { name: action, exact: true }).click()
 }
 
+/** Calls move between a header button and a menu item as the chat resizes. */
+export async function conversationCall(page: Page, kind: 'Voice' | 'Video') {
+  await closeDetails(page)
+  // Open the menu first so either responsive placement remains actionable,
+  // including a placement change while ResizeObserver handles a new viewport.
+  await page.getByRole('button', { name: 'Conversation menu', exact: true }).click()
+  const name = `${kind} call`
+  const button = page.locator('.conversation-bar').getByRole('button', { name, exact: true })
+  const item = page.getByRole('menu', { name: 'Conversation menu', exact: true })
+    .getByRole('menuitem', { name, exact: true })
+  await button.or(item).click()
+}
+
 export const conversationDetails = (page: Page) => page.getByRole('complementary', { name: 'Conversation details' })
+  .or(page.getByRole('dialog', { name: 'Conversation details' }))
 
 export async function closeDetails(page: Page) {
   const panel = conversationDetails(page)

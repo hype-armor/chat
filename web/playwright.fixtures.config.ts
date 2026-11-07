@@ -2,11 +2,14 @@ import { defineConfig, devices } from '@playwright/test'
 
 // No chat-server, database, echo bot, LiveKit, or existing preview service.
 process.env.E2E_UI_FIXTURES = '1'
+const port = Number(process.env.E2E_UI_FIXTURE_PORT ?? 14173)
+if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Invalid UI fixture port')
+const origin = `http://127.0.0.1:${port}`
 export default defineConfig({
   testDir: 'e2e',
-  testMatch: ['message-interactions.spec.ts', 'fixture-scroll.spec.ts'],
+  testMatch: ['message-interactions.spec.ts', 'fixture-scroll.spec.ts', 'responsive-details.spec.ts', 'details-priority.spec.ts'],
   workers: 1,
-  use: { baseURL: 'http://127.0.0.1:14173' },
+  use: { baseURL: origin },
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
     ...(process.env.PW_ALL_BROWSERS ? [
@@ -15,8 +18,8 @@ export default defineConfig({
     ] : []),
   ],
   webServer: {
-    command: 'node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 14173 --strictPort',
-    url: 'http://127.0.0.1:14173/e2e/interactions-fixture.html',
+    command: `node node_modules/vite/bin/vite.js --host 127.0.0.1 --port ${port} --strictPort`,
+    url: `${origin}/e2e/interactions-fixture.html`,
     reuseExistingServer: false,
     env: { CHAT_SERVER_URL: 'http://127.0.0.1:18080' },
   },

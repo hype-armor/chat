@@ -12,7 +12,7 @@ import { Recorder } from './Recorder'
 import { Media } from './Media'
 import { LocationCard, ShareLocation } from './Location'
 import { ContactLiveLocations, LiveCard, LiveIndicator, LiveSharing, type LiveShare } from './Live'
-import { CallScreen } from './Call'
+import { CallScreen, useCall } from './Call'
 import { CallController } from './calls'
 import { GroupCallScreen, useGroupCall } from './GroupCall'
 import { GroupCallController } from './groupCall'
@@ -32,6 +32,7 @@ import {
 import { useBannerHeight, useVisualViewport } from './useVisualViewport'
 import { MessageText } from './MessageText'
 import { useMessageScroll } from './useMessageScroll'
+import { useModalBackground } from './useModalBackground'
 import { ReplyPreview, quoteMessage, useRemoteTyping, useSendTyping } from './messageInteractions'
 import type { ReplyPreview as ReplyQuote } from '../core/protocol'
 import { isIosDevice } from '../pwa'
@@ -1147,8 +1148,16 @@ function Conversation({
   const detailsHeadingId = useId()
   const details = useRef<HTMLElement>(null)
   const detailsClose = useRef<HTMLButtonElement>(null)
+  const detailsScrim = useRef<HTMLButtonElement>(null)
+  const currentCall = useCall(calls)
+  const currentGroupCall = useGroupCall(groupCalls)
+  const callOpen = !!currentCall || !!currentGroupCall
   const detailsTrigger = useRef<HTMLElement | null>(null)
   const [narrow, setNarrow] = useState(() => matchMedia('(max-width: 40rem)').matches)
+  const shell = useRef<HTMLDivElement>(null)
+  const conversationElement = useRef<HTMLElement>(null)
+  const [overlay, setOverlay] = useState(false)
+  const [compactHeader, setCompactHeader] = useState(false)
   const [reported, setReported] = useState(false)
   const active = status === 'active'
   const openPanel = (p: 'add' | 'info' | 'verify' | 'report') => {
@@ -1156,7 +1165,8 @@ function Conversation({
     setDetailsVersion((version) => version + 1)
     setPanel(p)
   }
-  const panelOpen = !!panel
+  const panelOpen = !!panel && !callOpen
+  useModalBackground(details, detailsScrim, panelOpen && overlay)
 
   useEffect(() => {
     const media = matchMedia('(max-width: 40rem)')
@@ -1164,6 +1174,32 @@ function Conversation({
     media.addEventListener('change', update)
     return () => media.removeEventListener('change', update)
   }, [])
+
+  useLayoutEffect(() => {
+    const measure = () => {
+      const rem = parseFloat(getComputedStyle(document.documentElement).fontSize)
+      // Dock only when 28rem of chat fits beside the 22rem details panel.
+      setOverlay((shell.current?.clientWidth ?? 0) <= 50 * rem)
+      setCompactHeader((conversationElement.current?.clientWidth ?? 0) <= 24 * rem)
+    }
+    const observer = new ResizeObserver(measure)
+    if (shell.current) observer.observe(shell.current)
+    if (conversationElement.current) observer.observe(conversationElement.current)
+    measure()
+    return () => observer.disconnect()
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!panelOpen || !overlay) return
+    const containFocus = () => {
+      if (!details.current?.contains(document.activeElement)) {
+        detailsClose.current?.focus({ preventScroll: true })
+      }
+    }
+    containFocus()
+    document.addEventListener('focusin', containFocus)
+    return () => document.removeEventListener('focusin', containFocus)
+  }, [panelOpen, overlay])
 
   useLayoutEffect(() => {
     if (!panelOpen) return
@@ -1178,9 +1214,10 @@ function Conversation({
     document.addEventListener('keydown', escape)
     return () => {
       document.removeEventListener('keydown', escape)
-      detailsTrigger.current?.focus({ preventScroll: true })
+      // A call owns focus now. Do not restore focus behind its dialog.
+      if (!calls.current() && !groupCalls.current()) detailsTrigger.current?.focus({ preventScroll: true })
     }
-  }, [panelOpen, detailsVersion])
+  }, [panelOpen, detailsVersion, calls, groupCalls])
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [draft, setDraft] = useState('')
   const [replyTo, setReplyTo] = useState<ReplyQuote>()
@@ -1210,7 +1247,22 @@ function Conversation({
     capture()
     updatePanel(next)
   }, [capture])
+  useLayoutEffect(() => {
+    if (!callOpen || !panel) return
+    setPanel(undefined)
+    // CallScreen and GroupCallScreen are siblings, outside the details modal.
+    document.querySelector<HTMLElement>('.call-screen button, .call-prompt button')?.focus({ preventScroll: true })
+  }, [callOpen, panel, setPanel])
+  const canCall = active && !request && (isGroup || (!!peer && !blocked))
+  const startCall = (video: boolean) => {
+    const controller = isGroup ? groupCalls : calls
+    void controller.start(id, title, video).catch((e) => setAttachError(String(e.message ?? e)))
+  }
   const menuItems: MenuItem[] = [
+    ...(compactHeader && canCall ? [
+      { label: isGroup ? 'Group voice call' : 'Voice call', onSelect: () => startCall(false) },
+      { label: isGroup ? 'Group video call' : 'Video call', onSelect: () => startCall(true) },
+    ] : []),
     ...(isGroup ? [{ label: 'Group info', onSelect: () => openPanel('info') }] : []),
     ...(peer ? [{ label: 'Verify safety number', onSelect: () => openPanel('verify') }] : []),
     ...(active ? [{ label: 'Add people', onSelect: () => openPanel('add') }] : []),
@@ -1326,8 +1378,8 @@ function Conversation({
   }
 
   return (
-    <div className={`conversation-shell${panel ? ' details-open' : ''}`}>
-    <section className="conversation" aria-label={`Conversation with ${title}`} inert={panelOpen && narrow}>
+    <div ref={shell} className={`conversation-shell${panelOpen ? ' details-open' : ''}${overlay ? ' details-overlay' : ''}`}>
+    <section ref={conversationElement} className="conversation" aria-label={`Conversation with ${title}`} inert={panelOpen && overlay}>
       <header className="bar conversation-bar">
         <div className="title-row">
           <button type="button" className="link back" onClick={onBack} aria-label="Back to conversations">
@@ -1352,41 +1404,21 @@ function Conversation({
           </button>
         </div>
         <div className="header-actions">
-          {isGroup && active && !request && (
+          {canCall && !compactHeader && (
             <>
               <button
                 type="button"
                 className="icon"
-                aria-label="Group voice call"
-                onClick={() => void groupCalls.start(id, title, false).catch((e) => setAttachError(String(e.message ?? e)))}
+                aria-label={isGroup ? 'Group voice call' : 'Voice call'}
+                onClick={() => startCall(false)}
               >
                 📞
               </button>
               <button
                 type="button"
                 className="icon"
-                aria-label="Group video call"
-                onClick={() => void groupCalls.start(id, title, true).catch((e) => setAttachError(String(e.message ?? e)))}
-              >
-                🎥
-              </button>
-            </>
-          )}
-          {peer && active && !blocked && !request && (
-            <>
-              <button
-                type="button"
-                className="icon"
-                aria-label="Voice call"
-                onClick={() => void calls.start(id, title, false).catch((e) => setAttachError(String(e.message ?? e)))}
-              >
-                📞
-              </button>
-              <button
-                type="button"
-                className="icon"
-                aria-label="Video call"
-                onClick={() => void calls.start(id, title, true).catch((e) => setAttachError(String(e.message ?? e)))}
+                aria-label={isGroup ? 'Group video call' : 'Video call'}
+                onClick={() => startCall(true)}
               >
                 🎥
               </button>
@@ -1642,15 +1674,27 @@ function Conversation({
         </div>
       </form>
     </section>
-    {panel && (
+    {panelOpen && overlay && !narrow && (
+      <button
+        type="button"
+        ref={detailsScrim}
+        className="details-scrim"
+        aria-label="Close details"
+        tabIndex={-1}
+        onClick={() => setPanel(undefined)}
+      />
+    )}
+    {panelOpen && (
       <aside
         className="conversation-details"
+        role={overlay ? 'dialog' : undefined}
+        aria-modal={overlay ? true : undefined}
         aria-labelledby={detailsHeadingId}
         ref={details}
         onKeyDown={(event) => {
-          if (!narrow || event.key !== 'Tab') return
+          if (!overlay || event.key !== 'Tab') return
           const buttons = Array.from(details.current?.querySelectorAll<HTMLElement>(
-            'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [tabindex="0"]',
+            'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), a[href], select:not(:disabled), [tabindex="0"]',
           ) ?? []).filter((element) => element.getClientRects().length > 0)
           const first = buttons[0]
           const last = buttons[buttons.length - 1]

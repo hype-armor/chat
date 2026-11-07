@@ -414,7 +414,23 @@ form {
   text-align: center;
 }
 
-.details-name,
+.details-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.details-name strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.details-name button {
+  flex: none;
+}
+
 .conversation-details .actions {
   display: flex;
   align-items: center;
@@ -489,21 +505,22 @@ form {
   min-width: 0;
 }
 
-@container (max-width: 40rem) {
-  .details-open .conversation-bar,
-  .details-open .header-actions,
-  .details-open .composer-row {
-    flex-wrap: wrap;
-  }
+/* The shell measures its available width, including the sidebar and zoom. */
+.details-overlay > .conversation-details {
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: min(22rem, 100%);
+  z-index: 2;
+}
 
-  .details-open .title-row {
-    flex-basis: 100%;
-  }
-
-  .details-open .composer textarea {
-    flex-basis: 100%;
-    order: -1;
-  }
+.details-scrim {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  background: rgb(0 0 0 / 35%);
+  z-index: 1;
 }
 
 @media (max-width: 40rem) {
@@ -511,9 +528,9 @@ form {
     visibility: hidden;
   }
 
-  .conversation-details {
-    position: absolute;
+  .details-overlay > .conversation-details {
     inset: 0;
+    width: 100%;
     border-left: 0;
   }
 }
