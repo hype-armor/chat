@@ -1,6 +1,6 @@
 import { type Page, expect, test } from './fixtures'
-import { expectLayout } from './layout'
-import { conversationDetails } from './support'
+import { expectDialogLayout, expectLayout, layoutViewports } from './layout'
+import { conversationCall, conversationDetails } from './support'
 import { fixtureAction } from './interaction-fixture-support'
 
 test.skip(!process.env.E2E_UI_FIXTURES, 'use playwright.fixtures.config.ts; in-memory UI only, no call media or transport')
@@ -90,6 +90,30 @@ for (const group of [true, false]) {
     await testInfo.attach(`header-${group ? 'group' : 'direct'}.png`, { body: await page.screenshot(), contentType: 'image/png' })
     await voice.click()
     await expect(page.getByRole('dialog', { name: group ? `Group call in ${title}` : `Call with ${title}`, exact: true })).toBeVisible()
+    await expect(page.getByTestId('fixture-error')).toHaveCount(0)
+  })
+}
+
+for (const { width, height, colorScheme } of layoutViewports) {
+  test(`voice and video refusal dialogs remain reachable and fit at ${width}px`, async ({ page }) => {
+    // Reproduce WebKit's unavailable encrypted-media path in every browser.
+    await page.addInitScript(() => {
+      Reflect.deleteProperty(window, 'RTCRtpScriptTransform')
+      if (typeof RTCRtpSender !== 'undefined') Reflect.deleteProperty(RTCRtpSender.prototype, 'createEncodedStreams')
+    })
+    await open(page, 1280, false)
+    await page.setViewportSize({ width, height })
+    await page.emulateMedia({ colorScheme })
+    for (const kind of ['Voice', 'Video'] as const) {
+      const headerCall = page.locator('.conversation-bar').getByRole('button', { name: `${kind} call`, exact: true })
+      if (width === 320) await expect(headerCall).toBeHidden()
+      else await expect(headerCall).toBeVisible()
+      await conversationCall(page, kind)
+      const dialog = page.getByRole('dialog', { name: `Call with ${title}`, exact: true })
+      await expect(dialog).toContainText("can't encrypt call media")
+      await expectDialogLayout(page, dialog, `${kind} refusal: ${width}×${height} ${colorScheme}`, true)
+      await expect(dialog).toBeHidden()
+    }
     await expect(page.getByTestId('fixture-error')).toHaveCount(0)
   })
 }

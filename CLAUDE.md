@@ -46,7 +46,9 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   needs the isolated server and echo bot. Set `E2E_UI_FIXTURE_PORT` to a free
   dedicated port when another session runs UI fixtures. Call UI fixtures must
   assert the fail-closed error and keyboard dismissal when `canEncryptCalls()`
-  is false. Do not bypass the encrypted-media capability guard.
+  is false. Do not bypass the encrypted-media capability guard. For calls across
+  viewport sizes, use `conversationCall` from `web/e2e/support.ts`; narrow headers
+  place call actions in the conversation menu.
 - Details modals must make background app regions inert, including the sidebar
   and notices outside Chat. Call dialogs take priority and must receive keyboard
   focus without interference from details focus restoration.

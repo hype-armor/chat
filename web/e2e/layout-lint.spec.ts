@@ -1,7 +1,7 @@
 import { expect, test } from './fixtures'
 import { auditLayouts, expectDialogLayout, expectLayout, layoutViewports } from './layout'
 import {
-  closeDetails, compose, conversationAction, conversationDetails, createGroup,
+  closeDetails, compose, conversationAction, conversationCall, conversationDetails, createGroup,
   messages, openChat, openSetting, randomUsername, signUp, startChat,
 } from './support'
 
@@ -208,8 +208,8 @@ test.describe('signed-in layout lint', () => {
       for (const { width, height, colorScheme } of layoutViewports) {
         await page.setViewportSize({ width, height })
         await page.emulateMedia({ colorScheme })
-        for (const kind of ['Voice', 'Video']) {
-          await page.getByRole('button', { name: `${kind} call`, exact: true }).click()
+        for (const kind of ['Voice', 'Video'] as const) {
+          await conversationCall(page, kind)
           const dialog = page.getByRole('dialog', { name: 'Call with Echo (test bot)' })
           await expect(dialog).toContainText("can't encrypt call media")
           await expectDialogLayout(page, dialog, `WebKit ${kind} call refusal: ${width}×${height} ${colorScheme}`, true)
