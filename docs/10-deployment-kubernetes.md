@@ -129,8 +129,14 @@ cluster-wide: cert-manager, ingress/gateway controller, CloudNativePG operator
 
 ## 5. Rollout
 
-- The dev cluster deploys every merge to `main` with a pull-based timer
-  (ADR-0018, `scripts/k3s-dev-update.sh`).
+- The Images workflow runs the shared, staged CI for the exact `main` or version-tag
+  commit before it builds or publishes images. Pull requests call the same CI directly.
+  Cheap validation must pass before builds, integration tests, and browser tests.
+  Image publication waits for the complete CI result. Validation has read-only
+  permissions; only the image-build job can write packages.
+- The dev cluster deploys validated `main` commits with a pull-based timer
+  (ADR-0018, `scripts/k3s-dev-update.sh`). It waits for both commit-tagged images.
+  Deployment latency includes CI, image builds, and the next timer poll.
 - `helm upgrade --install` with `--atomic`. The server shuts down
   gracefully on SIGTERM (30 s grace period) so WebSockets reconnect to new
   pods.

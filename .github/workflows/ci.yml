@@ -1,9 +1,9 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
+  # Images calls the same checks for main and tags before publishing.
+  workflow_call:
 
 permissions:
   contents: read
@@ -12,10 +12,23 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Stage 1: no application compilation, databases, or browser installation.
+  dependency-audit:
+    uses: ./.github/workflows/security.yml
+    permissions:
+      contents: read
+
   build-controls:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: cargo fmt --all --check
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the CI graph test dependency
+        run: python3 -m pip install --disable-pip-version-check PyYAML==6.0.3
+      - run: python3 scripts/test-ci-graph.py
       - run: bash -n scripts/compose-build.sh scripts/test-compose-build.sh
       - run: scripts/test-compose-build.sh
       - uses: docker/setup-buildx-action@v3
@@ -25,7 +38,91 @@ jobs:
             docker buildx build --check -f "deploy/docker/$image.Dockerfile" .
           done
 
-  rust:
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: helm lint deploy/helm/chat
+      - run: helm template chat deploy/helm/chat > /dev/null
+      - run: helm template chat deploy/helm/chat --set turn.enabled=true --set livekit.url=wss://rtc.example.com --set "server.mapAreas.source=https://build.protomaps.com/{yesterday}.pmtiles" > /dev/null
+      - run: helm template chat deploy/helm/chat -f deploy/helm/chat/values-k3s.yaml -f deploy/helm/chat/values-dev.yaml --set server.image.tag=sha-0000000 > /dev/null
+      # Deployment scripts (shellcheck is preinstalled on GitHub runners).
+      - run: shellcheck scripts/*.sh
+
+  web-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Use the generated declaration contract for early typechecking
+        run: |
+          test ! -e web/src/core/pkg
+          mkdir -p web/src/core/pkg
+          cp scripts/ci/wasm-types/chat_core.d.ts web/src/core/pkg/
+      - run: pnpm typecheck
+      # These pure units do not import generated JS or initialize WASM.
+      # The complete unit suite still runs against the real package below.
+      - name: Focused units without WASM
+        run: >-
+          pnpm --filter web exec vitest run
+          src/core/ids.test.ts src/core/policy.test.ts src/core/replies.test.ts
+          src/core/typing.test.ts src/core/commits.test.ts src/core/receipts.test.ts
+          src/core/roles.test.ts src/core/live.test.ts src/core/mp4.test.ts
+
+  # Stage 2: Clippy needs compilation, so every cheap check gates it.
+  rust-checks:
+    needs: [dependency-audit, build-controls, helm, web-checks]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy -p chat-core --target wasm32-unknown-unknown --features wasm -- -D warnings
+      - name: Focused Rust units without services
+        run: cargo test -p chat-core -p chat-proto --lib
+
+  # Stage 3: real WASM, exact contract verification, full units, and web build.
+  web-build:
+    needs: rust-checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: Install wasm-bindgen CLI
+        run: cargo install wasm-bindgen-cli --locked --version "$(scripts/wasm-bindgen-version.sh)"
+      - run: scripts/build-wasm.sh
+      - name: Reject generated declaration drift
+        run: diff -u scripts/ci/wasm-types/chat_core.d.ts web/src/core/pkg/chat_core.d.ts
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - name: Share the verified web build and real WASM package
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-web-build
+          path: |
+            web/dist
+            web/src/core/pkg
+          if-no-files-found: error
+          retention-days: 1
+
+  # Stage 4: start test services only after static, lint, and full web units.
+  rust-integration:
+    needs: web-build
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -42,37 +139,29 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustup show
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo clippy -p chat-core --target wasm32-unknown-unknown --features wasm -- -D warnings
       - run: cargo test --workspace
 
-  web:
+  # Browser setup waits for the cheaper workspace integration tests too.
+  web-browser:
+    needs: [web-build, rust-integration]
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:18
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd pg_isready --health-interval 2s --health-timeout 5s --health-retries 30
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: verified-web-build
+          # Upload strips the common web/ parent; restore it here.
+          path: web
       - run: rustup show
       - uses: Swatinem/rust-cache@v2
-      - name: Install wasm-bindgen CLI
-        run: cargo install wasm-bindgen-cli --locked --version "$(scripts/wasm-bindgen-version.sh)"
-      - run: scripts/build-wasm.sh
+      - name: Build chat-server and the echo bot for messaging e2e tests
+        run: cargo build -p chat-server -p chat-echo
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
-      - run: pnpm test
-      - run: pnpm build
       - name: Install browsers
         run: pnpm --filter web exec playwright install --with-deps chromium firefox webkit
       - name: Chat interaction UI fixtures (Chromium, Firefox, WebKit)
@@ -80,8 +169,20 @@ jobs:
         env:
           PW_ALL_BROWSERS: "1"
           CI: "1"
-      - name: Build chat-server and the echo bot for messaging e2e tests
-        run: cargo build -p chat-server -p chat-echo
+      - name: Start PostgreSQL for messaging e2e tests
+        run: |
+          docker run -d --name postgres -p 5432:5432 \
+            -e POSTGRES_PASSWORD=postgres \
+            --health-cmd pg_isready --health-interval 2s \
+            --health-timeout 5s --health-retries 30 postgres:18
+          for attempt in {1..60}; do
+            status="$(docker inspect --format '{{.State.Health.Status}}' postgres)"
+            if [ "$status" = healthy ]; then exit 0; fi
+            if [ "$status" = unhealthy ]; then break; fi
+            sleep 2
+          done
+          docker logs postgres
+          exit 1
       - name: Start LiveKit for the group-call tests
         run: |
           docker run -d --name livekit --network host livekit/livekit-server:v1.13 \
@@ -108,15 +209,23 @@ jobs:
             target/livekit.log
             web/test-results
           if-no-files-found: ignore
+          retention-days: 1
 
-  helm:
+  # Preserve required check names. Never report success for skipped test jobs.
+  rust:
+    if: always()
+    needs: rust-integration
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
-      - run: helm lint deploy/helm/chat
-      - run: helm template chat deploy/helm/chat > /dev/null
-      - run: helm template chat deploy/helm/chat --set turn.enabled=true --set livekit.url=wss://rtc.example.com --set "server.mapAreas.source=https://build.protomaps.com/{yesterday}.pmtiles" > /dev/null
-      - run: helm template chat deploy/helm/chat -f deploy/helm/chat/values-k3s.yaml -f deploy/helm/chat/values-dev.yaml --set server.image.tag=sha-0000000 > /dev/null
-      # Deployment scripts (shellcheck is preinstalled on GitHub runners).
-      - run: shellcheck scripts/*.sh
+      - run: test "$RESULT" = success
+        env:
+          RESULT: ${{ needs.rust-integration.result }}
+
+  web:
+    if: always()
+    needs: web-browser
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "$RESULT" = success
+        env:
+          RESULT: ${{ needs.web-browser.result }}
