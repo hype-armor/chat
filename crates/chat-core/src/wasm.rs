@@ -2,8 +2,8 @@
 
 use chat_proto::v1::{
     Ack, Attachment, Authenticate, Call, ClientFrame, Content, ContentType, DeviceSync, Envelope,
-    GroupInfo, LiveLocation, Location, Ping, Profile, Receipt, SendEnvelope, ServerFrame, Text,
-    Typing, client_frame, content, receipt, server_frame,
+    GroupInfo, LiveLocation, Location, Ping, Profile, Reaction, Receipt, SendEnvelope, ServerFrame,
+    Text, Typing, client_frame, content, receipt, server_frame,
 };
 use js_sys::{Array, Uint8Array};
 use prost::Message;
@@ -223,6 +223,8 @@ pub struct EventView {
     pub sent_at_ms: f64,
     #[wasm_bindgen(getter_with_clone)]
     pub text: Option<String>,
+    #[wasm_bindgen(getter_with_clone)]
+    pub reaction: Option<Vec<u8>>,
     /// Original message id, only for valid user-visible reply references.
     #[wasm_bindgen(getter_with_clone, js_name = replyTo)]
     pub reply_to: Option<Vec<u8>>,
@@ -327,6 +329,7 @@ impl EventView {
             sender: Vec::new(),
             sent_at_ms: 0.0,
             text: None,
+            reaction: None,
             reply_to: None,
             reply_to_hash: None,
             content_hash: None,
@@ -872,6 +875,40 @@ impl CoreClient {
         )
     }
 
+    /// Durable reaction updates use the existing MLS envelope and sender authentication.
+    #[wasm_bindgen(js_name = sendReaction)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn send_reaction(
+        &mut self,
+        conversation_id: &[u8],
+        target: Vec<u8>,
+        target_hash: Vec<u8>,
+        target_author: Vec<u8>,
+        emoji: String,
+        sent_at_ms: f64,
+        message_id: Vec<u8>,
+    ) -> Result<Vec<u8>, JsError> {
+        if target.len() != 16
+            || target_hash.len() != 32
+            || target_author.len() != 16
+            || exact_timestamp(sent_at_ms).is_none()
+            || emoji.len() > 32
+        {
+            return Err(JsError::new("invalid reaction"));
+        }
+        self.send(
+            conversation_id,
+            sent_at_ms,
+            content::Body::Reaction(Reaction {
+                target,
+                target_hash,
+                target_author,
+                emoji,
+            }),
+            message_id,
+        )
+    }
+
     /// Ephemeral typing state. The worker must drop stale or superseded events.
     #[wasm_bindgen(js_name = sendTyping)]
     pub fn send_typing(
@@ -1023,6 +1060,27 @@ impl CoreClient {
                     view.reply_to_hash = content.reply_to_hash.filter(|hash| hash.len() == 32);
                 }
                 match content.body {
+                    Some(content::Body::Reaction(r)) => {
+                        if r.target.len() == 16
+                            && r.target_hash.len() == 32
+                            && r.target_author.len() == 16
+                            && r.emoji.len() <= 32
+                            && exact_timestamp(view.sent_at_ms).is_some()
+                        {
+                            // Fixed-size binding followed by UTF-8 emoji, never plaintext transport.
+                            view.reaction = Some(
+                                [
+                                    r.target,
+                                    r.target_hash,
+                                    r.target_author,
+                                    r.emoji.into_bytes(),
+                                ]
+                                .concat(),
+                            );
+                        } else {
+                            view.kind = "ignored".to_owned();
+                        }
+                    }
                     Some(content::Body::Typing(t)) => {
                         if valid_typing_times(content.sent_at_ms, t.expires_at_ms) {
                             view.typing_active = Some(t.active);

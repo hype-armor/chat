@@ -51,6 +51,17 @@ history can lack a verifiable hash; the composer must explain when it cannot
 send a verified reply. Typing indicators are optional, expire automatically,
 and never transmit draft text.
 
+Reactions implement the reaction part of FR-MSG-7 through
+[ADR-0041](adr/0041-encrypted-message-reactions.md). Each account has 1 reaction
+per verified message. Selecting the same emoji removes it; another emoji replaces it.
+The message action menu offers 6 named emoji. Aggregated chips expose counts and own removal.
+Targets, emoji, ordering, and removal state remain inside MLS encryption and encrypted worker storage.
+The worker must verify the original content hash and conversation/author binding.
+Legacy targets without verification data cannot receive new reactions. Previously verified own reactions remain removable.
+Offline sends use durable acceptance gating. Pending and failed updates must have visible status and explicit retry.
+Account ordering and removal tombstones survive replay, history reload, and encrypted backup.
+This feature does not transfer earlier history to linked devices or implement edit/delete-for-everyone.
+
 ### 1.3 Media (MED)
 
 | ID | Requirement | Pri |

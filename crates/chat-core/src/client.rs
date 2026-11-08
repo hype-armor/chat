@@ -529,6 +529,68 @@ mod tests {
     }
 
     #[test]
+    fn reactions_preserve_mls_authentication_and_legacy_ratchets() {
+        #[derive(Clone, PartialEq, prost::Message)]
+        struct LegacyContent {
+            #[prost(uint64, tag = "1")]
+            sent_at_ms: u64,
+            #[prost(message, optional, tag = "2")]
+            text: Option<Text>,
+        }
+        let mut alice = Client::new(Device::new(b"alice").unwrap());
+        let mut bob = Client::new(Device::new(b"bob").unwrap());
+        let kp = bob.key_packages(1).unwrap().remove(0);
+        let started = alice
+            .start_conversation(
+                &[JoinPackage {
+                    identity: b"bob",
+                    key_package: &kp,
+                }],
+                vec![1],
+            )
+            .unwrap();
+        bob.receive(&started.welcome).unwrap();
+        let id = started.conversation_id;
+        let reaction = Content {
+            sent_at_ms: 2,
+            reply_to: None,
+            reply_to_hash: None,
+            body: Some(content::Body::Reaction(chat_proto::v1::Reaction {
+                target: vec![7; 16],
+                target_hash: content_hash(b"bob", &text("original")),
+                target_author: vec![8; 16],
+                emoji: "👍".into(),
+            })),
+        };
+        let env = alice.send(&id, &reaction, vec![2]).unwrap();
+        let Event::Message {
+            sender,
+            content,
+            conversation_id,
+        } = bob.receive(&env).unwrap()
+        else {
+            panic!("expected an authenticated reaction");
+        };
+        assert_eq!(sender, b"alice");
+        assert_eq!(conversation_id, id);
+        assert_eq!(content, reaction);
+        assert!(
+            LegacyContent::decode(content.encode_to_vec().as_slice())
+                .unwrap()
+                .text
+                .is_none()
+        );
+        // An old reader ignores the unknown body, but must retain the advanced MLS state.
+        let mut bob = Client::restore(&bob.snapshot().unwrap()).unwrap();
+        let next = alice
+            .send(&id, &text("after ignored reaction"), vec![3])
+            .unwrap();
+        assert!(
+            matches!(bob.receive(&next).unwrap(), Event::Message { content, .. } if content == text("after ignored reaction"))
+        );
+    }
+
+    #[test]
     fn quote_hash_binds_sender_and_exact_content() {
         let original = text("hello");
         let expected = content_hash(b"alice-device-1", &original);

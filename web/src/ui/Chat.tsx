@@ -32,6 +32,7 @@ import {
 } from '../notifications'
 import { useBannerHeight, useVisualViewport } from './useVisualViewport'
 import { MessageText } from './MessageText'
+import { reactionLabel } from './reactions'
 import { useMessageScroll } from './useMessageScroll'
 import { ConversationDrafts, useConversationDraft } from './useConversationDrafts'
 import { useModalBackground } from './useModalBackground'
@@ -1477,6 +1478,9 @@ function Conversation({
                   title={new Date(m.sentAt).toLocaleString()}
                   author={m.from === 'me' ? 'You' : m.fromName ?? title}
                   enabled={active && !blocked && !request && m.canReply === true}
+                  onReact={m.canReact === true ? (emoji) => {
+                    void core.react(id, m.id, emoji).catch((error: unknown) => setAttachError(error instanceof Error ? error.message : 'Reaction failed'))
+                  } : undefined}
                   onReply={() => {
                     if (m.canReply !== true) return
                     setAttachError(undefined)
@@ -1500,6 +1504,21 @@ function Conversation({
                   {m.live && <LiveCard core={core} conversationId={id} message={m} live={m.live} />}
                   {m.reply && <ReplyPreview quote={m.reply} />}
                   {m.text && <MessageText text={m.text} />}
+                  {m.reactionStatus && <div className="reaction-delivery small" role={m.reactionStatus.status === 'failed' ? 'alert' : 'status'}>
+                    {m.reactionStatus.status === 'sending' ? 'Sending reaction…' : <>
+                      Reaction not sent{m.reactionStatus.error ? ': ' + m.reactionStatus.error : ''}
+                      <button type="button" className="link small" disabled={!active || blocked || !!request}
+                        onClick={() => void core.retryMessage(id, m.reactionStatus!.id).catch((error: unknown) => setAttachError(error instanceof Error ? error.message : 'Reaction retry failed'))}>Retry reaction</button>
+                    </>}
+                  </div>}
+                  {!!m.reactions?.length && <div className="reaction-chips" role="group" aria-label="Message reactions">
+                    {m.reactions.map((reaction) => <button key={reaction.emoji} type="button"
+                      aria-pressed={reaction.own}
+                      aria-label={reactionLabel(reaction.emoji) + ', ' + reaction.count + (reaction.own ? ', remove your reaction' : ', react')}
+                      disabled={!active || blocked || !!request || (!reaction.own && m.canReact !== true)}
+                      onClick={() => void core.react(id, m.id, reaction.emoji).catch((error: unknown) => setAttachError(error instanceof Error ? error.message : 'Reaction failed'))}
+                    >{reaction.emoji} <span>{reaction.count}</span></button>)}
+                  </div>}
                   <span className={last || m.status === 'failed' ? 'meta small' : 'visually-hidden'}>
                     <time
                       className={last ? undefined : 'visually-hidden'}

@@ -2,6 +2,8 @@
 // encrypted storage, REST calls and the WebSocket. The UI thread only
 // receives `AppView` snapshots and message lists.
 
+import { bindingMatches, validReaction, reactionStates, reactionChips, type ReactionUpdate } from './reactions'
+
 import init, {
   AttachmentView,
   CallMedia,
@@ -155,7 +157,8 @@ type StoredFile = Omit<FileInfo, 'thumbnail'> & {
 }
 
 /** A message as stored; `messages()` hands the UI a `ChatMessage` without keys. */
-type StoredMessage = Omit<ChatMessage, 'file' | 'reply'> & {
+type StoredMessage = Omit<ChatMessage, 'file' | 'reply' | 'reactions' | 'canReact' | 'reactionStatus'> & {
+  reactionEvent?: ReactionUpdate
   file?: StoredFile
   /** Hashes bind previews to authenticated MLS content, not mutable outer IDs. */
   contentHash?: string
@@ -406,9 +409,11 @@ export class Engine {
   /** Serialises every mutation of core state and storage. */
   private lock: Promise<unknown> = Promise.resolve()
   private draftEpoch = 0
+  private endingSession = false
   private draftChanges = new Map<string, Draft>()
   /** A concurrent flush must not transmit a text action before local acceptance. */
   private acceptingText = new Set<string>()
+  private acceptingReactions = new Set<string>()
 
   constructor(private readonly emit: (event: CoreEvent) => void) {}
 
@@ -447,11 +452,11 @@ export class Engine {
         amAdmin: (c.admins ?? []).includes(this.myAccount()),
         status: c.status ?? ('active' as const),
         memberCount: c.peers.length + 1,
-        peer: c.name === undefined && c.peers.length === 1 ? c.peers[0] : undefined,
-        blocked: c.name === undefined && c.peers.length === 1 && this.state.blocked.includes(c.peers[0]),
+        peer: !isGroupView(c) && c.peers.length === 1 ? c.peers[0] : undefined,
+        blocked: !isGroupView(c) && c.peers.length === 1 && this.state.blocked.includes(c.peers[0]),
         request: c.request ?? false,
         unread: c.unread ?? 0,
-        verification: c.name === undefined && c.peers.length === 1 ? this.verificationOf(c.peers[0]) : undefined,
+        verification: !isGroupView(c) && c.peers.length === 1 ? this.verificationOf(c.peers[0]) : undefined,
         lastText: c.lastText,
         lastAt: c.lastAt,
       }))
@@ -545,6 +550,7 @@ export class Engine {
   private async register(reg: Registered, displayName: string, prepare?: () => Promise<void>) {
     await this.exclusive(async () => {
       this.draftEpoch++
+      this.endingSession = false
       this.draftChanges.clear()
       this.core = this.pending!.intoClient(makeIdentity(reg.account_id, reg.device_id))
       this.pending = undefined
@@ -783,17 +789,23 @@ export class Engine {
 
   /** Called when the server no longer knows this device (it was removed). */
   private async signOut(notice: string) {
-    // Invalidate queued draft RPCs now, then clear after an in-flight write ends.
+    // Invalidate queued RPCs and transport now, then clear after an in-flight write ends.
+    this.endingSession = true
     this.draftEpoch++
+    clearTimeout(this.retryTimer)
+    clearTimeout(this.reconnectTimer)
+    const ws = this.ws
+    this.ws = undefined
+    // Resolve requests now, including a flush that holds the mutation lock.
+    for (const resolve of this.waiters.values()) resolve(undefined)
+    this.waiters.clear()
+    ws?.close()
     await this.exclusive(async () => {
       this.account = undefined
       this.core = undefined
       this.state = emptyState()
       this.draftChanges.clear()
       this.notice = notice
-      const ws = this.ws
-      this.ws = undefined
-      ws?.close()
       await this.store.clear()
       this.setConnection('offline')
       this.typingClock = new TypingClock()
@@ -1082,21 +1094,25 @@ export class Engine {
    * this device: they are used up by claims, including lookups that never
    * lead to a chat, and expire after 30 days.
    */
-  private async replenishKeyPackages(known?: number) {
-    if (this.replenishing || !this.account) return
+  private async replenishKeyPackages(known?: number, currentSocket: () => boolean = () => true) {
+    if (this.replenishing || !this.account || this.endingSession || !currentSocket()) return
+    const session = this.draftSession()
+    const current = () => currentSocket() && !this.endingSession &&
+      session.epoch === this.draftEpoch && session.accountId === this.account?.accountId
     this.replenishing = true
     try {
       const token = this.account.token
       const available = known ?? (await api.keyCount(token)).available
       const count = keyPackagesToUpload(available)
-      if (count === 0) return
+      if (count === 0 || !current()) return
       const packages = await this.exclusive(async () => {
+        if (!current()) return []
         const fresh = this.core!.keyPackages(count) as Uint8Array[]
         // Their private keys must be stored before anyone can use them.
         await this.persist()
         return fresh
       })
-      await api.uploadKeyPackages(token, packages.map(toBase64))
+      if (current() && packages.length > 0) await api.uploadKeyPackages(token, packages.map(toBase64))
     } catch (e) {
       console.warn('key package top-up failed', e)
     } finally {
@@ -1674,9 +1690,32 @@ export class Engine {
       const now = Date.now()
       const list = await this.stored(conversationId)
       await this.recoverUnacceptedMessages(conversationId, list)
-      const replyLookup = buildReplyLookup(list)
-      return list.map(({ file, contentHash, replyToHash, ...m }) => ({
+      const visible = list.filter((m) => !m.reactionEvent)
+      const replyLookup = buildReplyLookup(visible)
+      const originals = new Map<string, StoredMessage>()
+      for (const m of visible) if (m.kind !== 'notice' && !originals.has(m.id)) originals.set(m.id, m)
+      const updates = list.flatMap((m) => m.reactionEvent ? [m.reactionEvent] : [])
+      const reactionRecords = new Map(list.flatMap((m) => m.reactionEvent ? [[m.reactionEvent, m] as const] : []))
+      const updatesByTarget = new Map<string, ReactionUpdate[]>()
+      let changed = false
+      for (const update of updates) {
+        const bucket = updatesByTarget.get(update.target) ?? []
+        bucket.push(update)
+        updatesByTarget.set(update.target, bucket)
+        if (!update.verified && validReaction(update) && bindingMatches(update, originals.get(update.target), this.myAccount())) {
+          update.verified = true
+          changed = true
+        }
+      }
+      // Derived evidence must not hide readable history when storage is full.
+      if (changed) await this.store.putJson('messages:' + conversationId, list).catch(() => undefined)
+      return visible.map(({ file, contentHash, replyToHash, reactionEvent: _event, ...m }) => ({
         ...m,
+        canReact: this.reactionAllowed(conversationId) && m.kind !== 'notice' && validReplyId(m.id) && validContentHash(contentHash) &&
+          originals.get(m.id)?.contentHash === contentHash,
+        reactions: originals.get(m.id)?.contentHash === contentHash
+          ? reactionChips(reactionStates(updatesByTarget.get(m.id) ?? [], { ...m, contentHash }, this.myAccount()), this.myAccount()) : [],
+        reactionStatus: this.reactionStatus(updatesByTarget.get(m.id) ?? [], reactionRecords, { ...m, contentHash }),
         canReply: m.kind !== 'notice' && validReplyId(m.id) && validContentHash(contentHash) &&
           replyLookup.get(m.id)?.contentHash === contentHash,
         // An ended session shows no point, even before the sweep forgets it.
@@ -1696,6 +1735,138 @@ export class Engine {
         },
       }))
     })
+  }
+
+  /** UI supplies only an ID and emoji. All target bindings come from encrypted worker history. */
+  async react(conversationId: string, targetId: string, emoji: string) {
+    const session = this.draftSession()
+    await this.exclusive(async () => {
+      this.assertReactionSession(session)
+      this.checkCanSend(conversationId)
+      this.checkCanReact(conversationId)
+      const list = await this.stored(conversationId)
+      this.assertReactionSession(session)
+      const { core } = this.ready()
+      const target = list.find((m) => !m.reactionEvent && m.kind !== 'notice' && m.id === targetId)
+      if (!target) throw new Error('The original message is unavailable')
+      const updates = list.flatMap((m) => m.reactionEvent ? [m.reactionEvent] : [])
+      const me = this.myAccount()
+      const own = reactionStates(updates, target, me).find((r) => r.account === me)
+      const nextEmoji = own?.emoji === emoji ? '' : emoji
+      const author = target.from === 'me' ? me : target.from
+      // A previously verified binding can authorize only removal after verification data disappears.
+      const hash = validContentHash(target.contentHash) ? target.contentHash : nextEmoji === '' && own?.verified ? own.hash : undefined
+      if (!hash) throw new Error('The original message cannot be verified on this device')
+      const identity = splitIdentity(core.identity())
+      const update: ReactionUpdate = {
+        target: targetId, hash, author, account: me, device: toHex(identity.device),
+        at: updates.reduce((at, r) => r.account === me && Number.isSafeInteger(r.at) ? Math.max(at, r.at + 1) : at, Date.now()),
+        emoji: nextEmoji, verified: true,
+      }
+      if (!validReaction(update)) throw new Error('Invalid reaction')
+      await this.acceptReaction(conversationId, update, list, session)
+    })
+    this.assertReactionSession(session)
+    void this.flushOutbox()
+  }
+
+  private assertReactionSession(session: { accountId: string; epoch: number }) {
+    if (this.endingSession || session.epoch !== this.draftEpoch || session.accountId !== this.account?.accountId) {
+      throw new Error('The reaction session ended')
+    }
+  }
+
+  private reactionAllowed(conversationId: string): boolean {
+    const conv = this.conv(conversationId)
+    return !this.endingSession && !!conv && !conv.status && !conv.request && this.state.pendingCommit?.conversationId !== conversationId &&
+      (isGroupView(conv) || !conv.peers.some((p) => this.state.blocked.includes(p)))
+  }
+
+  private checkCanReact(conversationId: string) {
+    this.checkCanSend(conversationId)
+    if (!this.reactionAllowed(conversationId)) throw new Error('Reactions are unavailable')
+  }
+
+  private reactionStatus(updates: ReactionUpdate[], records: Map<ReactionUpdate, StoredMessage>, target: StoredMessage): ChatMessage['reactionStatus'] {
+    if (target.kind === 'notice') return undefined
+    const own = reactionStates(updates, target, this.myAccount()).find((r) => r.account === this.myAccount())
+    const record = own && records.get(own)
+    return record && (record.status === 'sending' || record.status === 'failed')
+      ? { id: record.id, status: record.status, error: record.error } : undefined
+  }
+
+  /** The transport gate spans every acceptance write. The caller holds the mutation lock. */
+  private async acceptReaction(conversationId: string, update: ReactionUpdate, list: StoredMessage[], session: { accountId: string; epoch: number }) {
+    this.assertReactionSession(session)
+    const { core } = this.ready()
+    const id = toHex(randomId())
+    const envelope = core.sendReaction(fromHex(conversationId), fromHex(update.target), fromHex(update.hash), fromHex(update.author), update.emoji, update.at, fromHex(id))
+    this.acceptingReactions.add(id)
+    this.state.outbox.push({ messageId: id, conversationId, envelope: toBase64(envelope), recipients: this.recipients(conversationId) })
+    try {
+      await this.recordReaction(conversationId, update, list, id)
+      this.assertReactionSession(session)
+      await this.persist()
+      this.assertReactionSession(session)
+    } catch (error) {
+      // A rejected action must never become eligible in this or a later flush.
+      // Keep the advanced ratchet. Cleanup must not replace the original error.
+      this.state.outbox = this.state.outbox.filter((item) => item.messageId !== id)
+      await this.setStatus(conversationId, id, 'failed', 'Not accepted on this device. Retry the reaction.').catch(() => undefined)
+      await this.persist().catch(() => undefined)
+      throw error
+    } finally {
+      this.acceptingReactions.delete(id)
+    }
+  }
+
+  private async retryReaction(conversationId: string, messageId: string, session: { accountId: string; epoch: number }) {
+    await this.exclusive(async () => {
+      this.assertReactionSession(session)
+      this.checkCanReact(conversationId)
+      const list = await this.stored(conversationId)
+      this.assertReactionSession(session)
+      const failed = list.find((m) => m.id === messageId && m.status === 'failed' && m.reactionEvent)
+      const previous = failed?.reactionEvent
+      if (!previous || previous.account !== this.myAccount()) return
+      const target = list.find((m) => m.id === previous.target && m.kind !== 'notice')
+      if (!target) throw new Error('The original message is unavailable')
+      const updates = list.flatMap((m) => m.reactionEvent ? [m.reactionEvent] : [])
+      const own = reactionStates(updates, target, this.myAccount()).find((r) => r.account === this.myAccount())
+      if (own !== previous) throw new Error('A newer reaction replaced this update')
+      if (!bindingMatches(previous, target, this.myAccount()) && !(previous.emoji === '' && previous.verified && !validContentHash(target.contentHash))) {
+        throw new Error('The original message cannot be verified on this device')
+      }
+      // Retry is a new explicit edit. Retain the failed event and its ordering tombstone.
+      const update = { ...previous,
+        device: toHex(splitIdentity(this.core!.identity()).device),
+        at: updates.reduce((at, r) => r.account === this.myAccount() ? Math.max(at, r.at + 1) : at, Date.now()),
+      }
+      if (!validReaction(update)) throw new Error('Invalid reaction')
+      await this.acceptReaction(conversationId, update, list, session)
+    })
+    this.assertReactionSession(session)
+    void this.flushOutbox()
+  }
+
+  private async recordReaction(conversationId: string, update: ReactionUpdate, list?: StoredMessage[], outgoingId?: string) {
+    if (!validReaction(update)) return
+    list ??= await this.stored(conversationId)
+    const original = list.find((m) => !m.reactionEvent && m.kind !== 'notice' && m.id === update.target)
+    const anchor = list.some((m) => {
+      const r = m.reactionEvent
+      return r?.verified && r.target === update.target && r.hash === update.hash && r.author === update.author && r.account === update.account
+    })
+    update.verified = bindingMatches(update, original, this.myAccount()) || (update.emoji === '' && anchor)
+    if (list.some((m) => {
+      const r = m.reactionEvent
+      return r && r.target === update.target && r.hash === update.hash && r.author === update.author &&
+        r.account === update.account && r.device === update.device && r.at === update.at && r.emoji === update.emoji
+    })) return
+    // These worker-only records never enter visible history, unread counts, previews, or receipts.
+    list.push({ id: outgoingId ?? '', from: outgoingId ? 'me' : '', kind: 'notice', text: '', sentAt: update.at, status: outgoingId ? 'sending' : 'received', reactionEvent: update })
+    await this.store.putJson('messages:' + conversationId, list)
+    this.emit({ type: 'messages', conversationId })
   }
 
   private typingNow(): number {
@@ -2626,10 +2797,12 @@ export class Engine {
    * group as it is now, under the same message id.
    */
   async retryMessage(conversationId: string, messageId: string) {
-    const { core } = this.ready()
+    const session = this.draftSession()
     const conv = this.group(conversationId)
     if (conv.status) throw new Error("You're no longer in this conversation")
     const failed = (await this.stored(conversationId)).find((m) => m.id === messageId && m.status === 'failed')
+    this.assertReactionSession(session)
+    if (failed?.reactionEvent) return this.retryReaction(conversationId, messageId, session)
     if (failed?.file && !failed.file.blobId) {
       // The upload failed: start over from the sealed copy kept here.
       await this.exclusive(() => this.setStatus(conversationId, messageId, 'sending'))
@@ -2637,7 +2810,10 @@ export class Engine {
       return
     }
     await this.exclusive(async () => {
+      this.assertReactionSession(session)
       const list = await this.stored(conversationId)
+      this.assertReactionSession(session)
+      const { core } = this.ready()
       const message = list.find((m) => m.id === messageId && m.from === 'me' && m.status === 'failed')
       if (!message) return
       const envelope = this.encode(core, conversationId, message)
@@ -2937,7 +3113,8 @@ export class Engine {
   // ---- WebSocket -------------------------------------------------------------
 
   private connect() {
-    if (!this.account || this.ws) return
+    if (!this.account || this.ws || this.endingSession) return
+    const session = this.draftSession()
     const url = new URL('/v1/ws', self.location.href)
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
     const ws = new WebSocket(url)
@@ -2945,7 +3122,11 @@ export class Engine {
     this.ws = ws
     this.setConnection('connecting')
 
-    ws.onopen = () => ws.send(plain(encodeAuthenticate(this.requestId(), this.account!.token)))
+    const currentSocket = () => this.ws === ws && !this.endingSession &&
+      session.epoch === this.draftEpoch && session.accountId === this.account?.accountId
+    ws.onopen = () => {
+      if (currentSocket()) ws.send(plain(encodeAuthenticate(this.requestId(), this.account!.token)))
+    }
     this.keyCheckTimer ??= setInterval(() => {
       if (this.connection === 'online') void this.replenishKeyPackages()
     }, KEY_PACKAGE_CHECK_MS)
@@ -2958,9 +3139,12 @@ export class Engine {
     this.memberCheckTimer ??= setInterval(() => {
       if (this.connection === 'online') this.scheduleSync()
     }, MEMBER_CHECK_MS)
-    ws.onmessage = (event) => this.onFrame(decodeServerFrame(new Uint8Array(event.data as ArrayBuffer)))
+    ws.onmessage = (event) => {
+      // Stale callbacks must not decode frames or touch a replacement session.
+      if (currentSocket()) this.onFrame(decodeServerFrame(new Uint8Array(event.data as ArrayBuffer)), currentSocket)
+    }
     ws.onclose = () => {
-      if (this.ws !== ws) return // replaced or signed out
+      if (!currentSocket()) return // replaced or signed out
       this.ws = undefined
       for (const resolve of this.waiters.values()) resolve(undefined)
       this.waiters.clear()
@@ -2970,14 +3154,18 @@ export class Engine {
     }
   }
 
-  private onFrame(frame: ServerFrameView) {
+  private onFrame(frame: ServerFrameView, currentSocket: () => boolean = () => true) {
+    if (!currentSocket()) return
     switch (frame.kind) {
       case 'auth':
         this.reconnectMs = 1000
         this.setConnection('online')
-        void this.replenishKeyPackages(frame.keyPackages)
+        void this.replenishKeyPackages(frame.keyPackages, currentSocket)
         // Queued before any delivery handler, so it settles first.
-        void this.exclusive(() => this.resolvePendingCommit()).then(() => {
+        void this.exclusive(async () => {
+          if (currentSocket()) await this.resolvePendingCommit()
+        }).then(() => {
+          if (!currentSocket()) return
           this.commitDepartures()
           this.scheduleSync()
           this.resumeTransfers()
@@ -2985,7 +3173,7 @@ export class Engine {
         })
         return
       case 'deliver':
-        void this.onDeliver(frame)
+        void this.onDeliver(frame, currentSocket)
         return
       case 'devices_changed':
         // A member restored, linked or lost a device (ADR-0022).
@@ -3006,9 +3194,10 @@ export class Engine {
     }
   }
 
-  private async onDeliver(frame: ServerFrameView) {
+  private async onDeliver(frame: ServerFrameView, currentSocket: () => boolean = () => true) {
     const { envelope, messageId } = frame
     await this.exclusive(async () => {
+      if (!currentSocket()) return
       const id = toHex(messageId)
       if (!this.recent.has(id)) {
         const conversationId = toHex(frame.conversationId)
@@ -3025,6 +3214,8 @@ export class Engine {
         await this.persist()
       }
     })
+    // Never acknowledge an old socket delivery on a replacement connection.
+    if (!currentSocket()) return
     // Ack only after the result is stored (docs/11-api.md).
     this.ws?.send(plain(encodeAck(0, messageId)))
     this.commitDepartures()
@@ -3166,6 +3357,17 @@ export class Engine {
       const from = splitIdentity(event.sender).account
       const conv = this.state.conversations[conversationId]
       const mine = from === this.myAccount()
+      if (event.reaction !== undefined) {
+        if (!conv || conv.status || conv.request || this.state.blocked.includes(from)) return
+        const bytes = event.reaction
+        if (bytes.length < 64) return
+        await this.recordReaction(conversationId, {
+          target: toHex(bytes.slice(0, 16)), hash: toHex(bytes.slice(16, 48)),
+          author: toHex(bytes.slice(48, 64)), emoji: new TextDecoder('utf-8', { fatal: true }).decode(bytes.slice(64)),
+          account: from, device: toHex(splitIdentity(event.sender).device), at: event.sentAtMs,
+        })
+        return
+      }
       if (event.typingActive !== undefined) {
         if (!mine && conv && !conv.status && !conv.self && !conv.request && !this.state.blocked.includes(from) && this.state.typingIndicators !== false && this.connection === 'online') {
           const leases = this.typingLeases.get(conversationId) ?? new TypingLeases()
@@ -3304,12 +3506,14 @@ export class Engine {
    * caller already holds the exclusive lock.
    */
   private async flushOutbox(locked = false) {
-    if (this.flushing || this.connection !== 'online') return
+    if (this.flushing || this.connection !== 'online' || this.endingSession || !this.account) return
+    const session = this.draftSession()
+    const currentSession = () => !this.endingSession && session.epoch === this.draftEpoch && session.accountId === this.account?.accountId
     this.flushing = true
     try {
-      while (this.state.outbox.length > 0 && this.connection === 'online') {
+      while (currentSession() && this.state.outbox.length > 0 && this.connection === 'online') {
         const item = this.state.outbox[0]
-        if (this.acceptingText.has(item.messageId)) return
+        if (this.acceptingText.has(item.messageId) || this.acceptingReactions.has(item.messageId)) return
         const result = await this.request((id) =>
           encodeSend(
             id,
@@ -3319,7 +3523,8 @@ export class Engine {
             [],
           ),
         )
-        if (!result) return // disconnected: retry after reconnecting
+        if (!currentSession() || !result) return // disconnected or invalidated: do not settle another session
+        // A request sent before invalidation cannot be recalled.
         let outcome = sendOutcome(result)
         if (outcome.kind === 'retry') {
           item.attempts = (item.attempts ?? 0) + 1
@@ -3333,6 +3538,7 @@ export class Engine {
         }
         if (outcome.kind === 'failed') console.warn('send failed', result.errorCode, result.errorMessage)
         const settle = async () => {
+          if (!currentSession()) return
           this.state.outbox.shift()
           if (outcome.kind === 'failed')
             await this.setStatus(item.conversationId, item.messageId, 'failed', outcome.reason)
@@ -3343,6 +3549,11 @@ export class Engine {
       }
     } finally {
       this.flushing = false
+      // One handoff only when the session changed. A same-session timeout or
+      // retry response must retain its existing reconnect/backoff behavior.
+      if (!currentSession() && !this.endingSession && this.account && this.connection === 'online' && this.state.outbox.length > 0) {
+        void this.flushOutbox()
+      }
     }
   }
 

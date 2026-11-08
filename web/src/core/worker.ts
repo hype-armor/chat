@@ -53,6 +53,9 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
       return { type: 'draftSaved', ...await engine.saveDraft(request.conversationId, request.text, request.expectedRevision) }
     case 'sendText':
       return { type: 'textSent', ...await engine.sendText(request.conversationId, request.text, request.replyTo, request.draftRevision) }
+    case 'react':
+      await engine.react(request.conversationId, request.targetId, request.emoji)
+      return { type: 'ok' }
     case 'setTyping':
       await engine.setTyping(request.conversationId, request.active)
       return { type: 'ok' }

@@ -147,6 +147,10 @@ export class CoreClient {
     return { applied, draft }
   }
 
+  async react(conversationId: string, targetId: string, emoji: string): Promise<void> {
+    expect(await this.call({ type: 'react', conversationId, targetId, emoji }), 'ok')
+  }
+
   async sendText(conversationId: string, text: string, replyTo?: string, draftRevision?: number): Promise<TextSent> {
     const { draft, consumedRevision } = expect(await this.call({ type: 'sendText', conversationId, text, replyTo, draftRevision }), 'textSent')
     return { ...(draft === undefined ? {} : { draft }), ...(consumedRevision === undefined ? {} : { consumedRevision }) }

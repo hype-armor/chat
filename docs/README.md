@@ -22,6 +22,9 @@ Architecture Decision Records (ADRs) under [`adr/`](adr/).
 | — | [WebKit navigation diagnostic](testing-webkit-navigation.md) | Targeted signup-stall capture, baseline comparison, and artifact privacy |
 | — | [ADR index](adr/README.md) | Decision log |
 
+Message reactions use [ADR-0041](adr/0041-encrypted-message-reactions.md): verified
+original bindings, encrypted durable updates, deterministic account ordering, and removal tombstones.
+
 ## Conventions
 
 - Requirement IDs: `FR-<AREA>-<n>` (functional), `NFR-<AREA>-<n>` (non-functional).

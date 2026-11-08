@@ -53,7 +53,13 @@ This project must retain its own encryption and worker boundaries regardless of 
 
 ### Deferred
 
-Rich URL previews, remote thumbnails, message editing, reactions, threads, delivery analytics, and product-wide parity remain outside this change.
+Rich URL previews, remote thumbnails, message editing, threads, delivery analytics, and product-wide parity remain outside this change.
+Reactions are a later addition under ADR-0041, not part of the baseline comparison above.
+They support 6 emoji, verified originals, account-level replacement/removal, aggregated chips, and explicit delivery failure/retry.
+The action menu opens the picker; no permanent reaction toolbar appears.
+`web/e2e/reactions.spec.ts` covers keyboard access, narrow layouts, a 250 px keyboard viewport, and failure recovery.
+Worker tests cover cryptographic target eligibility, deterministic ordering, acceptance gating, and durable tombstones.
+Clock ordering, backup downgrade, and missing linked-device history limits remain explicit in ADR-0041.
 
 ## Test and integration map
 

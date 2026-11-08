@@ -3,12 +3,35 @@
   outline-offset: 3px;
 }
 
+.reaction-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.25rem;
+  user-select: none;
+}
+.reaction-chips button {
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 1.5rem;
+  background: var(--surface);
+  color: var(--fg);
+}
+.reaction-chips button[aria-pressed='true'] {
+  border-color: var(--accent-text);
+}
 .message-actions-menu {
   position: fixed;
   z-index: 40;
   display: grid;
   min-width: 9rem;
   max-width: calc(100vw - 1rem);
+  max-height: calc(100dvh - 1rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  box-sizing: border-box;
   padding: 0.25rem;
   border: 1px solid var(--border);
   border-radius: 0.5rem;

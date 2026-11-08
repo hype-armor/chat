@@ -48,7 +48,8 @@ const publishTyping = () => {
 setInterval(publishTyping, 100)
 const emit = (event: unknown) => subscribers.forEach((listener) => listener(event))
 const refresh = () => emit({ type: 'messages', conversationId: 'chat' })
-const resolveMessages = () => stored.map((message) => {
+const resolveMessages = () => stored.map((storedMessage) => {
+  const message = { ...storedMessage, canReact: params.get('reactions') === '1' && storedMessage.canReply === true }
   if (!message.replyTo) return message
   const original = stored.find((m) => m.id === message.replyTo)
   return { ...message, reply: original
@@ -94,6 +95,24 @@ const core = {
     const draft = { text, revision: expectedRevision + 1 }
     draftRecords.set(id, draft)
     return { applied: true, draft }
+  },
+  react: async (_id: string, targetId: string, emoji: string) => {
+    const message = stored.find((m) => m.id === targetId)
+    if (!message) throw new Error('Missing fixture message')
+    const own = message.reactions?.find((r) => r.own)
+    const next = own?.emoji === emoji ? '' : emoji
+    message.reactions = (message.reactions ?? []).map((r) => ({ ...r, count: r.count - (r.own ? 1 : 0), own: false })).filter((r) => r.count > 0)
+    if (next) {
+      const existing = message.reactions.find((r) => r.emoji === next)
+      if (existing) { existing.count++; existing.own = true }
+      else message.reactions.push({ emoji: next, count: 1, own: true })
+    }
+    refresh()
+  },
+  retryMessage: async (_id: string, messageId: string) => {
+    const message = stored.find((m) => m.reactionStatus?.id === messageId)
+    if (message?.reactionStatus) message.reactionStatus = { id: messageId, status: 'sending' }
+    refresh()
   },
   markRead: async () => {},
   typing: async () => typists(),
@@ -204,6 +223,28 @@ Object.assign(window, {
       // Simulate eligibility changing after worker encryption, not UI verification.
       const message = stored.find((message) => message.canReply === false)
       if (message) message.canReply = true
+      refresh()
+    },
+    blockRenamedDirect() {
+      view.conversations[0].title = 'Renamed direct chat'
+      view.conversations[0].blocked = true
+      renderFixture()
+    },
+    failReaction() {
+      if (stored[0]) stored[0].reactionStatus = { id: 'failed-reaction', status: 'failed', error: 'The server refused this message' }
+      refresh()
+    },
+    acceptReaction() {
+      if (stored[0]) stored[0].reactionStatus = undefined
+      refresh()
+    },
+    loseReactionEligibility() {
+      if (stored[0]) stored[0].canReply = false
+      refresh()
+    },
+    seedReactions() {
+      const message = stored[0]
+      if (message) message.reactions = [{ emoji: '👍', count: 2, own: false }]
       refresh()
     },
     missingReply() {

@@ -167,6 +167,10 @@ export type ReplyPreview = {
 }
 
 export type ChatMessage = {
+  canReact?: boolean
+  /** The latest own reaction is provisional until the server accepts its envelope. */
+  reactionStatus?: { id: string; status: 'sending' | 'failed'; error?: string }
+  reactions?: { emoji: string; count: number; own: boolean }[]
   /** Worker-derived eligibility. Only true permits composing a verified reply. */
   canReply?: boolean
   /** Encrypted reference to a message in this conversation. */
@@ -255,6 +259,7 @@ export type CoreRequest =
   | { type: 'messages'; conversationId: string }
   | { type: 'getDraft'; conversationId: string }
   | { type: 'saveDraft'; conversationId: string; text: string; expectedRevision: number }
+  | { type: 'react'; conversationId: string; targetId: string; emoji: string }
   | { type: 'sendText'; conversationId: string; text: string; replyTo?: string; draftRevision?: number }
   | { type: 'setTyping'; conversationId: string; active: boolean }
   | { type: 'typing'; conversationId: string }

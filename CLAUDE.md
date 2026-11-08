@@ -36,6 +36,14 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   and verify the encrypted content hash; outer envelope IDs are not authenticated.
   Typing indicators use encrypted, expiring events, not history or persistent retries
   (ADR-0038). Never include draft text in typing events.
+- Message reactions use verified original hashes in the worker (ADR-0041). Never
+  reconstruct legacy hashes, trust UI eligibility hints, or prune removal tombstones alone.
+  Gate reaction transport until history, ratchet, and app-state acceptance succeeds.
+  Fence reactions and retries by account and lifecycle epoch across async reads/writes.
+  Sign-out must stop new transport immediately; stale responses must not settle a new account.
+  Keep failed updates visible and retryable; an older failure must not undo a newer edit.
+  Reactions use the message action menu, not a permanent toolbar. Keep the emoji
+  picker scrollable within the visual viewport and own removal accessible.
 - UI regression tests must cover native link selection, quoted replies, typing
   expiry, message/link action gestures, non-selectable message metadata, and scroll position
   during keyboard/media resize.

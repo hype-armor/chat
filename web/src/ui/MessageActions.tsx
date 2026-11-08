@@ -1,19 +1,22 @@
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import './messageActions.css'
+import { REACTION_EMOJI } from '../core/reactions'
+import { reactionLabel } from './reactions'
 
 const LONG_PRESS_MS = 550
 const MOVE_LIMIT_PX = 10
 const NATIVE_TARGET = 'a, button, summary, input, textarea, select, [contenteditable], audio, video, img, canvas, iframe, [role="button"], [role="link"], [role="menu"]'
 
 /** A message keeps native link/media gestures. Its own menu has no permanent trigger. */
-export function MessageActions({ children, className, title, author, enabled, onReply }: {
+export function MessageActions({ children, className, title, author, enabled, onReply, onReact }: {
   children: ReactNode
   className: string
   title: string
   author: string
   enabled: boolean
   onReply: () => void
+  onReact?: (emoji: string) => void
 }) {
   const root = useRef<HTMLLIElement>(null)
   const menu = useRef<HTMLDivElement>(null)
@@ -25,6 +28,7 @@ export function MessageActions({ children, className, title, author, enabled, on
   const [position, setPosition] = useState<{ x: number; y: number }>()
   const [pending, setPending] = useState(false)
   const [placed, setPlaced] = useState(false)
+  const [selecting, setSelecting] = useState(false)
 
   const cancelPress = () => {
     if (press.current) clearTimeout(press.current.timer)
@@ -39,6 +43,7 @@ export function MessageActions({ children, className, title, author, enabled, on
   const close = (restore = false) => {
     cancelGesture()
     setPosition(undefined)
+    setSelecting(false)
     if (restore) root.current?.focus({ preventScroll: true })
   }
   const nativeTarget = (target: EventTarget | null) => target instanceof Element && !!target.closest(NATIVE_TARGET)
@@ -68,7 +73,10 @@ export function MessageActions({ children, className, title, author, enabled, on
       if (suppressClick.current && ownedTouch.current) cancelPress()
       else cancelGesture()
     }
-    const dismiss = () => close()
+    const dismiss = (event: Event) => {
+      if ((event.type === 'scroll' || event.type === 'pointercancel') && event.target instanceof Node && menu.current?.contains(event.target)) return
+      close()
+    }
     const outside = (event: Event) => {
       if (event.target instanceof Node && !root.current?.contains(event.target) && !menu.current?.contains(event.target)) close()
     }
@@ -117,14 +125,35 @@ export function MessageActions({ children, className, title, author, enabled, on
     const top = viewport?.offsetTop ?? 0
     const width = viewport?.width ?? window.innerWidth
     const height = viewport?.height ?? window.innerHeight
+    menu.current.style.maxHeight = `${Math.max(0, height - 16)}px`
     menu.current.style.left = `${Math.max(left + 8, Math.min(position.x, left + width - bounds.width - 8))}px`
     menu.current.style.top = `${Math.max(top + 8, Math.min(position.y, top + height - bounds.height - 8))}px`
     setPlaced(true)
-  }, [position])
+    const fit = () => {
+      if (!menu.current) return
+      const v = window.visualViewport
+      const h = v?.height ?? window.innerHeight
+      const w = v?.width ?? window.innerWidth
+      const x = v?.offsetLeft ?? 0
+      const y = v?.offsetTop ?? 0
+      menu.current.style.maxHeight = Math.max(0, h - 16) + 'px'
+      const rect = menu.current.getBoundingClientRect()
+      menu.current.style.left = Math.max(x + 8, Math.min(position.x, x + w - rect.width - 8)) + 'px'
+      menu.current.style.top = Math.max(y + 8, Math.min(position.y, y + h - rect.height - 8)) + 'px'
+    }
+    // Set max-height before reading the final bounds, including keyboard-only resizes.
+    fit()
+    viewport?.addEventListener('resize', fit)
+    viewport?.addEventListener('scroll', fit)
+    return () => {
+      viewport?.removeEventListener('resize', fit)
+      viewport?.removeEventListener('scroll', fit)
+    }
+  }, [position, selecting])
 
   useLayoutEffect(() => {
-    if (position && placed) reply.current?.focus({ preventScroll: true })
-  }, [position, placed])
+    if (position && placed) menu.current?.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true })
+  }, [position, placed, selecting])
 
   return <li
     ref={root}
@@ -185,16 +214,24 @@ export function MessageActions({ children, className, title, author, enabled, on
       className="message-actions-menu"
       ref={menu}
       role="menu"
-      aria-label="Message actions"
+      aria-label={selecting ? 'Choose reaction' : 'Message actions'}
       style={{ left: position.x, top: position.y, visibility: placed ? 'visible' : 'hidden' }}
       onKeyDown={(event) => {
         if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
           event.preventDefault()
-          reply.current?.focus()
+          const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button')]
+          const index = items.indexOf(document.activeElement as HTMLButtonElement)
+          const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 :
+            (index + (event.key === 'ArrowUp' ? -1 : 1) + items.length) % items.length
+          items[next]?.focus()
         } else if (event.key === 'Tab') close(true)
       }}
     >
-      <button ref={reply} type="button" role="menuitem" tabIndex={-1} onClick={() => { close(); onReply() }}>Reply</button>
+      {selecting ? REACTION_EMOJI.map((emoji) => <button key={emoji} type="button" role="menuitem" tabIndex={-1}
+        aria-label={reactionLabel(emoji)} onClick={() => { close(true); onReact?.(emoji) }}>{emoji} {reactionLabel(emoji)}</button>) : <>
+        <button ref={reply} type="button" role="menuitem" tabIndex={-1} onClick={() => { close(); onReply() }}>Reply</button>
+        {onReact && <button type="button" role="menuitem" tabIndex={-1} onClick={() => setSelecting(true)}>React</button>}
+      </>}
     </div>, document.body)}
   </li>
 }
