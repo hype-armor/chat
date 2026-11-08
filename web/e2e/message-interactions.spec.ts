@@ -1,7 +1,6 @@
 import { expect, test } from './fixtures'
 import { fixtureAction, fixtureDraft, fixturePending, fixtureSend, openFixture, replyToMessage } from './interaction-fixture-support'
 import { messages } from './support'
-import { TYPING_TTL_MS } from '../src/core/typing'
 
 test.skip(!process.env.E2E_UI_FIXTURES, 'use playwright.fixtures.config.ts; this suite requires the in-memory UI fixture')
 
@@ -756,7 +755,9 @@ test('typing reaches another client, expires without a stop, and clears after se
   await expect(typing).toBeVisible()
   // Retain the draft and discard stop events. Check both sides of the lease
   // boundary without spending 8 seconds of the test budget on a window timer.
-  await bob.clock.runFor(TYPING_TTL_MS - 1)
+  // Assert the 8s contract independently. This Node test project must not
+  // import browser-project source files into its composite TypeScript graph.
+  await bob.clock.runFor(8_000 - 1)
   await expect(typing).toBeVisible()
   await expect(input).toHaveValue('A pending draft')
   // The fixture sweeps every 100ms. Give the next sweep time to publish expiry.
