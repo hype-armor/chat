@@ -272,6 +272,9 @@ for (const width of [390, 1280]) {
     await expect(menuStop).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(dot).toHaveCount(1)
+    // The mobile conversation hides the sidebar from the accessibility tree.
+    await expect(page.getByRole('img', { name: 'Sharing live location', exact: true, includeHidden: true })).toHaveCount(1)
+    await expect(page.getByRole('img', { name: 'Sharing live location', exact: true })).toHaveCount(width === 390 ? 0 : 1)
     await expect(dot).toHaveAttribute('aria-label', 'Sharing live location')
     await expect(page.locator('html')).toHaveAttribute('data-fixture-geo-watches', '1')
     await expect.poll(() => page.evaluate(() => (window as unknown as { interactionFixture: { liveActivity: { updates: number } } }).interactionFixture.liveActivity.updates)).toBe(1)

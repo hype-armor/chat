@@ -242,7 +242,7 @@ test.describe('setup reminders and Settings', () => {
     await page.getByRole('dialog', { name: 'Share this location?' }).getByRole('button', { name: '15 min' }).click()
     const liveCard = messages(page).getByTestId('live-location')
     await expect(liveCard.getByRole('button', { name: 'Stop sharing', exact: true })).toBeVisible()
-    await expect(page.getByRole('img', { name: 'Sharing live location', exact: true })).toHaveCount(1)
+    await expect(page.getByRole('img', { name: 'Sharing live location', exact: true, includeHidden: true })).toHaveCount(1)
     await expect(page.locator('.live-sharing-indicators, .live-banner')).toHaveCount(0)
     await input.fill('Typing while sharing live location')
     await page.getByRole('button', { name: 'Send', exact: true }).click()
@@ -251,7 +251,7 @@ test.describe('setup reminders and Settings', () => {
     await expectConversationFits(344, 500)
     await liveCard.getByRole('button', { name: 'Stop sharing', exact: true }).click()
     await expect(liveCard).toHaveText('📍 Live location ended')
-    await expect(page.getByRole('img', { name: 'Sharing live location', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('img', { name: 'Sharing live location', exact: true, includeHidden: true })).toHaveCount(0)
     await input.focus()
     await expectConversationFits(344, 500)
     await expect.poll(() => page.locator('html').evaluate(
