@@ -15,6 +15,12 @@ in `docs/`; read `docs/README.md` first.
 
 ## Checks before pushing
 
+Run fast, deterministic checks locally before every push, or enforce them in a
+pre-push hook: formatting, configured lint, type checks, and focused unit tests
+for changed behavior. Do not use CI as the first check for these failures.
+The web workspace currently has no configured formatter or lint command; report
+that gap rather than claiming those checks passed. Keep the broader checks below.
+
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
