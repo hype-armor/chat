@@ -209,7 +209,9 @@ under *Message requests* and can be read but not answered until accepted.
 
 Counted in PostgreSQL in fixed windows (table `rate_limits`), so they hold
 across restarts and replicas. Exceeding one gives `429` (HTTP) or
-`Error{429}` (WebSocket); nothing is counted for a refused request.
+`Error{429}` (WebSocket). A counter does not grow when its own limit refuses
+the charge. Authorized message-send charges roll back if the send fails.
+Upload attempt and bandwidth budgets can remain charged when later work fails.
 
 | What | Limit | Key |
 |------|-------|-----|
@@ -217,6 +219,7 @@ across restarts and replicas. Exceeding one gives `429` (HTTP) or
 | `POST /v1/keys/claim` | 300 devices per hour | device |
 | Welcomes (first contacts) | 200 recipient devices per day | device |
 | Sends over the WebSocket | 600 per minute (token bucket, in memory) | device |
+| Authorized sends over the WebSocket | 600 per minute (persistent fixed window; configurable per account) | account |
 | Envelope bytes a device sends | 100 MiB per day | device |
 | `POST /v1/register` | 10 per hour | client IP |
 | `POST /v1/register` | 1000 per day | whole server |
@@ -228,22 +231,43 @@ across restarts and replicas. Exceeding one gives `429` (HTTP) or
 | `POST /v1/backup/restore` | 10 per day | account |
 | `POST /v1/backup/restore` | 100 wrong recovery secrets per day | account |
 | `PUT /v1/blobs`, blob uploads | 2048 MiB per day | device |
-| Attachment bytes kept at once | 2048 MiB | account |
+| `PUT /v1/backup` attempts | 288 per day | account |
+| Backup upload ciphertext | 2048 MiB per day (`CHAT_LIMIT_BLOB_MB_PER_DAY`) | account |
+| Ciphertext object storage, including backups and pending uploads | 2048 MiB default; individual overrides | account |
+| Ciphertext object storage across the service | unlimited until the operator sets a cap | server |
 | `GET /v1/turn` | 20 per day | device |
 | `GET /v1/tiles/{z}/{x}/{y}` | 300 per minute (token bucket, in memory) | device |
 | New map areas downloaded | 5 per hour | device |
 
-The envelope allowance counts ciphertext bytes, so a sender cannot fill the
-queues of other devices. The wrong-secret counter is charged only after the
+The envelope allowance counts ciphertext bytes to bound queue flooding by a sender.
+The separate queue-row cap bounds retained rows for each recipient device. The wrong-secret counter is charged only after the
 server checked the recovery secret, so a stranger cannot lock the owner out
-of recovery. Attachment bytes are counted when an upload starts.
+of recovery. Attachment and backup upload budgets are charged when an upload starts, even
+if it later fails. Confirmed deletion releases stored-byte charges, not daily
+attempt or bandwidth budgets.
 
 The client IP is the socket peer, or the last `X-Forwarded-For` entry when
 `CHAT_TRUST_PROXY_HEADERS=true` (Helm `server.trustProxyHeaders`, on by
 default behind the ingress). Each limit can be changed with
 `CHAT_LIMIT_<NAME>`, e.g. `CHAT_LIMIT_CODES_PER_IP_PER_HOUR` (see
-`crates/chat-server/src/config.rs`). The web client keeps a rate-limited message
+`crates/chat-server/src/config.rs`). Negative numeric values fail startup.
+The account send default uses `CHAT_LIMIT_SENDS_PER_ACCOUNT_PER_MINUTE`.
+Storage caps and individual send overrides use `chat-admin`; see
+[server management](server-management.md). The web client keeps a rate-limited message
 queued and re-sends it after 5 s, doubling to 2 minutes.
+
+## Storage usage (ADR-0040)
+
+`GET /v1/storage` requires device authentication. It returns only the caller's
+account usage: `{used_bytes, reserved_bytes, limit_bytes, overridden}`.
+`used_bytes` counts committed ciphertext; `reserved_bytes` counts pending or
+interrupted writes. Their sum is the quota charge. `limit_bytes: null` means
+unlimited, and zero blocks new storage. `overridden` identifies an individual
+account policy. The response never includes server capacity or another account's usage.
+
+Users can view and refresh this information in account settings. Storage includes
+attachments, encrypted backups, and upload reservations, not local device data.
+An account above its quota can still download and delete existing data.
 
 ## Calls (ADR-0028)
 

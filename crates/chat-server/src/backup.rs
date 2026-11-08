@@ -28,10 +28,13 @@ use crate::{
     blobs, devices,
     error::{ApiError, ApiJson},
     limits::{self, ClientIp},
+    storage,
 };
 
 /// History plus photo thumbnails; the same cap as an attachment.
 pub const MAX_BACKUP_BYTES: u64 = 100 * 1024 * 1024;
+/// Twice the client's 10-minute schedule, including failed upload requests.
+const BACKUP_UPLOADS_PER_DAY: i32 = 288;
 
 fn new_object(account: Uuid) -> String {
     format!("backups/{account}/{}", Uuid::new_v4())
@@ -47,6 +50,16 @@ pub async fn forget(store: &Arc<dyn ObjectStore>, key: Option<String>) {
     }
 }
 
+/// Deletes a finished backup object and releases its ledger charge only on
+/// confirmed deletion. A failure leaves an orphan charge for operator repair.
+pub async fn forget_counted(store: &Arc<dyn ObjectStore>, db: &sqlx::PgPool, key: Option<String>) {
+    if let Some(key) = key
+        && let Err(e) = storage::forget(store, db, &key).await
+    {
+        tracing::warn!(error = ?e, "deleting an old backup failed; storage remains charged");
+    }
+}
+
 /// Copies backups made before they moved to the blob store (migration
 /// 0010) out of PostgreSQL. Run at startup; does nothing once done.
 pub async fn move_to_store(db: &sqlx::PgPool, store: &Arc<dyn ObjectStore>) -> anyhow::Result<()> {
@@ -55,19 +68,63 @@ pub async fn move_to_store(db: &sqlx::PgPool, store: &Arc<dyn ObjectStore>) -> a
             .fetch_all(db)
             .await?;
     for (account, blob) in old {
-        let key = new_object(account);
+        // Migration 0014 reserves this deterministic key, including legacy
+        // backups that still live in PostgreSQL. Startup copies reuse it.
+        let key = format!("backups/{account}/legacy");
         let size = blob.len() as i64;
+        let (reserved,): (bool,) =
+            sqlx::query_as("SELECT EXISTS(SELECT 1 FROM storage_objects WHERE object_key = $1)")
+                .bind(&key)
+                .fetch_one(db)
+                .await?;
+        if !reserved {
+            storage::reserve(db, account, &[(key.clone(), size)])
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e.message()))?;
+        }
+        // A durable claim prevents multiple startup processes from writing
+        // this same key. A crashed claim needs operator repair.
+        let claimed = sqlx::query(
+            "UPDATE storage_objects SET state = 'writing'
+             WHERE object_key = $1 AND state = 'reserved'",
+        )
+        .bind(&key)
+        .execute(db)
+        .await?;
+        if claimed.rows_affected() != 1 {
+            let (state,): (String,) =
+                sqlx::query_as("SELECT state FROM storage_objects WHERE object_key = $1")
+                    .bind(&key)
+                    .fetch_one(db)
+                    .await?;
+            if state == "live" {
+                continue;
+            }
+            anyhow::bail!(
+                "legacy backup migration has an unfinished writer; operator repair is required"
+            );
+        }
         store
-            .put(&Path::from(key.clone()), PutPayload::from(blob))
+            .put(&Path::from(key.clone()), PutPayload::from(blob.clone()))
             .await?;
-        sqlx::query(
-            "UPDATE backups SET object_key = $2, size_bytes = $3, blob = NULL WHERE account_id = $1",
+        let mut tx = db.begin().await?;
+        let updated = sqlx::query(
+            "UPDATE backups SET object_key = $2, size_bytes = $3, blob = NULL
+             WHERE account_id = $1 AND blob = $4 AND object_key IS NULL",
         )
         .bind(account)
         .bind(&key)
         .bind(size)
-        .execute(db)
+        .bind(blob)
+        .execute(&mut *tx)
         .await?;
+        if updated.rows_affected() == 1 {
+            sqlx::query("UPDATE storage_objects SET state = 'live' WHERE object_key = $1")
+                .bind(&key)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
     }
     Ok(())
 }
@@ -121,7 +178,7 @@ pub async fn set_key(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
-    forget(store, old.and_then(|(k,)| k)).await;
+    forget_counted(store, db, old.and_then(|(k,)| k)).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -144,27 +201,53 @@ pub async fn upload(
     let db = db(&state)?;
     let store = blobs::store(&state)?;
     let account = account_of(db, device).await?;
-    let has_key: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM backups WHERE account_id = $1")
-        .bind(account)
-        .fetch_optional(db)
-        .await?;
-    if has_key.is_none() {
+    // Charge attempts before quota reservation or object-store work. Even
+    // safely aborted requests consume these durable anti-abuse budgets.
+    limits::take(
+        db,
+        &format!("backup-uploads:{account}"),
+        1,
+        BACKUP_UPLOADS_PER_DAY,
+        limits::DAY,
+    )
+    .await?;
+    limits::take(
+        db,
+        &format!("backup-mb:{account}"),
+        declared.div_ceil(1024 * 1024) as i32,
+        state.limits.blob_mb_per_day,
+        limits::DAY,
+    )
+    .await?;
+    let has_key: Option<(Vec<u8>,)> =
+        sqlx::query_as("SELECT auth_hash FROM backups WHERE account_id = $1")
+            .bind(account)
+            .fetch_optional(db)
+            .await?;
+    let Some((upload_auth_hash,)) = has_key else {
         return Err(ApiError::Conflict("set up a recovery key first"));
-    }
+    };
     let key = new_object(account);
-    let size = blobs::stream_to(store, &Path::from(key.clone()), declared, body).await?;
+    // The old backup remains charged until its physical object is deleted.
+    storage::reserve(db, account, &[(key.clone(), declared as i64)]).await?;
+    let size = blobs::stream_to(db, store, &Path::from(key.clone()), declared, body).await?;
+    storage::mark_ready(db, &key).await?;
     // Point the row at the new object, then drop the one it replaced.
     let mut tx = db.begin().await?;
-    let old: Option<(Option<String>,)> =
-        sqlx::query_as("SELECT object_key FROM backups WHERE account_id = $1 FOR UPDATE")
-            .bind(account)
-            .fetch_optional(&mut *tx)
-            .await?;
-    let Some((old,)) = old else {
-        // Backups were turned off while this one uploaded.
-        tx.rollback().await?;
-        forget(store, Some(key)).await;
-        return Err(ApiError::Conflict("set up a recovery key first"));
+    let old: Option<(Option<String>, Vec<u8>)> = sqlx::query_as(
+        "SELECT object_key, auth_hash FROM backups WHERE account_id = $1 FOR UPDATE",
+    )
+    .bind(account)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let old = match old {
+        Some((old, auth_hash)) if auth_hash == upload_auth_hash => old,
+        _ => {
+            // The write has finished, so deleting this unused object is safe.
+            tx.rollback().await?;
+            forget_counted(store, db, Some(key)).await;
+            return Err(ApiError::Conflict("recovery key changed during upload"));
+        }
     };
     sqlx::query(
         "UPDATE backups SET object_key = $2, size_bytes = $3, blob = NULL, updated_at = now()
@@ -175,8 +258,12 @@ pub async fn upload(
     .bind(size as i64)
     .execute(&mut *tx)
     .await?;
+    sqlx::query("UPDATE storage_objects SET state = 'live' WHERE object_key = $1")
+        .bind(&key)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
-    forget(store, old).await;
+    forget_counted(store, db, old).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -222,7 +309,7 @@ pub async fn delete(
             .bind(account)
             .fetch_optional(db)
             .await?;
-    forget(store, old.and_then(|(k,)| k)).await;
+    forget_counted(store, db, old.and_then(|(k,)| k)).await;
     Ok(StatusCode::NO_CONTENT)
 }
 

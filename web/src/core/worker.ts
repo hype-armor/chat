@@ -110,6 +110,8 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
     case 'approveLink':
       await engine.approveLink(request.text)
       return { type: 'ok' }
+    case 'storageUsage':
+      return { type: 'storageUsage', usage: await engine.storageUsage() }
     case 'devices':
       return { type: 'devices', devices: await engine.devices() }
     case 'removeDevice':

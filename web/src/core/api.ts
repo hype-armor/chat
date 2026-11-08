@@ -96,6 +96,8 @@ export type ReportBody = {
   messages: { text: string; sent_at_ms: number }[]
 }
 
+export type ServerStorageUsage = { used_bytes: number; reserved_bytes: number; limit_bytes: number | null }
+
 export type ServerDevice = { device_id: string; added_on: string; last_seen_on: string | null; current: boolean }
 
 export const api = {
@@ -134,6 +136,7 @@ export const api = {
   callStats: (stats: unknown) => post<void>('/v1/stats/calls', stats),
   iceServers: (token: string) =>
     get<{ ice_servers: { urls: string[]; username?: string; credential?: string }[] }>('/v1/turn', token),
+  storageUsage: (token: string) => get<ServerStorageUsage>('/v1/storage', token),
   devices: (token: string) => get<{ devices: ServerDevice[] }>('/v1/devices', token),
   devicesOf: (token: string, accountIds: string[]) =>
     post<{ devices: Record<string, string[]> }>('/v1/devices/of', { account_ids: accountIds }, token),

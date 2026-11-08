@@ -1,12 +1,11 @@
 //! Abuse limits (FR-SAF-2, NFR-LEG-5).
 //!
-//! Low-volume actions (lookups, key claims, first contacts, verification
-//! codes) use fixed-window counters in PostgreSQL so every replica sees the
-//! same counts. Message sends use an in-memory token bucket per device: they
-//! are frequent, and per-replica limits are good enough for them.
+//! Fixed-window counters in PostgreSQL share budgets across replicas for
+//! lookups, key claims, first contacts, verification codes and account sends.
+//! Message sends also use an in-memory token bucket per device to bound bursts.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     net::{IpAddr, SocketAddr},
     sync::Mutex,
     time::{Duration, Instant},
@@ -28,6 +27,9 @@ pub struct Limits {
     /// Devices a device may welcome (first contact) per day.
     pub welcomes_per_day: i32,
     pub sends_per_minute: u32,
+    /// Accepted send requests per account per minute, shared by all replicas.
+    /// Zero blocks sends. An account_send_limits row overrides this default.
+    pub sends_per_account_per_minute: i32,
     /// Failed sign-in attempts on `/v1/ws` per client IP per minute.
     pub ws_auth_failures_per_minute: u32,
     /// Sign-ups per client IP per hour (ADR-0021).
@@ -50,7 +52,9 @@ pub struct Limits {
     pub send_mb_per_day: i32,
     /// Queued envelopes kept per recipient device; the oldest go first.
     pub queue_rows_per_device: i64,
-    /// Bytes an account may keep in the attachment store at once.
+    /// Deprecated compatibility field, in MiB. Storage enforcement does not read it.
+    /// Persistent storage policy replaces this field (ADR-0040).
+    /// Setting CHAT_LIMIT_BLOB_MB_PER_ACCOUNT now prevents server startup.
     pub blob_mb_per_account: i32,
     /// TURN credential requests per device per day (relay abuse).
     pub turn_credentials_per_day: i32,
@@ -73,6 +77,7 @@ impl Default for Limits {
             claims_per_hour: 300,
             welcomes_per_day: 200,
             sends_per_minute: 600,
+            sends_per_account_per_minute: 600,
             ws_auth_failures_per_minute: 30,
             registrations_per_ip_per_hour: 10,
             registrations_per_day: 1_000,
@@ -131,16 +136,16 @@ where
     E: sqlx::PgExecutor<'e>,
 {
     let refused = || ApiError::TooManyRequests("rate limit reached; try again later");
-    // Checked up front: the insert path below has no WHERE clause, so an
-    // oversized first request would otherwise use up the whole window.
-    if amount > limit {
+    // Checked up front: the insert path below has no WHERE clause. These
+    // bounds also make limit - amount safe, even at i32::MAX.
+    if amount < 0 || amount > limit {
         return Err(refused());
     }
     let allowed: Option<(i32,)> = sqlx::query_as(
         "INSERT INTO rate_limits (key, window_start, count)
          VALUES ($1, to_timestamp(floor(extract(epoch FROM now()) / $4) * $4), $2)
          ON CONFLICT (key, window_start) DO UPDATE SET count = rate_limits.count + $2
-         WHERE rate_limits.count + $2 <= $3
+         WHERE rate_limits.count <= $3 - $2
          RETURNING count",
     )
     .bind(key)
@@ -152,6 +157,7 @@ where
     allowed.map(|_| ()).ok_or_else(refused)
 }
 
+pub const MINUTE: i64 = 60;
 pub const HOUR: i64 = 3600;
 pub const DAY: i64 = 86_400;
 
@@ -159,7 +165,7 @@ pub const DAY: i64 = 86_400;
 /// on each replica. Device tokens are long random values, so guessing one
 /// is not the threat; this only stops one address from hammering the
 /// database lookup behind every `Authenticate` frame, for which per-replica
-/// counts are good enough (as for sends).
+/// counts are good enough.
 pub struct FailureBuckets {
     /// Length of every window.
     window: Duration,
@@ -218,15 +224,44 @@ fn prune(windows: &mut HashMap<IpAddr, (u32, Instant)>, now: Instant, window: Du
 /// Per-device token buckets for message sends.
 #[derive(Default)]
 pub struct SendBuckets {
-    buckets: Mutex<HashMap<Uuid, (f64, Instant)>>,
+    state: Mutex<SendBucketState>,
+}
+
+#[derive(Default)]
+struct SendBucketState {
+    buckets: HashMap<Uuid, (f64, Instant)>,
+    cleanup: VecDeque<Uuid>,
 }
 
 impl SendBuckets {
     pub fn allow(&self, device: Uuid, per_minute: u32) -> bool {
+        self.allow_with_clock(device, per_minute, Instant::now)
+    }
+
+    fn allow_with_clock(
+        &self,
+        device: Uuid,
+        per_minute: u32,
+        clock: impl FnOnce() -> Instant,
+    ) -> bool {
         let capacity = f64::from(per_minute);
-        let mut buckets = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
-        let now = Instant::now();
-        let (tokens, last) = buckets.entry(device).or_insert((capacity, now));
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let now = clock();
+        // A bucket is full after 60 idle seconds, so removing it does not
+        // grant extra tokens. Scan at most 64 entries per request, with a
+        // rotating cursor, rather than scanning every device under the lock.
+        for _ in 0..state.cleanup.len().min(64) {
+            let id = state.cleanup.pop_front().expect("cleanup entry");
+            if now.duration_since(state.buckets[&id].1) >= Duration::from_secs(60) {
+                state.buckets.remove(&id);
+            } else {
+                state.cleanup.push_back(id);
+            }
+        }
+        if !state.buckets.contains_key(&device) {
+            state.cleanup.push_back(device);
+        }
+        let (tokens, last) = state.buckets.entry(device).or_insert((capacity, now));
         *tokens =
             (*tokens + now.duration_since(*last).as_secs_f64() * capacity / 60.0).min(capacity);
         *last = now;
@@ -274,6 +309,31 @@ impl FromRequestParts<AppState> for ClientIp {
 mod tests {
     use super::*;
 
+    #[sqlx::test]
+    async fn maximum_counter_rejects_without_overflow_or_reducing_usage(pool: PgPool) {
+        // One transaction fixes the current window throughout this test.
+        let mut tx = pool.begin().await.unwrap();
+        let key = "extreme-counter";
+        tx_take(&mut tx, key, i32::MAX - 1, i32::MAX, MINUTE)
+            .await
+            .unwrap();
+        tx_take(&mut tx, key, 1, i32::MAX, MINUTE).await.unwrap();
+        assert!(matches!(
+            tx_take(&mut tx, key, 1, i32::MAX, MINUTE).await,
+            Err(ApiError::TooManyRequests(_))
+        ));
+        assert!(matches!(
+            tx_take(&mut tx, key, -1, i32::MAX, MINUTE).await,
+            Err(ApiError::TooManyRequests(_))
+        ));
+        let count: i32 = sqlx::query_scalar("SELECT count FROM rate_limits WHERE key = $1")
+            .bind(key)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        assert_eq!(count, i32::MAX);
+    }
+
     #[test]
     fn token_bucket_allows_a_burst_then_refills() {
         let buckets = SendBuckets::default();
@@ -281,6 +341,31 @@ mod tests {
         assert!((0..3).all(|_| buckets.allow(device, 3)));
         assert!(!buckets.allow(device, 3));
         assert!(buckets.allow(Uuid::new_v4(), 3), "per device");
+    }
+
+    #[test]
+    fn idle_send_buckets_are_removed_with_bounded_work() {
+        let buckets = SendBuckets::default();
+        let now = Instant::now();
+        for _ in 0..100 {
+            assert!(buckets.allow_with_clock(Uuid::new_v4(), 1, || now));
+        }
+        let active = Uuid::new_v4();
+        assert!(buckets.allow_with_clock(active, 1, || now + Duration::from_secs(30)));
+        assert!(!buckets.allow_with_clock(active, 1, || now + Duration::from_secs(60)));
+        {
+            let state = buckets.state.lock().unwrap();
+            assert_eq!(state.buckets.len(), 37, "only 64 entries scanned");
+            assert_eq!(state.cleanup.len(), state.buckets.len());
+        }
+        assert!(!buckets.allow_with_clock(active, 1, || now + Duration::from_secs(60)));
+        let state = buckets.state.lock().unwrap();
+        assert_eq!(
+            state.buckets.len(),
+            1,
+            "all idle entries eventually removed"
+        );
+        assert_eq!(state.cleanup.len(), 1);
     }
 
     #[test]

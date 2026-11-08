@@ -1,0 +1,21 @@
+.server-storage {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+.storage-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+}
+.storage-heading h4 { margin: 0; font-size: 0.9rem; font-weight: 600; }
+.storage-heading button { min-height: 2.75rem; }
+.storage-totals { margin: 0.75rem 0; font-size: 0.85rem; }
+.storage-totals > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.25rem 0.75rem; margin: 0.375rem 0; }
+.storage-totals dt { color: var(--muted); }
+.storage-totals dd { margin: 0; overflow-wrap: anywhere; }
+.server-storage progress { width: 100%; height: 0.5rem; accent-color: var(--accent-bg); }
+.server-storage p { margin: 0.625rem 0 0; overflow-wrap: anywhere; }
+.storage-warning { font-size: 0.85rem; font-weight: 600; }

@@ -25,7 +25,7 @@ use crate::{
     AppState,
     auth::{AuthDevice, db},
     error::{ApiError, ApiJson},
-    limits,
+    limits, storage,
 };
 
 /// 100 MB of content plus room for encryption overhead (FR-MED-3).
@@ -96,16 +96,14 @@ pub async fn upload(
     let declared = content_length(&headers)?;
     take_quota(&state, device, declared).await?;
     let account = account_of(db, device).await?;
-    check_account_quota(&state, db, account, declared).await?;
-
     let id = Uuid::new_v4();
-    let received = stream_to(&store, &object_path(id), declared, body).await?;
-    // Checked again after the upload: two concurrent uploads both pass the
-    // first check. On refusal the stored bytes are dropped, not kept.
-    if let Err(e) = check_account_quota(&state, db, account, received).await {
-        let _ = store.delete(&object_path(id)).await;
-        return Err(e);
-    }
+    let key = object_path(id).to_string();
+    storage::reserve(db, account, &[(key.clone(), declared as i64)]).await?;
+    // Failed writes retain their reservations. Cancellation does not prove
+    // that a remote multipart writer has stopped.
+    let received = stream_to(db, &store, &object_path(id), declared, body).await?;
+    storage::mark_ready(db, &key).await?;
+    let mut tx = db.begin().await?;
     sqlx::query(
         "INSERT INTO blobs (blob_id, size_bytes, expires_at, account_id)
          VALUES ($1, $2, now() + make_interval(days => $3), $4)",
@@ -114,17 +112,24 @@ pub async fn upload(
     .bind(received as i64)
     .bind(BLOB_TTL_DAYS)
     .bind(account)
-    .execute(db)
+    .execute(&mut *tx)
     .await?;
+    sqlx::query("UPDATE storage_objects SET state = 'live' WHERE object_key = $1")
+        .bind(&key)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
     Ok(Json(Uploaded {
         blob_id: id,
         expires_in_days: BLOB_TTL_DAYS,
     }))
 }
 
-/// Streams a request body of exactly `declared` bytes into a new object;
-/// nothing is left behind if it falls short or runs over.
+/// Streams exactly `declared` bytes into a reserved, unique object key.
+/// A confirmed abort fences the writer. Release its charge only after
+/// confirmed deletion too. Uncertain failures and cancellation retain it.
 pub(crate) async fn stream_to(
+    db: &PgPool,
     store: &Arc<dyn ObjectStore>,
     path: &Path,
     declared: u64,
@@ -140,23 +145,35 @@ pub(crate) async fn stream_to(
         let chunk: Bytes = match chunk {
             Ok(c) => c,
             Err(_) => {
-                let _ = writer.abort().await;
+                if writer.abort().await.is_ok() {
+                    release_aborted(db, store, path).await;
+                }
                 return Err(ApiError::BadRequest("upload interrupted"));
             }
         };
         received += chunk.len() as u64;
         if received > declared {
-            let _ = writer.abort().await;
+            if writer.abort().await.is_ok() {
+                release_aborted(db, store, path).await;
+            }
             return Err(ApiError::BadRequest("more data than Content-Length"));
         }
         writer.write(&chunk);
     }
     if received != declared {
-        let _ = writer.abort().await;
+        if writer.abort().await.is_ok() {
+            release_aborted(db, store, path).await;
+        }
         return Err(ApiError::BadRequest("upload interrupted"));
     }
     writer.finish().await.map_err(internal)?;
     Ok(received)
+}
+
+async fn release_aborted(db: &PgPool, store: &Arc<dyn ObjectStore>, path: &Path) {
+    if let Err(e) = storage::forget(store, db, path.as_ref()).await {
+        tracing::warn!(error = ?e, "aborted upload cleanup failed; storage remains charged");
+    }
 }
 
 pub(crate) fn content_length(headers: &HeaderMap) -> Result<u64, ApiError> {
@@ -194,39 +211,6 @@ async fn account_of(db: &PgPool, device: Uuid) -> Result<Uuid, ApiError> {
     Ok(account)
 }
 
-/// Bytes this account keeps in the store now (unexpired blobs).
-async fn stored_bytes(db: &PgPool, account: Uuid) -> Result<i64, ApiError> {
-    let (used,): (i64,) = sqlx::query_as(
-        "SELECT coalesce(sum(size_bytes), 0)::bigint FROM blobs
-         WHERE account_id = $1 AND expires_at > now()",
-    )
-    .bind(account)
-    .fetch_one(db)
-    .await?;
-    Ok(used)
-}
-
-/// Refuses when `bytes` more would take the account over its stored-byte cap
-/// (`CHAT_LIMIT_BLOB_MB_PER_ACCOUNT`; 0 disables the cap). The daily upload
-/// allowance alone would still let an account accumulate 60 GB a month.
-async fn check_account_quota(
-    state: &AppState,
-    db: &PgPool,
-    account: Uuid,
-    bytes: u64,
-) -> Result<(), ApiError> {
-    let cap = i64::from(state.limits.blob_mb_per_account) * 1024 * 1024;
-    if cap <= 0 {
-        return Ok(());
-    }
-    if stored_bytes(db, account).await? + i64::try_from(bytes).unwrap_or(i64::MAX) > cap {
-        return Err(ApiError::TooManyRequests(
-            "this account keeps no more attachments; delete some or wait for them to expire",
-        ));
-    }
-    Ok(())
-}
-
 #[derive(Deserialize)]
 pub struct NewUpload {
     size: u64,
@@ -253,9 +237,17 @@ pub async fn create_upload(
     store(&state)?;
     take_quota(&state, device, req.size).await?;
     let account = account_of(db(&state)?, device).await?;
-    check_account_quota(&state, db(&state)?, account, req.size).await?;
     let id = Uuid::new_v4();
     let parts = req.size.div_ceil(UPLOAD_PART_BYTES) as i32;
+    let objects: Vec<_> = (0..parts)
+        .map(|n| {
+            (
+                part_path(id, n).to_string(),
+                part_len(req.size, parts, n) as i64,
+            )
+        })
+        .collect();
+    storage::reserve(db(&state)?, account, &objects).await?;
     sqlx::query(
         "INSERT INTO blob_uploads (upload_id, device_id, size_bytes, parts, expires_at)
          VALUES ($1, $2, $3, $4, now() + make_interval(hours => $5))",
@@ -283,7 +275,7 @@ async fn upload_of(
 ) -> Result<(u64, i32, Vec<i32>), ApiError> {
     let row: Option<(i64, i32, Vec<i32>)> = sqlx::query_as(
         "SELECT size_bytes, parts, received FROM blob_uploads
-         WHERE upload_id = $1 AND device_id = $2 AND expires_at > now()",
+         WHERE upload_id = $1 AND device_id = $2 AND NOT retiring AND expires_at > now()",
     )
     .bind(id)
     .bind(device)
@@ -308,10 +300,38 @@ pub async fn put_part(
     if body.len() as u64 != part_len(size, parts, part) {
         return Err(ApiError::BadRequest("wrong part size"));
     }
+    let db = db(&state)?;
+    let key = part_path(id, part).to_string();
+    let mut tx = db.begin().await?;
+    // A short claim transaction fences completion and expiry. Never hold a
+    // database transaction while the object store receives the part.
+    let live: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT upload_id FROM blob_uploads
+         WHERE upload_id = $1 AND device_id = $2 AND NOT retiring AND expires_at > now() FOR UPDATE",
+    )
+    .bind(id)
+    .bind(device)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if live.is_none() {
+        return Err(ApiError::NotFound("no such upload, or it expired"));
+    }
+    let claimed = sqlx::query(
+        "UPDATE storage_objects SET state = 'writing'
+         WHERE object_key = $1 AND state IN ('reserved', 'ready')",
+    )
+    .bind(&key)
+    .execute(&mut *tx)
+    .await?;
+    if claimed.rows_affected() != 1 {
+        return Err(ApiError::Conflict("this part is already being written"));
+    }
+    tx.commit().await?;
     store(&state)?
         .put(&part_path(id, part), PutPayload::from(body))
         .await
         .map_err(internal)?;
+    let mut tx = db.begin().await?;
     sqlx::query(
         "UPDATE blob_uploads
          SET received = ARRAY(SELECT DISTINCT unnest(received || $2) ORDER BY 1)
@@ -319,8 +339,13 @@ pub async fn put_part(
     )
     .bind(id)
     .bind(part)
-    .execute(db(&state)?)
+    .execute(&mut *tx)
     .await?;
+    sqlx::query("UPDATE storage_objects SET state = 'ready' WHERE object_key = $1")
+        .bind(&key)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -351,7 +376,7 @@ pub async fn complete_upload(
     let mut tx = db(&state)?.begin().await?;
     let row: Option<(i64, i32, Vec<i32>)> = sqlx::query_as(
         "SELECT size_bytes, parts, received FROM blob_uploads
-         WHERE upload_id = $1 AND device_id = $2 AND expires_at > now() FOR UPDATE",
+         WHERE upload_id = $1 AND device_id = $2 AND NOT retiring AND expires_at > now() FOR UPDATE",
     )
     .bind(id)
     .bind(device)
@@ -362,9 +387,18 @@ pub async fn complete_upload(
         return Err(ApiError::Conflict("some parts are missing"));
     }
     let account = account_of(db(&state)?, device).await?;
-    // The parts are already stored; a refusal here costs one upload session,
-    // which the hourly cleanup then deletes.
-    check_account_quota(&state, db(&state)?, account, size as u64).await?;
+    // Part writers lock the upload row before claiming a part. Completion
+    // keeps the existing ledger entries; it never reserves the size again.
+    let (count, ready): (i64, i64) = sqlx::query_as(
+        "SELECT count(*), count(*) FILTER (WHERE state = 'ready') FROM storage_objects
+         WHERE object_key LIKE $1",
+    )
+    .bind(format!("blobs/{id}/%"))
+    .fetch_one(&mut *tx)
+    .await?;
+    if count != i64::from(parts) || ready != i64::from(parts) {
+        return Err(ApiError::Conflict("some parts are still being written"));
+    }
     sqlx::query("DELETE FROM blob_uploads WHERE upload_id = $1")
         .bind(id)
         .execute(&mut *tx)
@@ -380,6 +414,10 @@ pub async fn complete_upload(
     .bind(account)
     .execute(&mut *tx)
     .await?;
+    sqlx::query("UPDATE storage_objects SET state = 'live' WHERE object_key LIKE $1")
+        .bind(format!("blobs/{id}/%"))
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(Json(Uploaded {
         blob_id: id,
@@ -505,14 +543,11 @@ pub async fn download(
 }
 
 /// Deletes objects, treating ones already gone as deleted.
-async fn delete_all(store: &Arc<dyn ObjectStore>, paths: Vec<Path>) -> bool {
+async fn delete_all(db: &PgPool, store: &Arc<dyn ObjectStore>, paths: Vec<Path>) -> bool {
     for path in paths {
-        match store.delete(&path).await {
-            Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
-            Err(e) => {
-                tracing::warn!(error = %e, "deleting an expired blob failed");
-                return false;
-            }
+        if let Err(e) = storage::forget(store, db, path.as_ref()).await {
+            tracing::warn!(error = ?e, "deleting an expired blob failed");
+            return false;
         }
     }
     true
@@ -532,26 +567,52 @@ pub async fn expire(db: &sqlx::PgPool, store: &Arc<dyn ObjectStore>) -> anyhow::
         } else {
             (0..parts).map(|n| part_path(id, n)).collect()
         };
-        if delete_all(store, paths).await {
+        if delete_all(db, store, paths).await {
             sqlx::query("DELETE FROM blobs WHERE blob_id = $1")
                 .bind(id)
                 .execute(db)
                 .await?;
         }
     }
-    let abandoned: Vec<(Uuid, Vec<i32>)> = sqlx::query_as(
-        "SELECT upload_id, received FROM blob_uploads WHERE expires_at < now()
-         ORDER BY expires_at LIMIT 1000",
+    let abandoned: Vec<(Uuid, i32)> = sqlx::query_as(
+        "SELECT u.upload_id, u.parts FROM blob_uploads u WHERE u.expires_at < now()
+         AND NOT EXISTS (SELECT 1 FROM storage_objects s
+                         WHERE s.object_key LIKE 'blobs/' || u.upload_id || '/%'
+                           AND s.state = 'writing')
+         ORDER BY u.expires_at LIMIT 1000",
     )
     .fetch_all(db)
     .await?;
-    for (id, received) in abandoned {
-        if delete_all(
-            store,
-            received.into_iter().map(|n| part_path(id, n)).collect(),
+    for (id, parts) in abandoned {
+        let mut tx = db.begin().await?;
+        // An expired session cannot accept a new writer. The row lock waits
+        // for earlier claims. A crashed writer retains its charge forever,
+        // until an operator fences it and repairs the reservation.
+        let expired: Option<(Uuid,)> = sqlx::query_as(
+            "SELECT upload_id FROM blob_uploads WHERE upload_id = $1
+             AND expires_at < now() FOR UPDATE",
         )
-        .await
-        {
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let (writing,): (i64,) = sqlx::query_as(
+            "SELECT count(*) FROM storage_objects WHERE object_key LIKE $1 AND state = 'writing'",
+        )
+        .bind(format!("blobs/{id}/%"))
+        .fetch_one(&mut *tx)
+        .await?;
+        if expired.is_none() || writing != 0 {
+            tx.rollback().await?;
+            continue;
+        }
+        // A transaction can wait for this lock with a pre-expiry now(). A
+        // durable flag, not its transaction timestamp, must fence that writer.
+        sqlx::query("UPDATE blob_uploads SET retiring = TRUE WHERE upload_id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        if delete_all(db, store, (0..parts).map(|n| part_path(id, n)).collect()).await {
             sqlx::query("DELETE FROM blob_uploads WHERE upload_id = $1")
                 .bind(id)
                 .execute(db)
