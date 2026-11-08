@@ -12,6 +12,7 @@ import type {
   CoreResponseBody,
   CoreStatus,
   DeviceInfo,
+  StorageUsage,
   InviteOffer,
   LinkOffer,
   LocationInfo,
@@ -176,6 +177,10 @@ export class CoreClient {
   /** Signed-in device: approves a scanned or typed code and adds the device. */
   async approveLink(text: string) {
     expect(await this.call({ type: 'approveLink', text }), 'ok')
+  }
+
+  async storageUsage(): Promise<StorageUsage> {
+    return expect(await this.call({ type: 'storageUsage' }), 'storageUsage').usage
   }
 
   async devices(): Promise<DeviceInfo[]> {

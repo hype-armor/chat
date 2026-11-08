@@ -3,6 +3,7 @@ import type { CoreClient } from '../core/client'
 import type { AppView, ChatMessage, ConversationSummary, GroupCallStatus, MemberInfo } from '../core/protocol'
 import { SetupActions, SetupBanner, useSetup } from './Banners'
 import { Devices } from './Devices'
+import { ServerStorage } from './ServerStorage'
 import { Invite } from './Invite'
 import { Backup } from './Backup'
 import { Avatar, useAvatarPhoto } from './Avatar'
@@ -225,6 +226,7 @@ export function Chat({
               </section>
               <section className="settings-group" aria-labelledby="settings-data">
                 <h3 id="settings-data">Devices &amp; data</h3>
+                <ServerStorage core={core} />
                 <Devices core={core} />
                 <Backup core={core} backup={view.backup} />
                 <Media core={core} media={view.media} />

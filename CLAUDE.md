@@ -27,6 +27,10 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
 ## Ground rules
 
 - No hand-rolled cryptography; no plaintext or extra metadata on the server.
+- Storage writes must reserve ciphertext bytes in the shared quota ledger before object-store I/O
+  (ADR-0040). Release charges only after confirmed deletion and fenced writers. Account send
+  limits must remain inside the authorized send transaction. Operator policy changes must use
+  the shared storage-policy lock. Keep quota fetches in the core worker and account-scoped.
 - No third-party scripts or origins in the web client (strict CSP; Trusted
   Types policy in `web/src/trusted-types.ts`).
 - Keys, storage and networking stay in the core worker, never on the UI thread.
