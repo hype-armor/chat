@@ -7,11 +7,6 @@ import type { ChatMessage, LiveInfo } from '../core/protocol'
 import { formatCoordinates } from './Location'
 import { MapView } from './MapView'
 
-function remaining(expiresAt: number, now: number): string {
-  const minutes = Math.max(0, Math.ceil((expiresAt - now) / 60_000))
-  return minutes >= 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min left` : `${minutes} min left`
-}
-
 /** The time now, re-rendering every `everyMs` so countdowns move. */
 function useNow(everyMs: number): number {
   const [, tick] = useState(0)
@@ -83,24 +78,6 @@ export function LiveSharing({
   }, [core, active])
 
   return null
-}
-
-/** The FR-LOC-6 indicator in one conversation: time left and a Stop action. */
-export function LiveIndicator({ core, share }: { core: CoreClient; share: LiveShare }) {
-  const now = useNow(30_000)
-  return (
-    <span
-      className="live-indicator"
-      role="status"
-      aria-label={`Sharing live location in ${share.title}`}
-      title="Sharing pauses when the app is closed or in the background."
-    >
-      📍 {share.title}: Sharing live location · {share.untilStopped ? 'until stopped' : remaining(share.expiresAt, now)}
-      <button type="button" className="link small" onClick={() => void core.stopLive(share.conversationId)}>
-        Stop
-      </button>
-    </span>
-  )
 }
 
 /** Active shares from this contact in this conversation only; never one-shot or expired points. */

@@ -37,6 +37,7 @@ let rejectMapInfo: ((error: Error) => void) | undefined
 let storageRequests = 0
 let pendingStorage: { resolve: (usage: StorageUsage) => void; reject: (error: Error) => void } | undefined
 const callActions: string[] = []
+const liveActivity = { updates: 0, pauses: 0, stops: [] as string[] }
 const liveStarts: { conversationId: string; durationMs: number | null; location: { latitude: number; longitude: number; accuracyM: number } }[] = []
 const leases = new TypingLeases()
 let lastTyping = ''
@@ -128,6 +129,16 @@ const core = {
   startLive: async (conversationId: string, durationMs: number | null, location: { latitude: number; longitude: number; accuracyM: number }) => {
     liveStarts.push({ conversationId, durationMs, location })
   },
+  liveUpdate: async () => { liveActivity.updates++ },
+  pauseLive: async () => { liveActivity.pauses++ },
+  stopLive: async (id: string) => {
+    liveActivity.stops.push(id)
+    view.liveSharing = view.liveSharing.filter((share) => share.conversationId !== id)
+    if (id === 'chat') stored = stored.map((message) => message.live && message.from === 'me'
+      ? { ...message, live: { ...message.live, stopped: true, ended: true } } : message)
+    refresh()
+    renderFixture()
+  },
   setTyping: async (_id: string, active: boolean) => channel.postMessage({ type: 'typing', active }),
   sendFile: async (id: string, file: File, caption: string, _media: unknown, draftRevision?: number) => {
     attachmentCaptions.push({ id, text: caption, name: file.name, revision: draftRevision })
@@ -161,6 +172,7 @@ const view: Extract<AppView, { phase: 'ready' }> = {
 Object.assign(window, {
   interactionFixture: {
     liveStarts,
+    liveActivity,
     callActions,
     storageRequests() { return storageRequests },
     storagePending() { return !!pendingStorage },
@@ -185,6 +197,18 @@ Object.assign(window, {
     failMap() {
       rejectMapInfo?.(new Error('Delayed map style failure from fixture'))
       rejectMapInfo = undefined
+    },
+    activeLiveShare(expired?: number) {
+      const now = Date.now()
+      const untilStopped = expired === 1
+      const expiresAt = now + (untilStopped ? -60_000 : 15 * 60_000)
+      view.liveSharing = [{ conversationId: 'chat', title, expiresAt, untilStopped }]
+      stored.push({
+        id: crypto.randomUUID(), from: 'me', text: '', sentAt: now, status: 'sent', canReply: true,
+        live: { sessionId: crypto.randomUUID(), expiresAt, untilStopped, ended: false, latest: { latitude: 48.8584, longitude: 2.2945, accuracyM: 12, at: now } },
+      })
+      refresh()
+      renderFixture()
     },
     dropTypingStops(value: number) { dropTypingStops = value === 1 },
     holdNextSend() { holdNextSend = true },

@@ -67,9 +67,13 @@
   layers wait for self-hosted glyphs.
 - Reverse geocoding (place names) is done by the **sender** and sent inside
   the encrypted message, or skipped.
-- Persistent UI indicator during live sharing (FR-LOC-6); OS-level
-  "while using" permission preferred; background permission only requested
-  when starting a live share.
+- Persistent per-conversation indicators during live sharing (FR-LOC-6):
+  a location icon in the conversation list and the live-location message card
+  with **Stop sharing**. The conversation menu also has **Stop sharing location**
+  while a share is active, even when its card is off-screen or its previous
+  lease expired before a fresh fix. There is no app-wide location-sharing banner or
+  reserved space above the chat layout. OS-level "while using" permission
+  is preferred; background permission is only requested when starting a live share.
 
 ## 4. Offline mode
 Location messages work in offline mode like any other small message; live

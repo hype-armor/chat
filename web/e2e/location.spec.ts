@@ -1,5 +1,5 @@
 import { type Browser, expect, test } from './fixtures'
-import { messages, openChat, openSettings, randomUsername, startChat } from './support'
+import { closeSettings, messages, openChat, openSettings, randomUsername, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -126,9 +126,11 @@ test('live location follows the sender and is gone when they stop (FR-LOC-2/3/6)
   await alice.getByRole('menuitem', { name: 'Location', exact: true }).click()
   await alice.getByRole('dialog', { name: 'Share this location?' }).getByRole('button', { name: '15 min' }).click()
   await expect(alice.getByLabel('Message', { exact: true })).toBeFocused()
-  // The indicator stays up while sharing (FR-LOC-6).
-  const indicator = alice.getByRole('status', { name: /Sharing live location/ })
-  await expect(indicator).toContainText(/Sharing live location · 15 min left/)
+  const ownCard = messages(alice).getByTestId('live-location')
+  await expect(ownCard).toContainText('Live location · until')
+  await expect(ownCard.getByRole('button', { name: 'Stop sharing', exact: true })).toBeVisible()
+  await expect(alice.getByRole('button', { name: /Bob/ }).getByRole('img', { name: 'Sharing live location', exact: true })).toBeVisible()
+  await expect(alice.locator('.live-sharing-indicators')).toHaveCount(0)
 
   await openChat(bob, /Alice/)
   const card = messages(bob).getByTestId('live-location')
@@ -141,15 +143,15 @@ test('live location follows the sender and is gone when they stop (FR-LOC-2/3/6)
 
   await alice.evaluate("location.hash = 'diagnostics'")
   await expect(alice.getByTestId('self-test')).toHaveText('passed')
-  await expect(indicator).toBeVisible()
-  await indicator.getByRole('button', { name: 'Stop' }).click()
-  await expect(indicator).toBeHidden()
+  await expect(alice.locator('.live-sharing-indicators')).toHaveCount(0)
   await alice.getByRole('button', { name: '← Back', exact: true }).click()
+  await ownCard.getByRole('button', { name: 'Stop sharing', exact: true }).click()
+  await expect(alice.getByRole('img', { name: 'Sharing live location', exact: true })).toHaveCount(0)
   await expect(card).toHaveText('📍 Live location ended')
   await expect(messages(alice).getByTestId('live-location')).toHaveText('📍 Live location ended')
 })
 
-test('live-location controls remain available across conversations and Settings (FR-LOC-6)', async ({ browser }) => {
+test('live-location cards and sidebar indicators remain available across conversations and Settings (FR-LOC-6)', async ({ browser }) => {
   const bobUsername = randomUsername()
   const carolUsername = randomUsername()
   const alice = await signUp(browser, 'Alice', randomUsername(), new Set(), [])
@@ -160,25 +162,32 @@ test('live-location controls remain available across conversations and Settings 
   await alice.getByRole('button', { name: 'Add attachment' }).click()
   await alice.getByRole('menuitem', { name: 'Location', exact: true }).click()
   await alice.getByRole('dialog', { name: 'Share this location?' }).getByRole('button', { name: '15 min' }).click()
-  const indicators = alice.getByRole('status', { name: /Sharing live location/ })
-  const bobIndicator = indicators.filter({ hasText: 'Bob' })
-  await expect(bobIndicator).toBeVisible()
+  const dot = { name: 'Sharing live location', exact: true }
+  const bobDot = alice.getByRole('button', { name: /Bob/ }).getByRole('img', dot)
+  await expect(bobDot).toBeVisible()
+  await expect(messages(alice).getByTestId('live-location').getByRole('button', { name: 'Stop sharing', exact: true })).toBeVisible()
 
   await startChat(alice, carolUsername)
   await expect(alice.getByRole('heading', { name: 'Carol', exact: true })).toBeVisible({ timeout: 15_000 })
   await alice.getByRole('button', { name: 'Add attachment' }).click()
   await alice.getByRole('menuitem', { name: 'Location', exact: true }).click()
   await alice.getByRole('dialog', { name: 'Share this location?' }).getByRole('button', { name: '15 min' }).click()
-  const carolIndicator = indicators.filter({ hasText: 'Carol' })
-  await expect(indicators).toHaveCount(2)
-  await expect(carolIndicator).toBeVisible()
+  const carolDot = alice.getByRole('button', { name: /Carol/ }).getByRole('img', dot)
+  await expect(alice.getByRole('img', dot)).toHaveCount(2)
+  await expect(carolDot).toBeVisible()
 
   await openSettings(alice)
-  await expect(indicators).toHaveCount(2)
-  await carolIndicator.getByRole('button', { name: 'Stop' }).click()
-  await expect(carolIndicator).toBeHidden()
-  await bobIndicator.getByRole('button', { name: 'Stop' }).click()
-  await expect(indicators).toHaveCount(0)
+  await expect(alice.getByRole('navigation', { name: 'Settings', exact: true })).toBeVisible()
+  await expect(alice.locator('.live-sharing-indicators')).toHaveCount(0)
+  await closeSettings(alice)
+  await expect(bobDot).toBeVisible()
+  await expect(carolDot).toBeVisible()
+  await messages(alice).getByTestId('live-location').getByRole('button', { name: 'Stop sharing', exact: true }).click()
+  await expect(carolDot).toHaveCount(0)
+  await expect(bobDot).toBeVisible()
+  await openChat(alice, /Bob/)
+  await messages(alice).getByTestId('live-location').getByRole('button', { name: 'Stop sharing', exact: true }).click()
+  await expect(alice.getByRole('img', dot)).toHaveCount(0)
 })
 
 test('until-stopped location sharing continues until the sender stops it (FR-LOC-2/3/6)', async ({ browser }) => {
@@ -195,9 +204,11 @@ test('until-stopped location sharing continues until the sender stops it (FR-LOC
   await expect(preview).toContainText('Recipients remove the last point after 8 hours without an update.')
   await preview.getByRole('button', { name: 'Until stopped' }).click()
 
-  const indicator = alice.getByRole('status', { name: /Sharing live location/ })
-  await expect(indicator).toContainText(/Sharing live location · until stopped/)
-  await expect(indicator).toHaveAttribute('title', 'Sharing pauses when the app is closed or in the background.')
+  const ownCard = messages(alice).getByTestId('live-location')
+  await expect(ownCard).toContainText('Live location · until stopped')
+  await expect(ownCard.getByRole('button', { name: 'Stop sharing', exact: true })).toBeVisible()
+  await expect(alice.getByRole('img', { name: 'Sharing live location', exact: true })).toBeVisible()
+  await expect(alice.locator('.live-sharing-indicators')).toHaveCount(0)
 
   await openChat(bob, /Alice/)
   const card = messages(bob).getByTestId('live-location')
@@ -227,8 +238,8 @@ test('until-stopped location sharing continues until the sender stops it (FR-LOC
   await bob.locator('.conversation-title .conversation-name').click()
   await expect(contactLocation).toContainText('48.85840, 2.30270 · ±8 m')
 
-  await indicator.getByRole('button', { name: 'Stop' }).click()
-  await expect(indicator).toBeHidden()
+  await ownCard.getByRole('button', { name: 'Stop sharing', exact: true }).click()
+  await expect(alice.getByRole('img', { name: 'Sharing live location', exact: true })).toHaveCount(0)
   await expect(card).toHaveText('📍 Live location ended')
   await expect(contactLocation).toHaveCount(0)
 })
