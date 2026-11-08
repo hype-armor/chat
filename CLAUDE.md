@@ -21,6 +21,13 @@ for changed behavior. Do not use CI as the first check for these failures.
 The web workspace currently has no configured formatter or lint command; report
 that gap rather than claiming those checks passed. Keep the broader checks below.
 
+CI must gate compilation, integration, browsers, and publication on cheap checks.
+Read `docs/ci.md` before changing workflows. PRs call CI directly; Images calls the
+same reusable CI for main/tag pushes before publishing. Do not duplicate push runs
+or bypass failed/skipped gates. Run `actionlint` and `python3 scripts/test-ci-graph.py`
+for workflow changes. Regenerate the checked-in WASM declaration contract with
+real bindings; do not hand-edit it or replace the later full-runtime test suite.
+
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
