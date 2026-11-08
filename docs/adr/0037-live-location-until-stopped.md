@@ -25,7 +25,7 @@ The sender stores the session locally across reloads. The web client resumes it 
 
 The contact details view shows active live-location cards above safety-number verification. Clicking the contact name or photo opens this view. The cards update in place and disappear when sharing stops or expires.
 
-The UI keeps sharing opt-in and per conversation. It shows a persistent Stop control. It says that sharing pauses when the app is closed or in the background. Recipients see the last update time and the 8-hour inactivity limit. No background location permission is available in the web app.
+The UI keeps sharing opt-in and per conversation. It shows a persistent Stop control on the live-location message card and a sharing icon in the conversation list. The UI has no app-wide sharing banner or reserved layout space for active shares. The conversation menu also offers Stop sharing location while the worker reports an active share, including when its previous lease expired and the app has no fresh fix. It says that sharing pauses when the app is closed or in the background. Recipients see the last update time and the 8-hour inactivity limit. No background location permission is available in the web app.
 
 ## Consequences
 

@@ -228,6 +228,92 @@ test('an accepted attachment caption cannot return after a UI restart', async ({
   await expect(input).toHaveValue('')
 })
 
+for (const width of [390, 1280]) {
+  test(`live sharing keeps its card, sidebar indicator, Stop, and watcher without a top banner (${width}px)`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 720 })
+    await page.addInitScript(() => {
+      let watches = 0
+      let clears = 0
+      Object.defineProperty(navigator, 'geolocation', {
+        configurable: true,
+        value: {
+          watchPosition(success: PositionCallback) {
+            document.documentElement.dataset.fixtureGeoWatches = String(++watches)
+            success({ coords: { latitude: 48.8584, longitude: 2.2945, accuracy: 12 } } as GeolocationPosition)
+            return watches
+          },
+          clearWatch() { document.documentElement.dataset.fixtureGeoClears = String(++clears) },
+        },
+      })
+    })
+    await openFixture(page)
+    await fixtureAction(page, 'addChat')
+    const layout = page.locator('.chat-layout')
+    const expectNoGap = async () => {
+      await expect(page.locator('.live-sharing-indicators, .live-banner')).toHaveCount(0)
+      await expect(page.getByRole('status', { name: /Sharing live location/ })).toHaveCount(0)
+      await expect.poll(async () => {
+        const box = (await layout.boundingBox())!
+        return { top: box.y, height: box.height }
+      }).toEqual({ top: 0, height: 720 })
+    }
+    await expectNoGap()
+    const menuTrigger = page.getByRole('button', { name: 'Conversation menu', exact: true })
+    const menuStop = page.getByRole('menu', { name: 'Conversation menu', exact: true }).getByRole('menuitem', { name: 'Stop sharing location', exact: true })
+    await menuTrigger.click()
+    await expect(menuStop).toHaveCount(0)
+    await page.keyboard.press('Escape')
+    await fixtureAction(page, 'activeLiveShare')
+    const card = messages(page).getByTestId('live-location')
+    const dot = page.locator('.sidebar .live-dot')
+    await expect(card).toContainText('Live location · until')
+    await expect(card.getByRole('button', { name: 'Stop sharing', exact: true })).toBeVisible()
+    await menuTrigger.click()
+    await expect(menuStop).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(dot).toHaveCount(1)
+    await expect(dot).toHaveAttribute('aria-label', 'Sharing live location')
+    await expect(page.locator('html')).toHaveAttribute('data-fixture-geo-watches', '1')
+    await expect.poll(() => page.evaluate(() => (window as unknown as { interactionFixture: { liveActivity: { updates: number } } }).interactionFixture.liveActivity.updates)).toBe(1)
+    await expectNoGap()
+
+    if (width === 390) await page.getByRole('button', { name: 'Back to conversations', exact: true }).click()
+    await page.getByRole('button', { name: /Other chat/ }).click()
+    await expect(messages(page).getByTestId('live-location')).toHaveCount(0)
+    await expect(dot).toHaveCount(1)
+    await expectNoGap()
+    if (width === 390) await page.getByRole('button', { name: 'Back to conversations', exact: true }).click()
+    await page.getByRole('button', { name: /Bob/ }).click()
+    await expect(card.getByRole('button', { name: 'Stop sharing', exact: true })).toBeVisible()
+    await expect(page.locator('html')).toHaveAttribute('data-fixture-geo-watches', '1')
+    await card.getByRole('button', { name: 'Stop sharing', exact: true }).click()
+    await expect(card).toHaveText('📍 Live location ended')
+    await expect(dot).toHaveCount(0)
+    await expect(page.locator('html')).toHaveAttribute('data-fixture-geo-clears', '1')
+    await expect.poll(() => page.evaluate(() => (window as unknown as { interactionFixture: { liveActivity: { stops: string[] } } }).interactionFixture.liveActivity.stops)).toEqual(['chat'])
+    await menuTrigger.click()
+    await expect(menuStop).toHaveCount(0)
+    await page.keyboard.press('Escape')
+    await expectNoGap()
+
+    // An expired until-stopped lease remains active even while its card looks ended.
+    await fixtureAction(page, 'activeLiveShare', 1)
+    const expired = messages(page).getByTestId('live-location').last()
+    await expect(expired).toHaveText('📍 Live location ended')
+    await expect(expired.getByRole('button', { name: 'Stop sharing', exact: true })).toHaveCount(0)
+    await expect(dot).toHaveCount(1)
+    await menuTrigger.click()
+    await expect(menuStop).toBeVisible()
+    await menuStop.click()
+    await expect(dot).toHaveCount(0)
+    await expect.poll(() => page.evaluate(() => (window as unknown as { interactionFixture: { liveActivity: { stops: string[] } } }).interactionFixture.liveActivity.stops)).toEqual(['chat', 'chat'])
+    await menuTrigger.click()
+    await expect(menuStop).toHaveCount(0)
+    await page.keyboard.press('Escape')
+    await expectNoGap()
+  })
+}
+
 test('metadata cannot be highlighted while body text stays selectable and the composer stays editable', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 })
   await openFixture(page)

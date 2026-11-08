@@ -43,6 +43,10 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   bottom; incoming messages must not displace a reader who scrolled up.
   Map error fallbacks must preserve map dimensions so dialog controls do not move
   during activation.
+- Live sharing has no app-wide banner or layout offset. Keep the conversation-list
+  sharing icon, live message card and Stop sharing control. The Conversation menu
+  must offer Stop sharing location for active shares, even with an expired or
+  off-screen card. Removing the banner must not stop the watcher or change expiry.
 - Run browser tests against isolated test services, never a live deployment.
 - Rust Docker build stages must retain the shared BuildKit Cargo lock and CPU-sized
   job budget. Use `scripts/compose-build.sh` for sequential image builds and run

@@ -12,7 +12,7 @@ import { Attachment } from './Attachment'
 import { Recorder } from './Recorder'
 import { Media } from './Media'
 import { LocationCard, ShareLocation } from './Location'
-import { ContactLiveLocations, LiveCard, LiveIndicator, LiveSharing, type LiveShare } from './Live'
+import { ContactLiveLocations, LiveCard, LiveSharing, type LiveShare } from './Live'
 import { CallScreen, useCall } from './Call'
 import { CallController } from './calls'
 import { GroupCallScreen, useGroupCall } from './GroupCall'
@@ -30,7 +30,7 @@ import {
   reconnectNotifications,
   refreshSubscription,
 } from '../notifications'
-import { useBannerHeight, useVisualViewport } from './useVisualViewport'
+import { useVisualViewport } from './useVisualViewport'
 import { MessageText } from './MessageText'
 import { useMessageScroll } from './useMessageScroll'
 import { ConversationDrafts, useConversationDraft } from './useConversationDrafts'
@@ -108,8 +108,6 @@ export function Chat({
   }, [drafts])
   const [selected, setSelected] = useState<string>()
   const [panel, setPanel] = useState<'chats' | 'settings' | 'chat' | 'group'>('chats')
-  const hasLiveSharing = view.liveSharing.length > 0
-  const liveSharingIndicators = useBannerHeight<HTMLDivElement>('--live-sharing-height', hasLiveSharing)
   const sidebar = useRef<HTMLElement>(null)
   const setup = useSetup()
   useEffect(() => {
@@ -142,18 +140,11 @@ export function Chat({
   return (
     <>
       <LiveSharing core={core} sharing={view.liveSharing} />
-      {view.liveSharing.length > 0 && (
-        <div className="live-sharing-indicators" ref={liveSharingIndicators}>
-          {view.liveSharing.map((share) => (
-            <LiveIndicator key={share.conversationId} core={core} share={share} />
-          ))}
-        </div>
-      )}
       <CallScreen calls={calls} />
       <GroupCallScreen calls={groupCalls} />
       <div
         hidden={showDiagnostics}
-        className={`chat-layout ${conversation ? 'has-selection' : ''} ${hasLiveSharing ? 'with-banner' : ''}`}
+        className={`chat-layout ${conversation ? 'has-selection' : ''}`}
       >
         <aside className="sidebar" ref={sidebar}>
           <header className="bar me">
@@ -285,6 +276,7 @@ export function Chat({
             blocked={conversation.blocked ?? false}
             request={conversation.request}
             typingIndicators={view.typingIndicators}
+            sharingLocation={view.liveSharing.some((share) => share.conversationId === conversation.id)}
             onBack={() => setSelected(undefined)}
           />
         ) : (
@@ -1133,6 +1125,7 @@ function Conversation({
   blocked,
   request,
   typingIndicators,
+  sharingLocation,
   onBack,
 }: {
   core: CoreClient
@@ -1150,6 +1143,7 @@ function Conversation({
   blocked: boolean
   request: boolean
   typingIndicators: boolean
+  sharingLocation: boolean
   onBack: () => void
 }) {
   const [panel, updatePanel] = useState<'add' | 'info' | 'verify' | 'report'>()
@@ -1268,6 +1262,15 @@ function Conversation({
   }
   const menuItems: MenuItem[] = [
     { label: 'Typing indicators', checked: typingEnabled, onSelect: toggleTyping },
+    ...(sharingLocation ? [{
+      label: 'Stop sharing location',
+      onSelect: () => {
+        setAttachError('')
+        void core.stopLive(id).catch((error: unknown) => {
+          setAttachError(error instanceof Error ? error.message : 'Could not stop location sharing')
+        })
+      },
+    }] : []),
     ...(compactHeader && canCall ? [
       { label: isGroup ? 'Group voice call' : 'Voice call', onSelect: () => startCall(false) },
       { label: isGroup ? 'Group video call' : 'Video call', onSelect: () => startCall(true) },

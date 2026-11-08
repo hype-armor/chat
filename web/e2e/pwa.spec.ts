@@ -122,7 +122,7 @@ test.describe('setup reminders and Settings', () => {
     await expect(page.getByRole('navigation', { name: 'Settings', exact: true })).toBeVisible()
   })
 
-  test('keeps the update banner above the fixed chat layout', async ({ page }) => {
+  test('keeps only the update banner above the fixed chat layout while sharing live location', async ({ page, browser }) => {
     await page.addInitScript({ content: `
       Object.defineProperty(navigator.serviceWorker, 'controller', { value: {} });
       navigator.serviceWorker.register = async () => Object.assign(new EventTarget(), {
@@ -133,6 +133,17 @@ test.describe('setup reminders and Settings', () => {
     await expect(page.getByRole('status')).toHaveText('Connected')
     const banner = page.getByRole('region', { name: 'Update', exact: true })
     await expect(banner).toBeVisible()
+    const username = randomUsername()
+    await signUp(browser, 'Bob', username)
+    await startChat(page, username)
+    await page.context().grantPermissions(['geolocation'])
+    await page.context().setGeolocation({ latitude: 48.8584, longitude: 2.2945 })
+    await page.getByRole('button', { name: 'Add attachment' }).click()
+    await page.getByRole('menuitem', { name: 'Location', exact: true }).click()
+    await page.getByRole('dialog', { name: 'Share this location?' }).getByRole('button', { name: '15 min' }).click()
+    const liveCard = messages(page).getByTestId('live-location')
+    await expect(liveCard.getByRole('button', { name: 'Stop sharing', exact: true })).toBeVisible()
+    await expect(page.locator('.live-sharing-indicators')).toHaveCount(0)
     for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }, { width: 390, height: 500 }]) {
       await page.setViewportSize(viewport)
       await expect.poll(async () => {
@@ -145,6 +156,7 @@ test.describe('setup reminders and Settings', () => {
         }
       }).toEqual({ bannerTop: 0, layoutBelowBanner: true, layoutBottom: viewport.height })
     }
+    await liveCard.getByRole('button', { name: 'Stop sharing', exact: true }).click()
     await banner.getByRole('button', { name: 'Update now' }).click()
     await expect(page.locator('html')).toHaveAttribute('data-update-activated', 'yes')
   })
@@ -183,14 +195,14 @@ test.describe('setup reminders and Settings', () => {
         window.visualViewport.dispatchEvent(new Event(${JSON.stringify(event)}));
       `)
     }
-    const expectConversationFits = async (top: number, height: number, bannerHeight = 0) => {
-      await expectBounds(top + bannerHeight, height - bannerHeight)
+    const expectConversationFits = async (top: number, height: number) => {
+      await expectBounds(top, height)
       await expect.poll(async () => {
         const header = (await page.locator('.conversation-bar').boundingBox())!
         const composer = (await page.locator('.composer').boundingBox())!
         const newest = (await messages(page).last().boundingBox())!
         return {
-          headerVisible: header.y >= top + bannerHeight && header.y + header.height <= top + height,
+          headerVisible: header.y >= top && header.y + header.height <= top + height,
           composerBottom: composer.y + composer.height,
           newestVisible: newest.y >= header.y + header.height && newest.y + newest.height <= composer.y,
         }
@@ -222,27 +234,28 @@ test.describe('setup reminders and Settings', () => {
       (root) => root.style.getPropertyValue('--safe-bottom'),
     )).toBe('')
 
-    // A wrapped live-location banner must leave room for the whole conversation.
+    // Active sharing must not add a banner or reduce the conversation viewport.
     await page.context().grantPermissions(['geolocation'])
     await page.context().setGeolocation({ latitude: 48.8584, longitude: 2.2945 })
     await page.getByRole('button', { name: 'Add attachment' }).click()
     await page.getByRole('menuitem', { name: 'Location', exact: true }).click()
     await page.getByRole('dialog', { name: 'Share this location?' }).getByRole('button', { name: '15 min' }).click()
-    const indicator = page.getByRole('status', { name: /Sharing live location/ })
-    await expect(indicator).toBeVisible()
-    const indicatorHeight = (await page.locator('.live-sharing-indicators').boundingBox())!.height
-    await expect(page.locator('.live-banner')).toHaveCount(0)
+    const liveCard = messages(page).getByTestId('live-location')
+    await expect(liveCard.getByRole('button', { name: 'Stop sharing', exact: true })).toBeVisible()
+    await expect(page.getByRole('img', { name: 'Sharing live location', exact: true })).toHaveCount(1)
+    await expect(page.locator('.live-sharing-indicators, .live-banner')).toHaveCount(0)
     await input.fill('Typing while sharing live location')
     await page.getByRole('button', { name: 'Send', exact: true }).click()
     await expect(messages(page).last()).toContainText('Typing while sharing live location')
     await changeViewport(500, 344, 'resize')
-    await expectConversationFits(344, 500, indicatorHeight)
-    await indicator.getByRole('button', { name: 'Stop' }).click()
-    await expect(indicator).toBeHidden()
+    await expectConversationFits(344, 500)
+    await liveCard.getByRole('button', { name: 'Stop sharing', exact: true }).click()
+    await expect(liveCard).toHaveText('📍 Live location ended')
+    await expect(page.getByRole('img', { name: 'Sharing live location', exact: true })).toHaveCount(0)
     await input.focus()
     await expectConversationFits(344, 500)
     await expect.poll(() => page.locator('html').evaluate(
-      (root) => root.style.getPropertyValue('--live-banner-height'),
+      (root) => root.style.getPropertyValue('--live-sharing-height'),
     )).toBe('')
   })
 })
