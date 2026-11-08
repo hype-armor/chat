@@ -1588,7 +1588,7 @@ function Conversation({
           editReply(undefined)
           composer.current?.focus({ preventScroll: true })
         }} />}
-        <div className="typing-controls">
+        <div className="typing-controls" hidden={typingNames.length === 0 && !typingError}>
           <span role="status" aria-live="polite">{typingNames.length > 0 ? `${typingNames.join(', ')} ${typingNames.length === 1 ? 'is' : 'are'} typing…` : ''}</span>
           {typingError && <span role="alert">{typingError}</span>}
         </div>

@@ -642,13 +642,14 @@ form {
 
 .composer {
   border-top: 1px solid var(--border);
+  gap: 0;
 }
 
 .composer-row {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.75rem 1rem;
+  padding: 0.5rem 1rem;
   width: 100%;
   max-width: 54rem;
   margin-inline: auto;

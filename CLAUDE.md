@@ -38,7 +38,7 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   (ADR-0038). Never include draft text in typing events.
 - UI regression tests must cover native link selection, quoted replies, typing
   expiry, message/link action gestures, non-selectable message metadata, and scroll position
-  during keyboard/media resize.
+  during keyboard/media resize. The idle composer must not reserve an empty\n  typing-indicator row or inherit gaps from generic form styles.
   Reply actions require worker-confirmed eligibility. Own sends reach the
   bottom; incoming messages must not displace a reader who scrolled up.
   Map error fallbacks must preserve map dimensions so dialog controls do not move
