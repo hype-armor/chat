@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::{
     error::ApiError,
     keys::LEASE_MINUTES,
-    limits::{self, DAY, Limits},
+    limits::{self, DAY, Limits, MINUTE},
 };
 
 const MAX_ID_BYTES: usize = 64;
@@ -202,6 +202,11 @@ pub async fn send(db: &PgPool, caps: &Limits, req: Send<'_>) -> Result<SendOutco
         }
     }
 
+    // Authorize the bundled welcome before any send budget is charged.
+    if let Some((_, recipients)) = req.welcome {
+        require_claims(&mut tx, req.sender, recipients).await?;
+    }
+
     // The members a commit leaves in the conversation, when the sender states
     // them. Parsed before the epoch moves, so a bad list fails the same way
     // on every epoch.
@@ -259,6 +264,29 @@ pub async fn send(db: &PgPool, caps: &Limits, req: Send<'_>) -> Result<SendOutco
         removed = replace_members(&mut tx, conversation, members).await?;
     }
 
+    // All send paths share one persistent account budget, including silent
+    // envelopes, proposals, standalone welcomes and commit/welcome bundles.
+    // Charge one request, not one recipient. A later failure rolls this back
+    // together with epochs, membership, leases and queued envelopes.
+    let (account, account_limit): (Uuid, i32) = sqlx::query_as(
+        "SELECT d.account_id, COALESCE(l.sends_per_minute, $2)
+         FROM devices d LEFT JOIN account_send_limits l ON l.account_id = d.account_id
+         WHERE d.device_id = $1",
+    )
+    .bind(req.sender)
+    .bind(caps.sends_per_account_per_minute)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(ApiError::Unauthorized("unknown sender device"))?;
+    limits::tx_take(
+        &mut tx,
+        &format!("send-account:{account}"),
+        1,
+        account_limit,
+        MINUTE,
+    )
+    .await?;
+
     // What this send will store, charged to the sender inside the
     // transaction: a device cannot flood a recipient's queue day after day.
     let kib = envelope_kib(env) + req.welcome.map_or(0, |(w, _)| envelope_kib(w));
@@ -272,7 +300,6 @@ pub async fn send(db: &PgPool, caps: &Limits, req: Send<'_>) -> Result<SendOutco
     .await?;
 
     if let Some((welcome, recipients)) = req.welcome {
-        require_claims(&mut tx, req.sender, recipients).await?;
         // The welcome consumes the package the sender leased for each device.
         sqlx::query("DELETE FROM key_packages WHERE claimed_by = $1 AND device_id = ANY($2)")
             .bind(req.sender)

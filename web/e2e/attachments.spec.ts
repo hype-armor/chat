@@ -4,6 +4,27 @@ import { closeDetails, conversationAction, conversationDetails, messages, openCh
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
+test('animated GIF attachments preserve their caption and original bytes', async ({ browser }) => {
+  const username = randomUsername()
+  const alice = await signUp(browser, 'Alice', randomUsername())
+  const bob = await signUp(browser, 'Bob', username)
+  await startChat(alice, username)
+  const gif = await readFile(new URL('./fixtures/animated.gif', import.meta.url))
+  await alice.getByRole('textbox', { name: 'Message', exact: true }).fill('Animated greeting')
+  await alice.getByTestId('attach-input').setInputFiles({ name: 'greeting.gif', mimeType: 'image/gif', buffer: gif })
+  const sent = messages(alice).filter({ hasText: 'Animated greeting' })
+  await expect(sent.getByRole('img', { name: /^(Sent|Delivered|Read)$/ })).toBeVisible()
+  await expect(alice.getByRole('textbox', { name: 'Message', exact: true })).toHaveValue('')
+  await openChat(bob, /Alice/)
+  const received = messages(bob).filter({ hasText: 'Animated greeting' })
+  await expect(received.getByRole('img', { name: 'greeting.gif' })).toHaveAttribute('data-full', 'true')
+  const [download] = await Promise.all([
+    bob.waitForEvent('download'), received.getByRole('button', { name: 'Save', exact: true }).click(),
+  ])
+  expect(download.suggestedFilename()).toBe('greeting.gif')
+  expect(await readFile((await download.path())!)).toEqual(gif)
+})
+
 const MARKER = 'SECRET-GPS-48.8584N-2.2945E'
 
 /** A JPEG made in the browser, with an EXIF block holding `MARKER` spliced in. */

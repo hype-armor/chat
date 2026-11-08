@@ -3,6 +3,7 @@ import type { CoreClient } from '../core/client'
 import type { AppView, ChatMessage, ConversationSummary, GroupCallStatus, MemberInfo } from '../core/protocol'
 import { SetupActions, SetupBanner, useSetup } from './Banners'
 import { Devices } from './Devices'
+import { ServerStorage } from './ServerStorage'
 import { Invite } from './Invite'
 import { Backup } from './Backup'
 import { Avatar, useAvatarPhoto } from './Avatar'
@@ -12,7 +13,7 @@ import { Attachment } from './Attachment'
 import { Recorder } from './Recorder'
 import { Media } from './Media'
 import { LocationCard, ShareLocation } from './Location'
-import { ContactLiveLocations, LiveCard, LiveIndicator, LiveSharing, type LiveShare } from './Live'
+import { ContactLiveLocations, LiveCard, LiveSharing, type LiveShare } from './Live'
 import { CallScreen, useCall } from './Call'
 import { CallController } from './calls'
 import { GroupCallScreen, useGroupCall } from './GroupCall'
@@ -30,7 +31,7 @@ import {
   reconnectNotifications,
   refreshSubscription,
 } from '../notifications'
-import { useBannerHeight, useVisualViewport } from './useVisualViewport'
+import { useVisualViewport } from './useVisualViewport'
 import { MessageText } from './MessageText'
 import { reactionLabel } from './reactions'
 import { useMessageScroll } from './useMessageScroll'
@@ -109,9 +110,15 @@ export function Chat({
   }, [drafts])
   const [selected, setSelected] = useState<string>()
   const [panel, setPanel] = useState<'chats' | 'settings' | 'chat' | 'group'>('chats')
-  const hasLiveSharing = view.liveSharing.length > 0
-  const liveSharingIndicators = useBannerHeight<HTMLDivElement>('--live-sharing-height', hasLiveSharing)
   const sidebar = useRef<HTMLElement>(null)
+  const returnFocus = useRef<HTMLButtonElement | null>(null)
+  useLayoutEffect(() => {
+    if (selected !== undefined || !returnFocus.current) return
+    const target = returnFocus.current
+    returnFocus.current = null
+    if (target.isConnected) target.focus({ preventScroll: true })
+    else sidebar.current?.querySelector<HTMLButtonElement>('[aria-label="New chat"]')?.focus()
+  }, [selected])
   const setup = useSetup()
   useEffect(() => {
     void refreshSubscription(core)
@@ -143,18 +150,11 @@ export function Chat({
   return (
     <>
       <LiveSharing core={core} sharing={view.liveSharing} />
-      {view.liveSharing.length > 0 && (
-        <div className="live-sharing-indicators" ref={liveSharingIndicators}>
-          {view.liveSharing.map((share) => (
-            <LiveIndicator key={share.conversationId} core={core} share={share} />
-          ))}
-        </div>
-      )}
       <CallScreen calls={calls} />
       <GroupCallScreen calls={groupCalls} />
       <div
         hidden={showDiagnostics}
-        className={`chat-layout ${conversation ? 'has-selection' : ''} ${hasLiveSharing ? 'with-banner' : ''}`}
+        className={`chat-layout ${conversation ? 'has-selection' : ''}`}
       >
         <aside className="sidebar" ref={sidebar}>
           <header className="bar me">
@@ -226,6 +226,7 @@ export function Chat({
               </section>
               <section className="settings-group" aria-labelledby="settings-data">
                 <h3 id="settings-data">Devices &amp; data</h3>
+                <ServerStorage core={core} />
                 <Devices core={core} />
                 <Backup core={core} backup={view.backup} />
                 <Media core={core} media={view.media} />
@@ -286,7 +287,12 @@ export function Chat({
             blocked={conversation.blocked ?? false}
             request={conversation.request}
             typingIndicators={view.typingIndicators}
-            onBack={() => setSelected(undefined)}
+            connection={view.connection}
+            sharingLocation={view.liveSharing.some((share) => share.conversationId === conversation.id)}
+            onBack={() => {
+              returnFocus.current = sidebar.current?.querySelector<HTMLButtonElement>('.conversations button.active') ?? null
+              setSelected(undefined)
+            }}
           />
         ) : (
           <section className="placeholder" aria-label="Start a conversation">
@@ -1134,6 +1140,8 @@ function Conversation({
   blocked,
   request,
   typingIndicators,
+  connection,
+  sharingLocation,
   onBack,
 }: {
   core: CoreClient
@@ -1151,6 +1159,8 @@ function Conversation({
   blocked: boolean
   request: boolean
   typingIndicators: boolean
+  connection: Ready['connection']
+  sharingLocation: boolean
   onBack: () => void
 }) {
   const [panel, updatePanel] = useState<'add' | 'info' | 'verify' | 'report'>()
@@ -1167,6 +1177,11 @@ function Conversation({
   const [narrow, setNarrow] = useState(() => matchMedia('(max-width: 40rem)').matches)
   const shell = useRef<HTMLDivElement>(null)
   const conversationElement = useRef<HTMLElement>(null)
+  useLayoutEffect(() => {
+    // Move keyboard context without opening the phone keyboard. Calls retain
+    // focus priority. Do not refocus on subsequent message or draft updates.
+    if (!callOpen) conversationElement.current?.focus({ preventScroll: true })
+  }, [])
   const [overlay, setOverlay] = useState(false)
   const [compactHeader, setCompactHeader] = useState(false)
   const [reported, setReported] = useState(false)
@@ -1230,6 +1245,10 @@ function Conversation({
     }
   }, [panelOpen, detailsVersion, calls, groupCalls])
   const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [messagesError, setMessagesError] = useState<string>()
+  const [messagesLoading, setMessagesLoading] = useState(false)
+  const [messageReload, setMessageReload] = useState(0)
+  const historyRetry = useRef<HTMLButtonElement>(null)
   const draftState = useConversationDraft(drafts, id)
   const { text: draft, quote: replyTo, failed: failedDrafts } = draftState
   const editDraft = (text: string) => drafts.edit(id, text)
@@ -1269,6 +1288,15 @@ function Conversation({
   }
   const menuItems: MenuItem[] = [
     { label: 'Typing indicators', checked: typingEnabled, onSelect: toggleTyping },
+    ...(sharingLocation ? [{
+      label: 'Stop sharing location',
+      onSelect: () => {
+        setAttachError('')
+        void core.stopLive(id).catch((error: unknown) => {
+          setAttachError(error instanceof Error ? error.message : 'Could not stop location sharing')
+        })
+      },
+    }] : []),
     ...(compactHeader && canCall ? [
       { label: isGroup ? 'Group voice call' : 'Voice call', onSelect: () => startCall(false) },
       { label: isGroup ? 'Group video call' : 'Video call', onSelect: () => startCall(true) },
@@ -1285,11 +1313,19 @@ function Conversation({
     let latest = 0
     const load = async () => {
       const version = ++latest
+      setMessagesLoading(true)
       try {
         const next = await core.messages(id)
-        if (live && version === latest) { capture(); setMessages(next) }
+        if (live && version === latest) {
+          capture()
+          setMessages(next)
+          if (document.activeElement === historyRetry.current) conversationElement.current?.focus({ preventScroll: true })
+          setMessagesError(undefined)
+        }
       } catch (error) {
-        if (live) setAttachError(error instanceof Error ? error.message : 'Could not load messages')
+        if (live && version === latest) setMessagesError(error instanceof Error ? error.message : 'History is temporarily unavailable')
+      } finally {
+        if (live && version === latest) setMessagesLoading(false)
       }
     }
     load()
@@ -1300,7 +1336,7 @@ function Conversation({
       live = false
       unsubscribe()
     }
-  }, [core, id, capture])
+  }, [core, id, capture, messageReload])
 
   // Seen while visible: read receipts go out (FR-MSG-5).
   useEffect(() => {
@@ -1376,7 +1412,7 @@ function Conversation({
 
   return (
     <div ref={shell} className={`conversation-shell${panelOpen ? ' details-open' : ''}${overlay ? ' details-overlay' : ''}`}>
-    <section ref={conversationElement} className="conversation" aria-label={`Conversation with ${title}`} inert={panelOpen && overlay}>
+    <section ref={conversationElement} className="conversation" tabIndex={-1} aria-label={`Conversation with ${title}`} inert={panelOpen && overlay}>
       <header className="bar conversation-bar">
         <div className="title-row">
           <button type="button" className="link back" onClick={onBack} aria-label="Back to conversations">
@@ -1396,6 +1432,9 @@ function Conversation({
                 {title}
               </span>
               {isGroup && <span className="muted small">{memberCount} people</span>}
+              <span className="conversation-connection muted" role="status" aria-label="Conversation connection" hidden={connection === 'online'}>
+                {connection === 'connecting' ? 'Connecting…' : connection === 'offline' ? 'Offline' : ''}
+              </span>
               <VerificationBadge status={verification} />
             </span>
           </button>
@@ -1463,6 +1502,16 @@ function Conversation({
           </button>
         </p>
       )}
+      {messagesError && <div className="notice warning" role="alert">
+        <span>Could not load messages. {messagesError}</span>{' '}
+        <button type="button" className="link small" ref={historyRetry} aria-disabled={messagesLoading} aria-busy={messagesLoading} onClick={() => {
+          if (messagesLoading) return
+          setMessagesLoading(true)
+          setMessageReload((version) => version + 1)
+        }}>
+          Retry loading messages
+        </button>
+      </div>}
       <div className="messages-viewport" ref={viewport} onScroll={onScroll}>
         <ol className="messages" ref={content}>
           {messageLayout(messages, Date.now()).map(({ message: m, day, first, last }) => (
@@ -1604,7 +1653,7 @@ function Conversation({
           editReply(undefined)
           composer.current?.focus({ preventScroll: true })
         }} />}
-        <div className="typing-controls">
+        <div className="typing-controls" hidden={typingNames.length === 0 && !typingError}>
           <span role="status" aria-live="polite">{typingNames.length > 0 ? `${typingNames.join(', ')} ${typingNames.length === 1 ? 'is' : 'are'} typing…` : ''}</span>
           {typingError && <span role="alert">{typingError}</span>}
         </div>

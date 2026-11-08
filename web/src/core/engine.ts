@@ -98,6 +98,7 @@ import type {
   CoreEvent,
   FileInfo,
   DeviceInfo,
+  StorageUsage,
   InviteOffer,
   LinkOffer,
   LocationInfo,
@@ -106,6 +107,7 @@ import type {
   SafetyNumber,
 } from './protocol'
 import { type MediaInfo, isPhoto, isPlayable } from './protocol'
+import { parseStorageUsage } from './storageUsage'
 import { isMp4, scrubMp4 } from './mp4'
 import { DEFAULT_MEDIA, autoDownloads, onMobileData } from './policy'
 import * as transfers from './transfers'
@@ -740,6 +742,11 @@ export class Engine {
     const device = deviceHex(device_id)
     if (!this.state.expectedOwn.includes(device)) this.state.expectedOwn = [...this.state.expectedOwn, device]
     return true
+  }
+
+  async storageUsage(): Promise<StorageUsage> {
+    const usage = await api.storageUsage(this.ready().account.token)
+    return parseStorageUsage(usage)
   }
 
   async devices(): Promise<DeviceInfo[]> {

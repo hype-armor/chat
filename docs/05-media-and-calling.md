@@ -12,6 +12,10 @@ Details and rationale in ADR-0024.
    2560 px. A JPEG thumbnail of at most 48 KB is made. MP4/QuickTime clips
    have their recorded location blanked; videos get a poster frame as the
    thumbnail; voice notes are recorded in the app (Opus or AAC).
+   GIF attachments keep their original bytes and animation. Their JPEG
+   thumbnail is only a preview; a failed preview does not reject a GIF.
+   GIF originals can contain comments or application metadata. Unlike
+   re-drawn photos, GIFs do not have a metadata-removal guarantee.
 2. Generate a random 256-bit key and seal the file with the **STREAM**
    construction over AES-256-GCM (RustCrypto `aead`, 64 KiB chunks) in the
    core worker, so large files are processed piece by piece.
@@ -25,7 +29,24 @@ Details and rationale in ADR-0024.
 Download (through the server, ADR-0023), verify the SHA-256 and every chunk,
 decrypt chunk-wise. The sealed blob is kept on the device, so opening it
 again needs no download. Only raster photos are shown inline; other types
-are offered as downloads.
+are offered as downloads. GIFs use the decrypted original in an image
+element, not the static thumbnail, after opening or auto-download. A
+photo without a thumbnail still has an open control. The browser decoder
+handles malformed image bytes; the client does not parse GIF frames.
+A filename extension does not override an empty, generic, or unsupported
+MIME type. Those files remain downloads, even with a `.gif` extension.
+
+### GIF regression checks
+`web/e2e/fixtures/animated.gif` contains 2 looping frames with different
+colors. The isolated `gif-fixture.spec.ts` tests production worker image
+preparation and attachment encryption/decryption. It checks byte equality,
+visible animation, saving, missing-thumbnail opening, UI-only download
+retry, MIME boundaries, and malformed input. The fixture uses an
+`openAttachment` stub. It does not test production network or storage
+retry, or server transport.
+Run it with a dedicated `E2E_UI_FIXTURE_PORT` and the
+`playwright.fixtures.config.ts` configuration. The server-backed GIF test
+in `attachments.spec.ts` also checks caption consumption and received bytes.
 
 ### Group fan-out
 Upload **once**; the key goes into one group message. No per-recipient

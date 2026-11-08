@@ -19,7 +19,9 @@ Architecture Decision Records (ADRs) under [`adr/`](adr/).
 | 11 | [Server API](11-api.md) | REST endpoints and WebSocket protocol |
 | 12 | [Performance](12-performance.md) | Delivery latency load test, results and server metrics |
 | — | [Chat interaction comparison](ui-feature-comparison.md) | Scoped reference-app comparison, UI gaps, and regression coverage |
+| — | [UI quality-of-life review](ui-quality-of-life-review.md) | Navigation focus, viewport-safe menus, history retry, and disconnected feedback |
 | — | [WebKit navigation diagnostic](testing-webkit-navigation.md) | Targeted signup-stall capture, baseline comparison, and artifact privacy |
+| — | [Server management](server-management.md) | Storage quotas, account limits, operator commands, and user usage view |
 | — | [ADR index](adr/README.md) | Decision log |
 
 Message reactions use [ADR-0041](adr/0041-encrypted-message-reactions.md): verified

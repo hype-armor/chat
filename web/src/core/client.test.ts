@@ -100,6 +100,19 @@ describe('CoreClient', () => {
     await expect(sending).resolves.toEqual({ draft: { text: '', revision: 2 } })
   })
 
+  it('requests storage usage through the worker and supports unlimited quotas', async () => {
+    const worker = new FakeWorker()
+    const client = new CoreClient(worker)
+    const loading = client.storageUsage()
+    expect(worker.sent[0].request).toEqual({ type: 'storageUsage' })
+    const usage = { usedBytes: 12, reservedBytes: 3, limitBytes: null }
+    worker.reply({ id: worker.sent[0].id, body: { type: 'storageUsage', usage } })
+    await expect(loading).resolves.toEqual(usage)
+    const failing = client.storageUsage()
+    worker.reply({ id: worker.sent[1].id, body: { type: 'error', message: 'Storage unavailable' } })
+    await expect(failing).rejects.toThrow('Storage unavailable')
+  })
+
   it('rejects with the worker error message', async () => {
     const worker = new FakeWorker()
     const client = new CoreClient(worker)

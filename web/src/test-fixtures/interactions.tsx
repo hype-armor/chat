@@ -2,7 +2,7 @@
 import { createRoot } from 'react-dom/client'
 import { Chat } from '../ui/Chat'
 import { canEncryptCalls, type CoreClient } from '../core/client'
-import type { AppView, ChatMessage, Draft } from '../core/protocol'
+import type { AppView, ChatMessage, Draft, StorageUsage } from '../core/protocol'
 import { TypingLeases, TYPING_TTL_MS } from '../core/typing'
 import '../styles.css'
 
@@ -15,6 +15,12 @@ const room = params.get('room') ?? 'fixture'
 const channel = new BroadcastChannel(`interaction-fixture-${room}`)
 const subscribers = new Set<(event: unknown) => void>()
 let stored: ChatMessage[] = []
+let failMessages = false
+let holdMessages = false
+let releaseMessages: (() => void) | undefined
+let rejectMessages: ((error: Error) => void) | undefined
+let failAttachment = false
+const qualityActivity = { historyLoads: 0, attachmentOpens: 0 }
 let dropTypingStops = false
 let holdNextSend = false
 let rejectPendingSend: ((error: Error) => void) | undefined
@@ -33,7 +39,11 @@ let holdDraftSave = false
 let releaseDraftSave: (() => void) | undefined
 let fixtureSession = 0
 let rejectMapInfo: ((error: Error) => void) | undefined
+// Control the fake worker response, never an HTTP response or UI fetch.
+let storageRequests = 0
+let pendingStorage: { resolve: (usage: StorageUsage) => void; reject: (error: Error) => void } | undefined
 const callActions: string[] = []
+const liveActivity = { updates: 0, pauses: 0, stops: [] as string[] }
 const liveStarts: { conversationId: string; durationMs: number | null; location: { latitude: number; longitude: number; accuracyM: number } }[] = []
 const leases = new TypingLeases()
 let lastTyping = ''
@@ -70,7 +80,25 @@ const receive = (data: { type: string; message?: ChatMessage; active?: boolean }
 channel.onmessage = ({ data }) => receive(data)
 const core = {
   subscribe: (listener: (event: unknown) => void) => { subscribers.add(listener); return () => subscribers.delete(listener) },
-  messages: async (id: string) => id === 'chat' ? resolveMessages() : [],
+  messages: async (id: string) => {
+    qualityActivity.historyLoads++
+    if (failMessages) throw new Error('Fixture history is temporarily unavailable')
+    const messages = id === 'chat' ? resolveMessages() : []
+    if (holdMessages) {
+      holdMessages = false
+      await new Promise<void>((resolve, reject) => { releaseMessages = resolve; rejectMessages = reject })
+    }
+    return messages
+  },
+  openAttachment: async () => {
+    qualityActivity.attachmentOpens++
+    if (failAttachment) throw new Error('Fixture attachment is temporarily unavailable')
+    return new Blob(['Local fixture bytes'], { type: 'text/plain' })
+  },
+  storageUsage: () => {
+    storageRequests++
+    return new Promise<StorageUsage>((resolve, reject) => { pendingStorage = { resolve, reject } })
+  },
   getDraft: async (id: string) => {
     if (failDraftLoad) throw new Error('Fixture draft load failed')
     const draft = draftRecord(id)
@@ -140,6 +168,16 @@ const core = {
   startLive: async (conversationId: string, durationMs: number | null, location: { latitude: number; longitude: number; accuracyM: number }) => {
     liveStarts.push({ conversationId, durationMs, location })
   },
+  liveUpdate: async () => { liveActivity.updates++ },
+  pauseLive: async () => { liveActivity.pauses++ },
+  stopLive: async (id: string) => {
+    liveActivity.stops.push(id)
+    view.liveSharing = view.liveSharing.filter((share) => share.conversationId !== id)
+    if (id === 'chat') stored = stored.map((message) => message.live && message.from === 'me'
+      ? { ...message, live: { ...message.live, stopped: true, ended: true } } : message)
+    refresh()
+    renderFixture()
+  },
   setTyping: async (_id: string, active: boolean) => channel.postMessage({ type: 'typing', active }),
   sendFile: async (id: string, file: File, caption: string, _media: unknown, draftRevision?: number) => {
     attachmentCaptions.push({ id, text: caption, name: file.name, revision: draftRevision })
@@ -173,9 +211,39 @@ const view: Extract<AppView, { phase: 'ready' }> = {
 Object.assign(window, {
   interactionFixture: {
     liveStarts,
+    liveActivity,
     callActions,
+    storageRequests() { return storageRequests },
+    storagePending() { return !!pendingStorage },
+    resolveStorage(usage: StorageUsage) {
+      const pending = pendingStorage
+      pendingStorage = undefined
+      pending?.resolve(usage)
+    },
+    rejectStorage() {
+      const pending = pendingStorage
+      pendingStorage = undefined
+      pending?.reject(new Error('Fixture storage request failed'))
+    },
     attachmentCaptions,
     canEncryptCalls,
+    qualityActivity,
+    failMessages(value: number) { failMessages = value === 1 },
+    holdMessages() { holdMessages = true },
+    historyPending() { return !!releaseMessages },
+    releaseMessages(reject?: number) {
+      if (reject === 1) rejectMessages?.(new Error('Late fixture history failure'))
+      else releaseMessages?.()
+      releaseMessages = undefined
+      rejectMessages = undefined
+    },
+    failAttachment(value: number) { failAttachment = value === 1 },
+    sampleAttachment(filename: string) {
+      stored.push({ id: crypto.randomUUID(), from: remote, text: '', sentAt: Date.now(), status: 'received', canReply: true,
+        file: { name: filename, mime: 'text/plain', size: 19 } })
+      refresh()
+    },
+    connection(value: 'online' | 'offline' | 'connecting') { view.connection = value; renderFixture() },
     incomingCall(group: boolean) {
       emit({ type: 'call', signal: {
         conversationId: 'chat', callId: crypto.randomUUID().replaceAll('-', ''),
@@ -185,6 +253,18 @@ Object.assign(window, {
     failMap() {
       rejectMapInfo?.(new Error('Delayed map style failure from fixture'))
       rejectMapInfo = undefined
+    },
+    activeLiveShare(expired?: number) {
+      const now = Date.now()
+      const untilStopped = expired === 1
+      const expiresAt = now + (untilStopped ? -60_000 : 15 * 60_000)
+      view.liveSharing = [{ conversationId: 'chat', title, expiresAt, untilStopped }]
+      stored.push({
+        id: crypto.randomUUID(), from: 'me', text: '', sentAt: now, status: 'sent', canReply: true,
+        live: { sessionId: crypto.randomUUID(), expiresAt, untilStopped, ended: false, latest: { latitude: 48.8584, longitude: 2.2945, accuracyM: 12, at: now } },
+      })
+      refresh()
+      renderFixture()
     },
     dropTypingStops(value: number) { dropTypingStops = value === 1 },
     holdNextSend() { holdNextSend = true },

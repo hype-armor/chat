@@ -99,7 +99,7 @@ This feature does not transfer earlier history to linked devices or implement ed
 | FR-LOC-3 | Live location visible to all members of the conversation it was shared in, and only them. | M |
 | FR-LOC-4 | Location data is E2EE; the server never sees coordinates. | M |
 | FR-LOC-5 | Map rendering must not leak viewed coordinates to a third party without consent (see doc 06). | S |
-| FR-LOC-6 | Clear, persistent indicator while live-sharing. | M |
+| FR-LOC-6 | Clear, persistent per-conversation indicators while live-sharing: conversation-list icon and live message card with Stop sharing; no app-wide banner. | M |
 
 ### 1.6 Offline / serverless mode (OFF)
 

@@ -85,7 +85,8 @@ button {
   cursor: pointer;
 }
 
-button:disabled {
+button:disabled,
+button[aria-disabled="true"] {
   opacity: 0.5;
   cursor: default;
 }
@@ -238,11 +239,6 @@ form {
 
 .chat-layout[hidden] {
   display: none;
-}
-
-.chat-layout.with-banner {
-  top: calc(var(--app-top, 0px) + var(--update-banner-height, 0px) + var(--live-sharing-height, 0px));
-  height: calc(var(--app-height, 100dvh) - var(--update-banner-height, 0px) - var(--live-sharing-height, 0px));
 }
 
 .sidebar {
@@ -647,13 +643,14 @@ form {
 
 .composer {
   border-top: 1px solid var(--border);
+  gap: 0;
 }
 
 .composer-row {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.75rem 1rem;
+  padding: 0.5rem 1rem;
   width: 100%;
   max-width: 54rem;
   margin-inline: auto;
@@ -1052,6 +1049,7 @@ button.link.danger {
   padding: 0;
   border: 0;
   background: none;
+  color: inherit;
   cursor: zoom-in;
 }
 
@@ -1235,39 +1233,6 @@ button.link.danger {
   min-height: 44px;
   padding-inline: 0.5rem;
   white-space: nowrap;
-}
-
-/* App-wide live-location indicators (FR-LOC-6). */
-.live-sharing-indicators {
-  position: fixed;
-  top: calc(var(--app-top, 0px) + var(--update-banner-height, 0px));
-  left: 0;
-  right: 0;
-  z-index: 5;
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 0.5rem;
-  padding: 0.5rem;
-}
-
-.live-indicator {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  max-width: 100%;
-  padding: 0.125rem 0.5rem;
-  border-radius: 999px;
-  background: #fff4d6;
-  color: #5c4400;
-  font-size: 0.8125rem;
-  white-space: nowrap;
-}
-
-.diagnostics-live-sharing {
-  display: flex;
-  justify-content: center;
-  padding: 0.75rem;
 }
 
 .live-dot {
@@ -1555,6 +1520,13 @@ button.conversation-title {
   font-weight: 600;
 }
 
+.conversation-connection {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.25;
+}
+
 .header-actions {
   display: flex;
   flex: none;
@@ -1580,6 +1552,7 @@ button.conversation-title {
   display: grid;
   width: max-content;
   max-width: calc(100vw - 2rem);
+  overflow-y: auto;
   padding: 0.25rem;
   border: 1px solid var(--border);
   border-radius: 0.5rem;

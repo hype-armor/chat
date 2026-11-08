@@ -69,6 +69,9 @@ export type MediaSettings = {
   quality: 'standard' | 'high'
 }
 
+/** Account ciphertext storage. Reservations count toward the effective quota. */
+export type StorageUsage = { usedBytes: number; reservedBytes: number; limitBytes: number | null }
+
 /** One of this account's devices (ADR-0019). */
 export type DeviceInfo = { id: string; addedOn: string; lastSeenOn?: string; current: boolean }
 
@@ -284,6 +287,7 @@ export type CoreRequest =
   | { type: 'startLink' }
   | { type: 'cancelLink' }
   | { type: 'approveLink'; text: string }
+  | { type: 'storageUsage' }
   | { type: 'devices' }
   | { type: 'removeDevice'; id: string }
   | { type: 'decodeQr'; rgba: Uint8Array; width: number; height: number }
@@ -341,6 +345,7 @@ export type CoreResponseBody =
   | { type: 'link'; offer: LinkOffer }
   | { type: 'invite'; offer: InviteOffer }
   | { type: 'recoveryKey'; key: string }
+  | { type: 'storageUsage'; usage: StorageUsage }
   | { type: 'devices'; devices: DeviceInfo[] }
   | { type: 'qr'; text?: string }
   | { type: 'safety'; safety: SafetyNumber }

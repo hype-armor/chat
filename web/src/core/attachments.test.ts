@@ -1,7 +1,34 @@
-import { describe, expect, it } from 'vitest'
-import { fit, hexToUuid, renamed, safeMime, safeName, uuidToHex } from './attachments'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { fit, hexToUuid, prepareImage, renamed, safeMime, safeName, uuidToHex } from './attachments'
 
 describe('attachments', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('preserves GIF originals even when thumbnail encoding fails', async () => {
+    const close = vi.fn()
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 2, height: 2, close }))
+    vi.stubGlobal('OffscreenCanvas', class {
+      getContext() { return null }
+    })
+    const file = new Blob(['animated original'], { type: 'image/gif' })
+    const prepared = await prepareImage(file)
+    expect(prepared?.data).toBe(file)
+    expect(prepared?.mime).toBe('image/gif')
+    expect(prepared?.thumbnail).toHaveLength(0)
+    expect(close).toHaveBeenCalledOnce()
+  })
+
+  it('leaves unsupported or malformed images at the existing file boundary', async () => {
+    const decode = vi.fn().mockRejectedValue(new Error('invalid image'))
+    vi.stubGlobal('createImageBitmap', decode)
+    vi.stubGlobal('OffscreenCanvas', class {})
+    expect(await prepareImage(new Blob(['bad'], { type: 'image/gif' }))).toBeUndefined()
+    for (const mime of ['', 'application/octet-stream', 'image/svg+xml']) {
+      expect(await prepareImage(new Blob(['bad'], { type: mime }))).toBeUndefined()
+    }
+    expect(decode).toHaveBeenCalledOnce()
+  })
+
   it('scales down to fit, keeping the aspect ratio', () => {
     expect(fit(4000, 3000, 2560)).toEqual({ width: 2560, height: 1920 })
     expect(fit(300, 5000, 320)).toEqual({ width: 19, height: 320 })

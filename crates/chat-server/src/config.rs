@@ -26,6 +26,10 @@ pub struct Config {
     /// Abuse limits. `CHAT_TRUST_PROXY_HEADERS=true` behind an ingress takes
     /// the client IP from `X-Forwarded-For`; each number can be overridden
     /// with `CHAT_LIMIT_<FIELD>`, e.g. `CHAT_LIMIT_REGISTRATIONS_PER_IP_PER_HOUR`.
+    /// Negative values are invalid. Zero retains each limiter's semantics:
+    /// account sends are blocked; WebSocket auth-failure throttling is disabled.
+    /// `CHAT_LIMIT_BLOB_MB_PER_ACCOUNT` is obsolete and prevents startup.
+    /// Use `chat-admin storage default <bytes>` for persistent storage policy.
     pub limits: Limits,
     /// `CHAT_BLOB_STORE`: where encrypted attachments go (ADR-0023):
     /// `s3://bucket` (with `AWS_*` variables), `file:///path` or `memory`
@@ -47,6 +51,7 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
+        reject_legacy_storage_limit(std::env::var_os("CHAT_LIMIT_BLOB_MB_PER_ACCOUNT").as_deref())?;
         let bind = std::env::var("CHAT_BIND")
             .unwrap_or_else(|_| "0.0.0.0:8080".to_owned())
             .parse()?;
@@ -96,6 +101,19 @@ impl Config {
     }
 }
 
+/// Any old setting must fail, including zero, empty, and non-Unicode values.
+/// Silently ignoring it could weaken an operator's existing storage policy.
+fn reject_legacy_storage_limit(value: Option<&std::ffi::OsStr>) -> anyhow::Result<()> {
+    if value.is_some() {
+        anyhow::bail!(
+            "CHAT_LIMIT_BLOB_MB_PER_ACCOUNT is obsolete and is not enforced; \
+             set the account storage policy with `chat-admin storage default <bytes>`, \
+             then unset CHAT_LIMIT_BLOB_MB_PER_ACCOUNT before starting the server"
+        );
+    }
+    Ok(())
+}
+
 fn limits_from_env() -> anyhow::Result<Limits> {
     let d = Limits::default();
     Ok(Limits {
@@ -103,6 +121,10 @@ fn limits_from_env() -> anyhow::Result<Limits> {
         claims_per_hour: limit_var("CLAIMS_PER_HOUR", d.claims_per_hour)?,
         welcomes_per_day: limit_var("WELCOMES_PER_DAY", d.welcomes_per_day)?,
         sends_per_minute: limit_var("SENDS_PER_MINUTE", d.sends_per_minute)?,
+        sends_per_account_per_minute: limit_var(
+            "SENDS_PER_ACCOUNT_PER_MINUTE",
+            d.sends_per_account_per_minute,
+        )?,
         ws_auth_failures_per_minute: limit_var(
             "WS_AUTH_FAILURES_PER_MINUTE",
             d.ws_auth_failures_per_minute,
@@ -131,7 +153,8 @@ fn limits_from_env() -> anyhow::Result<Limits> {
         )?,
         send_mb_per_day: limit_var("SEND_MB_PER_DAY", d.send_mb_per_day)?,
         queue_rows_per_device: limit_var("QUEUE_ROWS_PER_DEVICE", d.queue_rows_per_device)?,
-        blob_mb_per_account: limit_var("BLOB_MB_PER_ACCOUNT", d.blob_mb_per_account)?,
+        // Compatibility field only. Persistent storage policy replaces it.
+        blob_mb_per_account: d.blob_mb_per_account,
         turn_credentials_per_day: limit_var(
             "TURN_CREDENTIALS_PER_DAY",
             d.turn_credentials_per_day,
@@ -142,15 +165,30 @@ fn limits_from_env() -> anyhow::Result<Limits> {
     })
 }
 
-fn limit_var<T: std::str::FromStr>(name: &str, default: T) -> anyhow::Result<T>
+fn limit_var<T>(name: &str, default: T) -> anyhow::Result<T>
 where
+    T: std::str::FromStr + PartialOrd + Default,
     T::Err: std::fmt::Display,
 {
     let key = format!("CHAT_LIMIT_{name}");
     match std::env::var(&key) {
-        Ok(v) => v.parse().map_err(|e| anyhow::anyhow!("{key}={v}: {e}")),
+        Ok(v) => parse_limit(&key, &v),
         Err(_) => Ok(default),
     }
+}
+
+fn parse_limit<T>(key: &str, value: &str) -> anyhow::Result<T>
+where
+    T: std::str::FromStr + PartialOrd + Default,
+    T::Err: std::fmt::Display,
+{
+    let parsed: T = value
+        .parse()
+        .map_err(|e| anyhow::anyhow!("{key}={value}: {e}"))?;
+    if parsed < T::default() {
+        anyhow::bail!("{key}={value}: limit must be zero or greater");
+    }
+    Ok(parsed)
 }
 
 fn list_var(name: &str) -> Vec<String> {
@@ -165,4 +203,49 @@ fn list_var(name: &str) -> Vec<String> {
 
 fn non_empty(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_limit, reject_legacy_storage_limit};
+
+    #[test]
+    fn obsolete_storage_limit_fails_startup_for_every_set_value() {
+        assert!(reject_legacy_storage_limit(None).is_ok());
+        for value in ["2048", "1", "0", "-1", "", "not-a-number"] {
+            let error = reject_legacy_storage_limit(Some(std::ffi::OsStr::new(value)))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("CHAT_LIMIT_BLOB_MB_PER_ACCOUNT"));
+            assert!(error.contains("chat-admin storage default <bytes>"));
+            assert!(error.contains("then unset CHAT_LIMIT_BLOB_MB_PER_ACCOUNT"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn obsolete_storage_limit_rejects_non_unicode_values() {
+        use std::os::unix::ffi::OsStrExt;
+        assert!(reject_legacy_storage_limit(Some(std::ffi::OsStr::from_bytes(&[0xff]))).is_err());
+    }
+
+    #[test]
+    fn signed_limits_reject_negative_values_and_keep_zero() {
+        let key = "CHAT_LIMIT_SENDS_PER_ACCOUNT_PER_MINUTE";
+        let error = parse_limit::<i32>(key, "-1").unwrap_err();
+        assert!(error.to_string().contains(key));
+        assert!(error.to_string().contains("zero or greater"));
+        assert!(parse_limit::<i64>("CHAT_LIMIT_QUEUE_ROWS_PER_DEVICE", "-1").is_err());
+        assert_eq!(parse_limit::<i32>(key, "0").unwrap(), 0);
+        assert_eq!(parse_limit::<i32>(key, "600").unwrap(), 600);
+    }
+
+    #[test]
+    fn unsigned_and_malformed_limits_keep_parse_validation() {
+        let key = "CHAT_LIMIT_SENDS_PER_MINUTE";
+        assert!(parse_limit::<u32>(key, "-1").is_err());
+        assert!(parse_limit::<i32>(key, "2147483648").is_err());
+        assert!(parse_limit::<i32>(key, "not-a-number").is_err());
+        assert_eq!(parse_limit::<u32>(key, "0").unwrap(), 0);
+    }
 }

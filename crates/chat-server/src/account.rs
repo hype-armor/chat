@@ -56,7 +56,7 @@ pub async fn delete(
     tx.commit().await?;
     // The backup row went by cascade; its object goes here.
     if let Some(store) = &state.blobs {
-        crate::backup::forget(store, backup.and_then(|(k,)| k)).await;
+        crate::backup::forget_counted(store, db(&state)?, backup.and_then(|(k,)| k)).await;
     }
     for (device,) in devices {
         state.hub.disconnect(&device);

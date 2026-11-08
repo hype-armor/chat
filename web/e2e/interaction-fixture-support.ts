@@ -15,7 +15,7 @@ export async function openFixture(page: Page, name = 'Alice', room = 'single') {
   await expect(page.getByTestId('fixture-error')).toHaveCount(0)
 }
 
-export async function fixtureAction(page: Page, method: 'seed' | 'incoming' | 'legacyMessage' | 'makeReplyAvailable' | 'missingReply' | 'dropTypingStops' | 'holdNextSend' | 'rejectSend' | 'acceptSend' | 'seedDraft' | 'failDraftLoad' | 'failDraftSave' | 'conflictDraftSave' | 'holdDraftLoad' | 'releaseDraftLoad' | 'holdDraftSave' | 'releaseDraftSave' | 'restartUI' | 'addChat', value?: string | number) {
+export async function fixtureAction(page: Page, method: 'seed' | 'incoming' | 'legacyMessage' | 'makeReplyAvailable' | 'missingReply' | 'dropTypingStops' | 'holdNextSend' | 'rejectSend' | 'acceptSend' | 'seedDraft' | 'failDraftLoad' | 'failDraftSave' | 'conflictDraftSave' | 'holdDraftLoad' | 'releaseDraftLoad' | 'holdDraftSave' | 'releaseDraftSave' | 'restartUI' | 'addChat' | 'activeLiveShare' | 'failMessages' | 'holdMessages' | 'releaseMessages' | 'connection' | 'failAttachment' | 'sampleAttachment', value?: string | number) {
   await page.evaluate(({ method, value }) => {
     const fixture = (window as unknown as {
       interactionFixture: Record<string, (value?: string | number) => void>
