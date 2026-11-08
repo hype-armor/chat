@@ -38,11 +38,15 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   (ADR-0038). Never include draft text in typing events.
 - UI regression tests must cover native link selection, quoted replies, typing
   expiry, message/link action gestures, non-selectable message metadata, and scroll position
-  during keyboard/media resize.
+  during keyboard/media resize. The idle composer must not reserve an empty\n  typing-indicator row or inherit gaps from generic form styles.
   Reply actions require worker-confirmed eligibility. Own sends reach the
   bottom; incoming messages must not displace a reader who scrolled up.
   Map error fallbacks must preserve map dimensions so dialog controls do not move
   during activation.
+- Live sharing has no app-wide banner or layout offset. Keep the conversation-list
+  sharing icon, live message card and Stop sharing control. The Conversation menu
+  must offer Stop sharing location for active shares, even with an expired or
+  off-screen card. Removing the banner must not stop the watcher or change expiry.
 - Run browser tests against isolated test services, never a live deployment.
 - Rust Docker build stages must retain the shared BuildKit Cargo lock and CPU-sized
   job budget. Use `scripts/compose-build.sh` for sequential image builds and run
