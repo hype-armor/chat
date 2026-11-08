@@ -38,7 +38,8 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   (ADR-0038). Never include draft text in typing events.
 - UI regression tests must cover native link selection, quoted replies, typing
   expiry, message/link action gestures, non-selectable message metadata, and scroll position
-  during keyboard/media resize. The idle composer must not reserve an empty\n  typing-indicator row or inherit gaps from generic form styles.
+  during keyboard/media resize. The idle composer must not reserve an empty
+  typing-indicator row or inherit gaps from generic form styles.
   Reply actions require worker-confirmed eligibility. Own sends reach the
   bottom; incoming messages must not displace a reader who scrolled up.
   Map error fallbacks must preserve map dimensions so dialog controls do not move
@@ -60,6 +61,14 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   is false. Do not bypass the encrypted-media capability guard. For calls across
   viewport sizes, use `conversationCall` from `web/e2e/support.ts`; narrow headers
   place call actions in the conversation menu.
+- Opening a conversation must move keyboard context to its region, not open the
+  software keyboard. Back must return focus to the conversation row. History retry
+  must preserve messages and drafts and must not steal focus from ongoing editing.
+  Busy history retry must retain focus with guarded `aria-disabled`, not native
+  `disabled`. Generic menus must keep keyboard-focused actions visible in short or
+  panned visual viewports. Bound upward menus from their actual popup edge and
+  preserve stricter CSS height caps. Selected conversations must expose offline/connecting feedback even
+  when the phone sidebar is hidden.
 - Details modals must make background app regions inert, including the sidebar
   and notices outside Chat. Call dialogs take priority and must receive keyboard
   focus without interference from details focus restoration.

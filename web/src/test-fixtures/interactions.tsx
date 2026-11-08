@@ -15,6 +15,12 @@ const room = params.get('room') ?? 'fixture'
 const channel = new BroadcastChannel(`interaction-fixture-${room}`)
 const subscribers = new Set<(event: unknown) => void>()
 let stored: ChatMessage[] = []
+let failMessages = false
+let holdMessages = false
+let releaseMessages: (() => void) | undefined
+let rejectMessages: ((error: Error) => void) | undefined
+let failAttachment = false
+const qualityActivity = { historyLoads: 0, attachmentOpens: 0 }
 let dropTypingStops = false
 let holdNextSend = false
 let rejectPendingSend: ((error: Error) => void) | undefined
@@ -70,7 +76,21 @@ const receive = (data: { type: string; message?: ChatMessage; active?: boolean }
 channel.onmessage = ({ data }) => receive(data)
 const core = {
   subscribe: (listener: (event: unknown) => void) => { subscribers.add(listener); return () => subscribers.delete(listener) },
-  messages: async (id: string) => id === 'chat' ? resolveMessages() : [],
+  messages: async (id: string) => {
+    qualityActivity.historyLoads++
+    if (failMessages) throw new Error('Fixture history is temporarily unavailable')
+    const messages = id === 'chat' ? resolveMessages() : []
+    if (holdMessages) {
+      holdMessages = false
+      await new Promise<void>((resolve, reject) => { releaseMessages = resolve; rejectMessages = reject })
+    }
+    return messages
+  },
+  openAttachment: async () => {
+    qualityActivity.attachmentOpens++
+    if (failAttachment) throw new Error('Fixture attachment is temporarily unavailable')
+    return new Blob(['Local fixture bytes'], { type: 'text/plain' })
+  },
   getDraft: async (id: string) => {
     if (failDraftLoad) throw new Error('Fixture draft load failed')
     const draft = draftRecord(id)
@@ -169,6 +189,23 @@ Object.assign(window, {
     callActions,
     attachmentCaptions,
     canEncryptCalls,
+    qualityActivity,
+    failMessages(value: number) { failMessages = value === 1 },
+    holdMessages() { holdMessages = true },
+    historyPending() { return !!releaseMessages },
+    releaseMessages(reject?: number) {
+      if (reject === 1) rejectMessages?.(new Error('Late fixture history failure'))
+      else releaseMessages?.()
+      releaseMessages = undefined
+      rejectMessages = undefined
+    },
+    failAttachment(value: number) { failAttachment = value === 1 },
+    sampleAttachment(filename: string) {
+      stored.push({ id: crypto.randomUUID(), from: remote, text: '', sentAt: Date.now(), status: 'received', canReply: true,
+        file: { name: filename, mime: 'text/plain', size: 19 } })
+      refresh()
+    },
+    connection(value: 'online' | 'offline' | 'connecting') { view.connection = value; renderFixture() },
     incomingCall(group: boolean) {
       emit({ type: 'call', signal: {
         conversationId: 'chat', callId: crypto.randomUUID().replaceAll('-', ''),
