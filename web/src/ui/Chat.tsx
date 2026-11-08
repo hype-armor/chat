@@ -110,6 +110,14 @@ export function Chat({
   const [selected, setSelected] = useState<string>()
   const [panel, setPanel] = useState<'chats' | 'settings' | 'chat' | 'group'>('chats')
   const sidebar = useRef<HTMLElement>(null)
+  const returnFocus = useRef<HTMLButtonElement | null>(null)
+  useLayoutEffect(() => {
+    if (selected !== undefined || !returnFocus.current) return
+    const target = returnFocus.current
+    returnFocus.current = null
+    if (target.isConnected) target.focus({ preventScroll: true })
+    else sidebar.current?.querySelector<HTMLButtonElement>('[aria-label="New chat"]')?.focus()
+  }, [selected])
   const setup = useSetup()
   useEffect(() => {
     void refreshSubscription(core)
@@ -278,8 +286,12 @@ export function Chat({
             blocked={conversation.blocked ?? false}
             request={conversation.request}
             typingIndicators={view.typingIndicators}
+            connection={view.connection}
             sharingLocation={view.liveSharing.some((share) => share.conversationId === conversation.id)}
-            onBack={() => setSelected(undefined)}
+            onBack={() => {
+              returnFocus.current = sidebar.current?.querySelector<HTMLButtonElement>('.conversations button.active') ?? null
+              setSelected(undefined)
+            }}
           />
         ) : (
           <section className="placeholder" aria-label="Start a conversation">
@@ -1127,6 +1139,7 @@ function Conversation({
   blocked,
   request,
   typingIndicators,
+  connection,
   sharingLocation,
   onBack,
 }: {
@@ -1145,6 +1158,7 @@ function Conversation({
   blocked: boolean
   request: boolean
   typingIndicators: boolean
+  connection: Ready['connection']
   sharingLocation: boolean
   onBack: () => void
 }) {
@@ -1162,6 +1176,11 @@ function Conversation({
   const [narrow, setNarrow] = useState(() => matchMedia('(max-width: 40rem)').matches)
   const shell = useRef<HTMLDivElement>(null)
   const conversationElement = useRef<HTMLElement>(null)
+  useLayoutEffect(() => {
+    // Move keyboard context without opening the phone keyboard. Calls retain
+    // focus priority. Do not refocus on subsequent message or draft updates.
+    if (!callOpen) conversationElement.current?.focus({ preventScroll: true })
+  }, [])
   const [overlay, setOverlay] = useState(false)
   const [compactHeader, setCompactHeader] = useState(false)
   const [reported, setReported] = useState(false)
@@ -1225,6 +1244,10 @@ function Conversation({
     }
   }, [panelOpen, detailsVersion, calls, groupCalls])
   const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [messagesError, setMessagesError] = useState<string>()
+  const [messagesLoading, setMessagesLoading] = useState(false)
+  const [messageReload, setMessageReload] = useState(0)
+  const historyRetry = useRef<HTMLButtonElement>(null)
   const draftState = useConversationDraft(drafts, id)
   const { text: draft, quote: replyTo, failed: failedDrafts } = draftState
   const editDraft = (text: string) => drafts.edit(id, text)
@@ -1289,11 +1312,19 @@ function Conversation({
     let latest = 0
     const load = async () => {
       const version = ++latest
+      setMessagesLoading(true)
       try {
         const next = await core.messages(id)
-        if (live && version === latest) { capture(); setMessages(next) }
+        if (live && version === latest) {
+          capture()
+          setMessages(next)
+          if (document.activeElement === historyRetry.current) conversationElement.current?.focus({ preventScroll: true })
+          setMessagesError(undefined)
+        }
       } catch (error) {
-        if (live) setAttachError(error instanceof Error ? error.message : 'Could not load messages')
+        if (live && version === latest) setMessagesError(error instanceof Error ? error.message : 'History is temporarily unavailable')
+      } finally {
+        if (live && version === latest) setMessagesLoading(false)
       }
     }
     load()
@@ -1304,7 +1335,7 @@ function Conversation({
       live = false
       unsubscribe()
     }
-  }, [core, id, capture])
+  }, [core, id, capture, messageReload])
 
   // Seen while visible: read receipts go out (FR-MSG-5).
   useEffect(() => {
@@ -1380,7 +1411,7 @@ function Conversation({
 
   return (
     <div ref={shell} className={`conversation-shell${panelOpen ? ' details-open' : ''}${overlay ? ' details-overlay' : ''}`}>
-    <section ref={conversationElement} className="conversation" aria-label={`Conversation with ${title}`} inert={panelOpen && overlay}>
+    <section ref={conversationElement} className="conversation" tabIndex={-1} aria-label={`Conversation with ${title}`} inert={panelOpen && overlay}>
       <header className="bar conversation-bar">
         <div className="title-row">
           <button type="button" className="link back" onClick={onBack} aria-label="Back to conversations">
@@ -1400,6 +1431,9 @@ function Conversation({
                 {title}
               </span>
               {isGroup && <span className="muted small">{memberCount} people</span>}
+              <span className="conversation-connection muted" role="status" aria-label="Conversation connection" hidden={connection === 'online'}>
+                {connection === 'connecting' ? 'Connecting…' : connection === 'offline' ? 'Offline' : ''}
+              </span>
               <VerificationBadge status={verification} />
             </span>
           </button>
@@ -1467,6 +1501,16 @@ function Conversation({
           </button>
         </p>
       )}
+      {messagesError && <div className="notice warning" role="alert">
+        <span>Could not load messages. {messagesError}</span>{' '}
+        <button type="button" className="link small" ref={historyRetry} aria-disabled={messagesLoading} aria-busy={messagesLoading} onClick={() => {
+          if (messagesLoading) return
+          setMessagesLoading(true)
+          setMessageReload((version) => version + 1)
+        }}>
+          Retry loading messages
+        </button>
+      </div>}
       <div className="messages-viewport" ref={viewport} onScroll={onScroll}>
         <ol className="messages" ref={content}>
           {messageLayout(messages, Date.now()).map(({ message: m, day, first, last }) => (

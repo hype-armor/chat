@@ -136,7 +136,7 @@ export function Attachment({
             </span>
           )}
         </button>
-      ) : photo && (thumbUrl || fullUrl) ? (
+      ) : photo ? (
         <button
           type="button"
           className="photo"
@@ -144,7 +144,11 @@ export function Attachment({
           disabled={busy || !!full}
           aria-label={full ? `Photo ${file.name}` : `Show photo ${file.name}`}
         >
-          <img src={fullUrl ?? thumbUrl} alt={file.name} style={mediaStyle} data-full={!!fullUrl} />
+          {fullUrl || thumbUrl ? (
+            <img src={fullUrl ?? thumbUrl} alt={file.name} style={mediaStyle} data-full={!!fullUrl} />
+          ) : (
+            <span>Show photo {file.name}</span>
+          )}
         </button>
       ) : (
         <span className="file-name" title={file.name}>{generic ? file.name : `📎 ${file.name}`}</span>
