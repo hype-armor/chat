@@ -18,7 +18,7 @@ export const MAX_THUMB_BYTES = 48 * 1024
 const REDRAWN = /^image\/(jpeg|png|webp|avif|bmp|heic|heif|tiff)$/
 
 export type PreparedImage = {
-  /** What gets sent: re-encoded, or the original for GIFs (no EXIF). */
+  /** What gets sent: re-encoded, or the unchanged original for GIFs. */
   data: Blob
   mime: string
   width: number
@@ -121,11 +121,13 @@ export async function prepareImage(
     return undefined
   }
   try {
-    const thumbnail = await thumbnailOf(bitmap)
     if (gif) {
-      // Keeps the animation; GIF has no EXIF block.
+      // The preview is optional. Never replace the animated original with a
+      // canvas frame, or refuse the original because preview encoding fails.
+      const thumbnail = await thumbnailOf(bitmap).catch(() => new Uint8Array())
       return { data: file, mime: 'image/gif', width: bitmap.width, height: bitmap.height, thumbnail }
     }
+    const thumbnail = await thumbnailOf(bitmap)
     const mime = file.type === 'image/png' ? 'image/png' : 'image/jpeg'
     const { edge, quality } = PHOTO[setting]
     const size = fit(bitmap.width, bitmap.height, edge)

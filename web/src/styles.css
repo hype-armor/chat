@@ -1049,6 +1049,7 @@ button.link.danger {
   padding: 0;
   border: 0;
   background: none;
+  color: inherit;
   cursor: zoom-in;
 }
 
