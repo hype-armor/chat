@@ -1,6 +1,7 @@
 import { expect, test } from './fixtures'
 import { fixtureAction, fixtureDraft, fixturePending, fixtureSend, openFixture, replyToMessage } from './interaction-fixture-support'
 import { messages } from './support'
+import { TYPING_TTL_MS } from '../src/core/typing'
 
 test.skip(!process.env.E2E_UI_FIXTURES, 'use playwright.fixtures.config.ts; this suite requires the in-memory UI fixture')
 
@@ -736,16 +737,36 @@ test('a reply with no local original remains readable', async ({ page }) => {
 test('typing reaches another client, expires without a stop, and clears after send', async ({ context, page }) => {
   test.setTimeout(30_000)
   const bob = await context.newPage()
+  // Install before application timers. Only this fixture's window timers are
+  // modeled here; production worker lease clocks have separate unit coverage.
+  const start = new Date('2026-01-01T00:00:00Z')
+  await page.clock.install({ time: start })
+  await bob.clock.install({ time: start })
   await openFixture(page, 'Alice', 'typing')
   await openFixture(bob, 'Bob', 'typing')
+  // Finish normal setup before freezing. The minute boundary exceeds the
+  // setup budget and gives both pages a deterministic starting timestamp.
+  const paused = new Date(start.getTime() + 60_000)
+  await page.clock.pauseAt(paused)
+  await bob.clock.pauseAt(paused)
   await fixtureAction(bob, 'dropTypingStops', 1)
+  const input = page.getByLabel('Message', { exact: true })
   const typing = bob.getByRole('status').filter({ hasText: 'Alice is typing' })
-  await page.getByLabel('Message', { exact: true }).fill('A pending draft')
+  await input.fill('A pending draft')
   await expect(typing).toBeVisible()
-  // Do not clear the draft. The receiver must eventually expire the indicator.
-  await expect(typing).toHaveCount(0, { timeout: 15_000 })
+  // Retain the draft and discard stop events. Check both sides of the lease
+  // boundary without spending 8 seconds of the test budget on a window timer.
+  await bob.clock.runFor(TYPING_TTL_MS - 1)
+  await expect(typing).toBeVisible()
+  await expect(input).toHaveValue('A pending draft')
+  // The fixture sweeps every 100ms. Give the next sweep time to publish expiry.
+  await bob.clock.runFor(101)
+  await expect(typing).toHaveCount(0)
   await fixtureAction(bob, 'dropTypingStops', 0)
-  await page.getByLabel('Message', { exact: true }).fill('A changed draft')
+  // Advance past the sender's 2s refresh throttle, but not its 4s idle stop.
+  // Receiver-only clock advancement must not prevent a fresh edited start.
+  await page.clock.runFor(2_000)
+  await input.fill('A changed draft')
   await expect(typing).toBeVisible()
   await page.getByRole('button', { name: 'Send', exact: true }).click()
   await expect(messages(bob).last()).toContainText('A changed draft')
