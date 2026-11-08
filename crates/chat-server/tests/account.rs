@@ -1,6 +1,7 @@
 //! Account deletion (FR-ID-9).
 mod support;
 
+use object_store::ObjectStoreExt;
 use serde_json::json;
 use sqlx::PgPool;
 use support::TestServer;
@@ -25,6 +26,34 @@ async fn deleting_an_account_removes_its_server_data(pool: PgPool) {
         204
     );
     let mut ws = server.connect(&token).await;
+
+    // A finished backup must release its charge after account deletion.
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    assert_eq!(
+        server
+            .put_json(
+                "/v1/backup/key",
+                &token,
+                json!({"auth_hash": STANDARD.encode([7; 32])})
+            )
+            .await
+            .0,
+        204
+    );
+    assert_eq!(
+        server
+            .raw("PUT", "/v1/backup", &token, vec![42; 100])
+            .await
+            .0,
+        204
+    );
+    let (backup_key,): (String,) = sqlx::query_as(
+        "SELECT object_key FROM backups WHERE account_id = (SELECT account_id FROM devices WHERE device_id = $1)",
+    )
+    .bind(alice)
+    .fetch_one(server.state.db.as_ref().unwrap())
+    .await
+    .unwrap();
 
     // The username must be typed again.
     let (status, _) = server
@@ -51,6 +80,26 @@ async fn deleting_an_account_removes_its_server_data(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(n, 0, "accounts");
+    let charged: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM storage_objects WHERE object_key = $1)")
+            .bind(&backup_key)
+            .fetch_one(db)
+            .await
+            .unwrap();
+    assert!(
+        !charged,
+        "deleted backup must not retain a global quota charge"
+    );
+    assert!(
+        server
+            .state
+            .blobs
+            .as_ref()
+            .unwrap()
+            .head(&object_store::path::Path::from(backup_key))
+            .await
+            .is_err()
+    );
     for table in [
         "devices",
         "conversation_members",

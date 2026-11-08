@@ -11,6 +11,7 @@ RUN --mount=type=cache,id=chat-cargo-build-slot,target=/var/lock/chat-cargo-buil
 
 FROM gcr.io/distroless/cc-debian12:nonroot
 COPY --from=build /src/target/release/chat-server /usr/local/bin/chat-server
+COPY --from=build /src/target/release/chat-admin /usr/local/bin/chat-admin
 # Map areas downloaded on demand (CHAT_TILES_DIR); a volume in practice.
 COPY --from=build --chown=nonroot:nonroot /out/tile-cache /srv/tile-cache
 USER nonroot

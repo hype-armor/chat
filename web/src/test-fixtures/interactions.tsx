@@ -2,7 +2,7 @@
 import { createRoot } from 'react-dom/client'
 import { Chat } from '../ui/Chat'
 import { canEncryptCalls, type CoreClient } from '../core/client'
-import type { AppView, ChatMessage, Draft } from '../core/protocol'
+import type { AppView, ChatMessage, Draft, StorageUsage } from '../core/protocol'
 import { TypingLeases, TYPING_TTL_MS } from '../core/typing'
 import '../styles.css'
 
@@ -39,6 +39,9 @@ let holdDraftSave = false
 let releaseDraftSave: (() => void) | undefined
 let fixtureSession = 0
 let rejectMapInfo: ((error: Error) => void) | undefined
+// Control the fake worker response, never an HTTP response or UI fetch.
+let storageRequests = 0
+let pendingStorage: { resolve: (usage: StorageUsage) => void; reject: (error: Error) => void } | undefined
 const callActions: string[] = []
 const liveActivity = { updates: 0, pauses: 0, stops: [] as string[] }
 const liveStarts: { conversationId: string; durationMs: number | null; location: { latitude: number; longitude: number; accuracyM: number } }[] = []
@@ -90,6 +93,10 @@ const core = {
     qualityActivity.attachmentOpens++
     if (failAttachment) throw new Error('Fixture attachment is temporarily unavailable')
     return new Blob(['Local fixture bytes'], { type: 'text/plain' })
+  },
+  storageUsage: () => {
+    storageRequests++
+    return new Promise<StorageUsage>((resolve, reject) => { pendingStorage = { resolve, reject } })
   },
   getDraft: async (id: string) => {
     if (failDraftLoad) throw new Error('Fixture draft load failed')
@@ -187,6 +194,18 @@ Object.assign(window, {
     liveStarts,
     liveActivity,
     callActions,
+    storageRequests() { return storageRequests },
+    storagePending() { return !!pendingStorage },
+    resolveStorage(usage: StorageUsage) {
+      const pending = pendingStorage
+      pendingStorage = undefined
+      pending?.resolve(usage)
+    },
+    rejectStorage() {
+      const pending = pendingStorage
+      pendingStorage = undefined
+      pending?.reject(new Error('Fixture storage request failed'))
+    },
     attachmentCaptions,
     canEncryptCalls,
     qualityActivity,

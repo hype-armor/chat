@@ -1,6 +1,12 @@
 //! Chat server: a modular monolith (ADR-0005). Modules for blobs, push and
 //! call signalling are added here as they land.
 
+// Shared test support also compiles as an integration-test helper.
+#[cfg(test)]
+extern crate self as chat_server;
+#[cfg(test)]
+mod account_send_limits_tests;
+
 mod account;
 mod auth;
 pub mod backup;
@@ -19,6 +25,7 @@ pub mod metrics;
 pub mod push;
 mod reports;
 mod stats;
+pub mod storage;
 pub mod tiles;
 pub mod turn;
 mod ws;
@@ -139,6 +146,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/link/status", post(devices::status))
         .route("/v1/link/complete", post(devices::complete))
         .route("/v1/devices", get(devices::list))
+        .route("/v1/storage", get(storage::usage))
         .route("/v1/devices/remove", post(devices::remove))
         .route("/v1/devices/of", post(devices::of))
         .route(
