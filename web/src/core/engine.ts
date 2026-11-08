@@ -145,6 +145,9 @@ const LINK_TTL_MS = 10 * 60_000
 /** How long the approving device waits for the new one to register. */
 const LINK_APPROVAL_WAIT_MS = 2 * 60_000
 
+/** Ordered MLS membership bound to the conversation object before a directory query. */
+type SyncRoster = { conversation: Conversation; members: string[] }
+
 /** An attachment as stored: what the UI sees, plus how to fetch and open it (ADR-0024). */
 type StoredFile = Omit<FileInfo, 'thumbnail'> & {
   /** Hex blob id, once uploaded. */
@@ -837,57 +840,94 @@ export class Engine {
   }
 
   private async runSync() {
-    if (!this.account || this.connection !== 'online') return
+    if (!this.account || this.connection !== 'online' || this.endingSession) return
+    const { account, core } = this.ready()
+    const session = this.draftSession()
+    const current = () => !this.endingSession && this.connection === 'online' && this.core === core &&
+      session.epoch === this.draftEpoch && session.accountId === this.account?.accountId
     try {
-      const { devices } = await api.devices(this.account.token)
+      // Capture before the FIRST directory await, including our own device query.
+      // MLS leaf order also selects the authorized reconciliation actor.
+      const rosters = await this.exclusive(async () => current() ? new Map(Object.values(this.state.conversations)
+        .filter((c) => !c.status)
+        .map((c) => [c.id, { conversation: c, members: (core.members(fromHex(c.id)) as Uint8Array[]).map(toHex) }])) : undefined)
+      if (!rosters || !current()) return
+      const { devices } = await api.devices(account.token)
+      if (!current()) return
       const mine = devices.map((d) => deviceHex(d.device_id))
       this.state.myDevices = mine
       // Syncs that waited for this list (a device linked a moment ago).
       const ready = this.pendingSyncs.filter((p) => mine.includes(p.device))
       this.pendingSyncs = this.pendingSyncs.filter((p) => !mine.includes(p.device))
       for (const pending of ready) {
-        await this.exclusive(() => this.applyDeviceSync(pending.conversationId, pending.bytes))
+        await this.exclusive(async () => {
+          if (current()) await this.applyDeviceSync(pending.conversationId, pending.bytes)
+        })
+        if (!current()) return
       }
-      const thisDevice = deviceHex(this.account.deviceId)
+      const thisDevice = deviceHex(account.deviceId)
       const hasSelf = Object.values(this.state.conversations).some((c) => c.self && !c.status)
       // The oldest device creates it; duplicates from races are tolerated.
-      if (!hasSelf && mine.length > 1 && mine[0] === thisDevice) await this.createSelfConversation(mine)
-      const live = await this.liveDevices(mine)
-      for (const id of Object.keys(this.state.conversations)) {
+      if (!hasSelf && mine.length > 1 && mine[0] === thisDevice) await this.createSelfConversation(mine, current)
+      if (!current()) return
+      const directory = await this.liveDevices(mine, rosters, account, current)
+      if (!directory || !current()) return
+      for (const [id, expected] of rosters) {
+        if (!current()) return
         try {
-          await this.reconcileDevices(id, live)
+          await this.reconcileDevices(id, directory.live, directory.queried, expected, current)
         } catch (e) {
           console.warn('updating devices in a conversation failed', e)
         }
       }
+      await this.exclusive(async () => {
+        if (!current()) return
+        // New conversations were not queried. Never apply an old response to them.
+        if (Object.values(this.state.conversations).some((c) => !c.status &&
+          (!rosters.has(c.id) || !this.syncRosterMatches(c.id, rosters.get(c.id)!)))) this.scheduleSync()
+      })
     } catch (e) {
       console.warn('device sync failed', e)
     }
-    this.emitView()
+    if (current()) this.emitView()
+  }
+
+  private syncRosterMatches(conversationId: string, expected: SyncRoster): boolean {
+    const conv = this.conv(conversationId)
+    if (conv !== expected.conversation || conv.status) return false
+    const members = (this.core!.members(fromHex(conversationId)) as Uint8Array[]).map(toHex)
+    return members.length === expected.members.length && members.every((member, i) => member === expected.members[i])
   }
 
   /**
    * Every member account's current devices (hex), from the server; accounts
    * it doesn't return no longer exist (ADR-0022).
    */
-  private async liveDevices(mine: string[]): Promise<Record<string, string[]>> {
-    const me = this.myAccount()
+  private async liveDevices(mine: string[], rosters: Map<string, SyncRoster>, account: Account, current: () => boolean) {
+    const me = deviceHex(account.accountId)
     const others = new Set<string>()
-    for (const c of Object.values(this.state.conversations)) {
-      if (c.status) continue
-      for (const m of this.core!.members(fromHex(c.id)) as Uint8Array[]) {
-        const { account } = splitIdentity(m)
-        if (account !== me) others.add(account)
+    for (const roster of rosters.values()) {
+      for (const member of roster.members) {
+        const owner = splitIdentity(fromHex(member)).account
+        if (owner !== me) others.add(owner)
       }
     }
     const live: Record<string, string[]> = { [me]: mine }
+    const queried = new Set([me])
     const accounts = [...others]
     for (let i = 0; i < accounts.length; i += 200) {
+      if (!current()) return undefined
       const chunk = accounts.slice(i, i + 200)
-      const { devices } = await api.devicesOf(this.account!.token, chunk)
-      for (const [account, ids] of Object.entries(devices)) live[deviceHex(account)] = ids.map(deviceHex)
+      const { devices } = await api.devicesOf(account.token, chunk)
+      if (!current()) return undefined
+      // An omitted account means deleted ONLY if this request queried it.
+      for (const owner of chunk) queried.add(owner)
+      for (const [owner, ids] of Object.entries(devices)) {
+        const normalized = deviceHex(owner)
+        if (chunk.includes(normalized)) live[normalized] = ids.map(deviceHex)
+      }
     }
-    return live
+    return { live, queried }
   }
 
   /**
@@ -895,13 +935,28 @@ export class Engine {
    * commit at a time: additions first, so a restored account still has a
    * leaf when its lost devices are removed.
    */
-  private async reconcileDevices(conversationId: string, live: Record<string, string[]>) {
+  private async reconcileDevices(conversationId: string, live: Record<string, string[]>, queried: Set<string>, expected: SyncRoster, current: () => boolean) {
+    if (!current()) return
     const { account, core } = this.ready()
+    const fresh = () => {
+      if (!current()) return false
+      if (!this.syncRosterMatches(conversationId, expected) || expected.members.some((member) => !queried.has(splitIdentity(fromHex(member)).account))) {
+        this.scheduleSync()
+        return false
+      }
+      return true
+    }
+    const accepted = (outcome: CommitOutcome) => {
+      // Only our known accepted mutation can refresh this directory snapshot.
+      // Arbitrary commits during directory, claim, or flush awaits must not do so.
+      if (outcome === 'accepted' && current()) expected.members = (core.members(fromHex(conversationId)) as Uint8Array[]).map(toHex)
+      return outcome
+    }
     for (let round = 0; round < 4; round++) {
       const conv = this.state.conversations[conversationId]
-      if (!conv || conv.status || this.state.pendingCommit || this.connection !== 'online') return
-      const members = (core.members(fromHex(conversationId)) as Uint8Array[]).map((m) => {
-        const { account, device } = splitIdentity(m)
+      if (!conv || conv.status || this.state.pendingCommit || !fresh()) return
+      const members = expected.members.map((member) => {
+        const { account, device } = splitIdentity(fromHex(member))
         return { account, device: toHex(device) }
       })
       const plans = memberDevicePlan(members, live, deviceHex(account.deviceId))
@@ -912,8 +967,9 @@ export class Engine {
         const invitee = await this.deviceInvitee(adding.account, adding.missing)
         if (!invitee) return
         outcome = await this.exclusive(async () => {
-          if (this.state.pendingCommit || this.connection !== 'online') return undefined
+          if (this.state.pendingCommit || !fresh()) return undefined
           await this.flushOutbox(true)
+          if (this.state.pendingCommit || !fresh()) return undefined
           const existing = this.recipients(conversationId)
           const added = core.addMembers(
             fromHex(conversationId),
@@ -929,23 +985,26 @@ export class Engine {
           }
           const welcome = { envelope: added.welcome, recipients: invitee.devices }
           const after = [...new Set([...this.memberDevices(conversationId), ...invitee.devices])]
-          return this.sendCommit(pending, added.commit, existing, welcome, after)
+          return accepted(await this.sendCommit(pending, added.commit, existing, welcome, after))
         })
       } else if (removing.length > 0) {
         outcome = await this.exclusive(async () => {
-          if (this.state.pendingCommit || this.connection !== 'online') return undefined
+          if (this.state.pendingCommit || !fresh()) return undefined
           await this.flushOutbox(true)
+          if (this.state.pendingCommit || !fresh()) return undefined
           const everyone = this.recipients(conversationId)
           const identities = removing.flatMap((p) => p.stale.map((d) => fromHex(p.account + d)))
           const staged = core.removeMembers(fromHex(conversationId), identities, randomId())
           const pending: PendingCommit = { conversationId, commitHash: toBase64(staged.commitHash) }
           const gone = removing.flatMap((p) => p.stale)
           const after = this.memberDevices(conversationId).filter((d) => !gone.includes(d))
-          return this.sendCommit(pending, staged.commit, everyone, undefined, after)
+          return accepted(await this.sendCommit(pending, staged.commit, everyone, undefined, after))
         })
       }
       if (outcome !== 'accepted') return
     }
+    // More than 4 changes need a fresh directory snapshot, not a 10-minute wait.
+    if (current()) this.scheduleSync()
   }
 
   /** Claims key packages for some of this account's devices (hex ids). */
@@ -996,11 +1055,13 @@ export class Engine {
     return this.ownInvitee(this.state.myDevices.filter((d) => d !== thisDevice))
   }
 
-  private async createSelfConversation(mine: string[]) {
+  private async createSelfConversation(mine: string[], current: () => boolean) {
+    if (!current()) return
     const thisDevice = deviceHex(this.ready().account.deviceId)
     const invitee = await this.ownInvitee(mine.filter((d) => d !== thisDevice))
     if (!invitee) return
     await this.exclusive(async () => {
+      if (!current()) return
       const started = this.core!.startConversation(invitee.identities, invitee.keyPackages, randomId())
       const id = toHex(started.conversationId)
       this.state.conversations[id] = { id, peers: [], self: true, lastAt: Date.now() }

@@ -74,6 +74,21 @@ device even when that contact's other devices are offline. Peers'
 safety-number warnings (ADR-0020) flag every such addition, which is how a
 server injecting devices would show.
 
+### Directory snapshot safety (2026-11-08)
+
+Device-directory responses describe the accounts requested at that time. An
+omitted account means deleted only when that account was explicitly queried.
+A conversation or member that arrives while a request is pending must not be
+treated as a deleted account or device.
+
+Capture the account/session epoch and ordered MLS membership before the first
+directory request, including the request for this account's devices. Recheck the
+snapshot under the mutation lock before staging a membership commit and after
+asynchronous work that can allow membership changes. Discard stale plans and
+schedule a coalesced fresh synchronization. Keep directory network requests
+outside the mutation lock. Preserve additions before removals and the existing
+authorized membership-mirroring transaction (ADR-0035).
+
 ## Consequences
 - **Gap:** messages that arrive between the last backup and the rejoin are
   not delivered to the restored device. Those that arrived before its old

@@ -37,6 +37,10 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
 - GIF attachments must keep their original bytes, not a canvas frame. Thumbnails
   are optional previews. Keep MIME allowlisting; a `.gif` extension alone does not
   permit inline rendering. Run `gif-fixture.spec.ts` with the isolated fixture config.
+- Device sync must bind directory results to the account/session and ordered MLS
+  membership captured before directory requests (ADR-0022). Never remove an
+  unqueried member. Recheck snapshots under the mutation lock after async waits;
+  discard stale plans and schedule a coalesced retry. Preserve additions before removals.
 - Chat drafts use encrypted device-local worker storage (ADR-0039), not UI browser storage.
   Keep drafts outside backups and sync. Clear only the accepted draft revision, never by text equality.
 - Quoted replies resolve originals only within their conversation in the worker
