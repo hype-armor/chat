@@ -1,4 +1,5 @@
 import { expect, test } from './fixtures'
+import { observeSafetyComposer } from './safety-composer-diagnostic'
 import { conversationAction, conversationDetails, messages, openChat, openSetting, randomUsername, signUp, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
@@ -48,13 +49,23 @@ test('chats from strangers wait in message requests (FR-SAF-3)', async ({ browse
   const mallory = await test.step('Sign up Mallory', () => signUp(browser, 'Mallory', randomUsername()))
   const bob = await test.step('Sign up Bob', () => signUp(browser, 'Bob', bobUsername))
   await test.step('Send both stranger messages', async () => {
-    for (const [page, text] of [
-      [alice, 'Hi, it is Alice'],
-      [mallory, 'You won a prize'],
+    for (const [page, sender, text] of [
+      [alice, 'Alice', 'Hi, it is Alice'],
+      [mallory, 'Mallory', 'You won a prize'],
     ] as const) {
-      await startChat(page, bobUsername)
-      await page.getByRole('textbox', { name: 'Message', exact: true }).fill(text)
-      await page.getByRole('button', { name: 'Send' }).click()
+      await test.step(`${sender} sends a stranger message`, async () => {
+        await startChat(page, bobUsername)
+        const diagnostic = await observeSafetyComposer(page, text, sender, test.info())
+        try {
+          await page.getByRole('textbox', { name: 'Message', exact: true }).fill(text)
+          await page.getByRole('button', { name: 'Send' }).click()
+        } catch (error) {
+          await diagnostic.attach()
+          throw error
+        } finally {
+          await diagnostic.stop()
+        }
+      })
     }
   })
 
