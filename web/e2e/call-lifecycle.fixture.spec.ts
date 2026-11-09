@@ -1,5 +1,7 @@
 import { test, expect, type Page } from './fixtures'
 
+test.skip(!process.env.E2E_UI_FIXTURES, 'use playwright.fixtures.config.ts; in-memory UI only, no call media or transport')
+
 const title = 'StrictMode call lifecycle'
 const noEncryption = "This browser can't encrypt call media end to end, so calls are off. Use an up-to-date Chrome, Firefox or Safari."
 type Fixture = { subscriberCount(): number; incomingCall(group: boolean): void; callActions: string[]; restartUI(): void; canEncryptCalls(): boolean }
@@ -67,12 +69,26 @@ test('StrictMode retains mutual exclusion between the actual direct and group co
 })
 
 test('StrictMode and UI restarts retain no discarded-controller subscriptions', async ({ page }) => {
+  // The fixture has 2 controller subscriptions. Selecting a conversation adds
+  // 1 history subscription and 1 typing subscription. Composer visibility alone
+  // does not prove that React has run these passive effects.
+  const controllers = 2
+  const selected = controllers + 2
   await open(page, false)
+  await expect.poll(() => subscriptions(page)).toBe(selected)
   const normal = await subscriptions(page)
-  expect(normal).toBeGreaterThan(0)
   await open(page, true)
   await expect.poll(() => subscriptions(page)).toBe(normal)
-  await page.evaluate(() => (window as unknown as { interactionFixture: Fixture }).interactionFixture.restartUI())
-  await expect.poll(() => subscriptions(page)).toBe(normal)
+  for (let restart = 0; restart < 2; restart++) {
+    await page.evaluate(() => (window as unknown as { interactionFixture: Fixture }).interactionFixture.restartUI())
+    // restartUI changes Chat's key and clears its selected conversation. Wait
+    // for the actual remount, not an old count sampled before React commits.
+    const composer = page.getByRole('textbox', { name: 'Message', exact: true })
+    await expect(composer).toHaveCount(0)
+    await expect.poll(() => subscriptions(page)).toBe(controllers)
+    await page.getByRole('button', { name: new RegExp(title) }).click()
+    await expect(composer).toBeVisible()
+    await expect.poll(() => subscriptions(page)).toBe(normal)
+  }
   await expect(page.getByTestId('fixture-error')).toHaveCount(0)
 })

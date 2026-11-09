@@ -1,5 +1,7 @@
 import { expect, test, type Page } from './fixtures'
 
+test.skip(!process.env.E2E_UI_FIXTURES, 'use playwright.fixtures.config.ts with isolated UI fixtures')
+
 type PermissionFixture = {
   snapshot(): { requests: number; stops: number; recordings: number; sent: number }
   resolve(): void

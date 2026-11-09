@@ -1,6 +1,8 @@
 import { expect as baseExpect, test } from './fixtures'
 import type { Map, GeoJSONSourceSpecification } from 'maplibre-gl'
 
+test.skip(!process.env.E2E_UI_FIXTURES, 'use playwright.fixtures.config.ts with isolated UI fixtures')
+
 const expect = baseExpect.configure({ timeout: 20_000 })
 test.setTimeout(60_000)
 test.use({ permissions: ['geolocation'], geolocation: { latitude: 1, longitude: 1, accuracy: 75 } })

@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
 // Dedicated isolated services. No chat server or real capture devices.
+process.env.E2E_UI_FIXTURES = '1'
 const port = Number(process.env.E2E_PERMISSION_FIXTURE_PORT ?? 14373)
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Invalid permission fixture port')
 const origin = `http://127.0.0.1:${port}`

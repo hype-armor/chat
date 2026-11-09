@@ -1,5 +1,7 @@
 import { expect, test, type Page } from './fixtures'
 
+test.skip(!process.env.E2E_UI_FIXTURES, 'use playwright.fixtures.config.ts with isolated UI fixtures')
+
 type ImageFixture = {
   created: string[]
   revoked: string[]
@@ -175,8 +177,9 @@ for (const mime of ['image/svg+xml', 'image/tiff', 'application/pdf']) {
     await page.getByRole('button', { name: 'Download', exact: true }).click()
     const download = page.waitForEvent('download')
     await control(page, 'resolve')
-    // Browsers can adjust the extension to match the worker Blob MIME type.
-    expect((await download).suggestedFilename()).toMatch(/^Synthetic file\./)
+    // Browsers can adjust extensions for the Blob MIME type. WebKit also
+    // replaces spaces with underscores in suggested download names.
+    expect((await download).suggestedFilename()).toMatch(/^Synthetic[ _]file\./)
     await expect(page.getByRole('dialog')).toHaveCount(0)
   })
 }
