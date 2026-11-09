@@ -35,6 +35,39 @@ function fixture(initial = '') {
 }
 
 describe('conversation draft coordinator', () => {
+  it('deletion clears only the affected quote without saving or changing text generations', async () => {
+    const { controller, core } = fixture('Keep this draft')
+    await controller.load('chat')
+    controller.reply('chat', { messageId: 'deleted', text: 'Original' })
+    const before = controller.snapshot('chat')
+    controller.forgetReply('chat', 'unrelated')
+    expect(controller.snapshot('chat').quote).toEqual(before.quote)
+    controller.forgetReply('chat', 'deleted')
+    expect(controller.snapshot('chat')).toMatchObject({ text: before.text, generation: before.generation, quote: undefined })
+    expect(core.saveDraft).not.toHaveBeenCalled()
+    controller.reply('chat', { messageId: 'newer', text: 'New quote' })
+    controller.forgetReply('chat', 'deleted')
+    expect(controller.snapshot('chat').quote?.messageId).toBe('newer')
+  })
+
+  it('late failed send recovery cannot restore a deleted quote or overwrite newer typing', async () => {
+    const { controller, core } = fixture('Submitted')
+    await controller.load('chat')
+    const pending = deferred<TextSent>()
+    const started = deferred<void>()
+    core.sendText.mockImplementationOnce(() => { started.resolve(); return pending.promise })
+    controller.reply('chat', { messageId: 'deleted', text: 'Original' })
+    const sending = controller.send('chat')
+    await started.promise
+    controller.edit('chat', 'New typing')
+    controller.reply('chat', { messageId: 'newer', text: 'New quote' })
+    controller.forgetReply('chat', 'deleted')
+    pending.reject(new Error('Rejected send'))
+    expect(await sending).toBe(false)
+    expect(controller.snapshot('chat')).toMatchObject({ text: 'New typing', quote: { messageId: 'newer' } })
+    expect(controller.snapshot('chat').failed[0]).toMatchObject({ text: 'Submitted', quote: undefined })
+  })
+
   it('invalidates queued loads, saves, and sends when the account session changes', async () => {
     const { controller, core } = fixture()
     const load = deferred<Draft>()

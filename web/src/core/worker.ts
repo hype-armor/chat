@@ -53,6 +53,10 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
       return { type: 'draftSaved', ...await engine.saveDraft(request.conversationId, request.text, request.expectedRevision) }
     case 'sendText':
       return { type: 'textSent', ...await engine.sendText(request.conversationId, request.text, request.replyTo, request.draftRevision) }
+    case 'deleteMessage':
+      return { type: 'deleteAccepted', ...await engine.deleteMessage(request.conversationId, request.messageId, request.scope) }
+    case 'retryDeletion':
+      return { type: 'deleteAccepted', ...await engine.retryDeletion(request.conversationId, request.deletionEventId) }
     case 'react':
       await engine.react(request.conversationId, request.targetId, request.emoji)
       return { type: 'ok' }

@@ -4,6 +4,7 @@ import type { ChatMessage, ReplyPreview as Quote, Typist } from '../core/protoco
 import type { CoreClient } from '../core/client'
 
 export function quoteMessage(message: ChatMessage): Quote {
+  if (message.deleted) return { messageId: message.id, text: 'Original message unavailable', unavailable: true }
   return {
     messageId: message.id,
     from: message.from,

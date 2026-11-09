@@ -40,6 +40,14 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
 ## Ground rules
 
 - No hand-rolled cryptography; no plaintext or extra metadata on the server.
+- Message deletion follows ADR-0042: Me syncs verified suppression across own
+  devices through authenticated private DeviceSync; unverified originals stay
+  device-only. Everyone requires an authentic own original and a request within
+  1 hour. Keep hash/author tombstones
+  and immutable retry intent before erasing content. Never reconstruct legacy
+  hashes, expose tombstone internals to UI, or let replay/media/draft callbacks
+  restore deleted content. Transport capsules are encrypted, minimal, and excluded
+  from history, UI, search, downloads, and backup.
 - Storage writes must reserve ciphertext bytes in the shared quota ledger before object-store I/O
   (ADR-0040). Release charges only after confirmed deletion and fenced writers. Account send
   limits must remain inside the authorized send transaction. Operator policy changes must use

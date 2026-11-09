@@ -22,6 +22,7 @@ type Entry = {
   known?: Draft
   acceptances: Map<number, Promise<Draft | undefined>>
   ownClears: Set<number>
+  unavailableReplies: Set<string>
 }
 type DraftCore = Pick<CoreClient, 'getDraft' | 'saveDraft' | 'sendText'>
 const message = (error: unknown) => error instanceof Error ? error.message : String(error)
@@ -42,7 +43,7 @@ export class ConversationDrafts {
   private entry(id: string): Entry {
     let entry = this.entries.get(id)
     if (!entry) {
-      entry = { state: { text: '', generation: 0, failed: [] }, listeners: new Set(), queue: Promise.resolve(), started: false, initial: Promise.resolve(), edited: false, blocked: false, acceptances: new Map(), ownClears: new Set() }
+      entry = { state: { text: '', generation: 0, failed: [] }, listeners: new Set(), queue: Promise.resolve(), started: false, initial: Promise.resolve(), edited: false, blocked: false, acceptances: new Map(), ownClears: new Set(), unavailableReplies: new Set() }
       this.entries.set(id, entry)
     }
     return entry
@@ -169,7 +170,16 @@ export class ConversationDrafts {
   }
   reply(id: string, quote: ReplyPreview | undefined) {
     const entry = this.entry(id)
+    if (quote && entry.unavailableReplies.has(quote.messageId)) return
     this.update(entry, { quote, generation: entry.state.generation + 1 })
+  }
+  /** Invalidate only the reference, including delayed failed-send recovery. No draft write. */
+  forgetReply(id: string, messageId: string) {
+    const entry = this.entry(id)
+    entry.unavailableReplies.add(messageId)
+    const quote = entry.state.quote?.messageId === messageId ? undefined : entry.state.quote
+    const failed = entry.state.failed.map((item) => item.quote?.messageId === messageId ? { ...item, quote: undefined } : item)
+    this.update(entry, { quote, failed })
   }
   retry(id: string) {
     const entry = this.entry(id)
@@ -207,7 +217,7 @@ export class ConversationDrafts {
       if (!this.active) return false
       let accepted: TextSent
       try {
-        accepted = await this.accept(id, saved, (revision) => this.core.sendText(id, submitted.text.trim(), submitted.quote?.messageId, revision))
+        accepted = await this.accept(id, saved, (revision) => this.core.sendText(id, submitted.text.trim(), submitted.quote && !entry.unavailableReplies.has(submitted.quote.messageId) ? submitted.quote.messageId : undefined, revision))
       } catch (error) {
         this.recover(entry, submitted, generation, message(error))
         this.update(entry, { issue: { kind: 'send', message: message(error) } })
@@ -219,6 +229,7 @@ export class ConversationDrafts {
     })
   }
   private recover(entry: Entry, submitted: DraftState, generation: number, error: string) {
+    if (submitted.quote && entry.unavailableReplies.has(submitted.quote.messageId)) submitted = { ...submitted, quote: undefined }
     if (entry.state.generation === generation) {
       this.update(entry, { text: submitted.text, quote: submitted.quote, generation: generation + 1 })
     } else {
