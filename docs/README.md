@@ -22,6 +22,7 @@ Architecture Decision Records (ADRs) under [`adr/`](adr/).
 | — | [UI quality-of-life review](ui-quality-of-life-review.md) | Navigation focus, viewport-safe menus, history retry, disconnected feedback, and media fallbacks |
 | — | [WebKit navigation diagnostic](testing-webkit-navigation.md) | Targeted signup-stall capture, baseline comparison, and artifact privacy |
 | — | [Server management](server-management.md) | Storage quotas, account limits, operator commands, and user usage view |
+| — | [Browser permissions](browser-permissions.md) | Browser-controlled grants, capture cleanup, and security headers |
 | — | [ADR index](adr/README.md) | Decision log |
 
 ## Conventions

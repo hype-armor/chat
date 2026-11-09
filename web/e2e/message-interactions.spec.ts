@@ -1,6 +1,7 @@
 import { expect, test } from './fixtures'
 import { fixtureAction, fixtureDraft, fixturePending, fixtureSend, openFixture, replyToMessage } from './interaction-fixture-support'
 import { messages } from './support'
+import { observeSafetyComposer } from './safety-composer-diagnostic'
 
 test.skip(!process.env.E2E_UI_FIXTURES, 'use playwright.fixtures.config.ts; this suite requires the in-memory UI fixture')
 
@@ -26,18 +27,63 @@ test('exact per-chat text survives switches and a UI restart against retained fa
   await expect(input).toHaveValue('Other draft')
 })
 
-test('a late draft load cannot overwrite typing', async ({ page }) => {
+for (const initial of ['', 'Old saved draft']) {
+  test(`late draft load and save keep Send actionable (initial=${initial ? 'populated' : 'empty'})`, async ({ page }) => {
+    await openFixture(page)
+    if (initial) await fixtureAction(page, 'seedDraft', initial)
+    await fixtureAction(page, 'holdDraftLoad')
+    await fixtureAction(page, 'holdDraftSave')
+    await fixtureAction(page, 'restartUI')
+    await page.getByRole('button', { name: /Bob/ }).click()
+    await expect.poll(() => fixturePending(page, 'load')).toBe(true)
+    const input = page.getByRole('textbox', { name: 'Message', exact: true })
+    const send = page.getByRole('button', { name: 'Send', exact: true })
+    const text = 'Typed before load completed'
+    await input.fill(text)
+    await expect(send).toBeVisible()
+    await fixtureAction(page, 'releaseDraftLoad')
+    await expect.poll(() => fixturePending(page, 'save')).toBe(true)
+    await expect(input).toHaveValue(text)
+    await expect(send).toBeVisible()
+    await fixtureAction(page, 'releaseDraftSave')
+    await expect.poll(async () => (await fixtureDraft(page)).text).toBe(text)
+    await expect(input).toHaveValue(text)
+    await send.click()
+    await expect(messages(page)).toHaveCount(1)
+    await expect(messages(page)).toContainText(text)
+    await expect(input).toHaveValue('')
+  })
+}
+
+test('redacted safety diagnostics distinguish hidden geometry from an empty draft', async ({ page }) => {
   await openFixture(page)
-  await fixtureAction(page, 'seedDraft', 'Old saved draft')
-  await fixtureAction(page, 'holdDraftLoad')
-  await fixtureAction(page, 'restartUI')
-  await page.getByRole('button', { name: /Bob/ }).click()
-  await expect.poll(() => fixturePending(page, 'load')).toBe(true)
   const input = page.getByRole('textbox', { name: 'Message', exact: true })
-  await input.fill('Typed before load completed')
-  await fixtureAction(page, 'releaseDraftLoad')
-  await expect.poll(async () => (await fixtureDraft(page)).text).toBe('Typed before load completed')
-  await expect(input).toHaveValue('Typed before load completed')
+  const text = 'Synthetic diagnostic message'
+  const diagnostic = await observeSafetyComposer(page, text, 'fixture', test.info())
+  const originalHeight = await page.evaluate(() => document.documentElement.style.getPropertyValue('--app-height'))
+  try {
+    await input.fill(text)
+    await expect.poll(() => diagnostic.latest()?.draftMatchesExpected).toBe(true)
+    await expect.poll(() => diagnostic.latest()?.sendPresent).toBe(true)
+    await page.locator('.composer').evaluate((form: HTMLFormElement) => { form.hidden = true })
+    await expect.poll(() => diagnostic.latest()).toMatchObject({
+      draftMatchesExpected: true, sendPresent: true, formHidden: true, formHeight: 0, sendHeight: 0,
+    })
+    await page.evaluate(() => document.documentElement.style.setProperty('--app-height', '0px'))
+    await expect.poll(() => diagnostic.latest()?.appHeight).toBe('0px')
+    await page.evaluate((height) => {
+      document.documentElement.style.setProperty('--app-height', height)
+      document.querySelector<HTMLFormElement>('.composer')!.hidden = false
+    }, originalHeight)
+    await input.fill('')
+    await expect.poll(() => diagnostic.latest()).toMatchObject({ draftMatchesExpected: false, draftLength: 0, sendPresent: false })
+  } finally {
+    await page.evaluate((height) => {
+      document.documentElement.style.setProperty('--app-height', height)
+      document.querySelector<HTMLFormElement>('.composer')!.hidden = false
+    }, originalHeight)
+    await diagnostic.stop()
+  }
 })
 
 test('load and save errors preserve editable text and expose only failure retry actions', async ({ page }) => {

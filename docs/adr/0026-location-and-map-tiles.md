@@ -31,9 +31,13 @@ ADR-0008 chose MapLibre and self-hosted PMTiles. That left three questions:
   tile `z/x/y`, and the worker reads it from the PMTiles file by HTTP range
   (the `pmtiles` library). The page fetches no map data itself, and every
   request goes to our own origin.
-- **No labels yet:** label layers need glyph (font) files, which we don't
-  serve yet. The map shows roads, water, parks and buildings. Glyphs can be
-  served from `/tiles/` later.
+- **Labels:** the original implementation omitted text while glyph files
+  were unavailable. MapLibre 6 can render glyphs from local fonts when the
+  style has no glyph URL. The map now keeps text labels without external
+  font, glyph, or sprite requests. Sprite-only symbols remain disabled.
+- **Accuracy:** location previews, static cards, and live cards show the
+  reported accuracy as a translucent geodesic area in metres. Live fixes
+  update the existing map source, including accuracy-only changes.
 - **Without a basemap:** the map shows a plain background with the pin, and
   the card always shows the coordinates. An "Open in maps app" link
   (`geo:` URI) hands the point to the device's own app only when tapped.

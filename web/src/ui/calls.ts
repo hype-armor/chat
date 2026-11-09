@@ -8,6 +8,7 @@ import { type CoreClient, canEncryptCalls, useEncodedStreams } from '../core/cli
 import type { IceServer, IncomingCallSignal } from '../core/protocol'
 import { RING_MS } from '../core/calls'
 import { type Quality, VIDEO_BITRATE, measure, rate } from './quality'
+import { MediaCapture, mediaAccessError } from './permissions'
 
 export type CallPhase = 'incoming' | 'calling' | 'connecting' | 'active' | 'ended'
 
@@ -81,10 +82,7 @@ function gathered(pc: RTCPeerConnection, ms: number): Promise<void> {
 }
 
 function mediaError(e: unknown, video: boolean): string {
-  const name = e instanceof DOMException ? e.name : ''
-  if (name === 'NotAllowedError') return video ? 'Allow the camera and microphone to call' : 'Allow the microphone to call'
-  if (name === 'NotFoundError') return video ? 'No camera or microphone found' : 'No microphone found'
-  return e instanceof Error ? e.message : String(e)
+  return mediaAccessError(e, video ? 'camera-and-microphone' : 'microphone')
 }
 
 export class CallController {
@@ -92,6 +90,9 @@ export class CallController {
   private listeners = new Set<() => void>()
   private pc?: RTCPeerConnection
   private stream?: MediaStream
+  private cameraSwitch?: MediaCapture
+  private screenChange?: object
+  private screen?: MediaStream
   /** The other side's device (hex), once known. */
   private peerDevice?: string
   private offer?: IncomingCallSignal
@@ -108,26 +109,44 @@ export class CallController {
   private restarting = false
   /** When the call was answered (setup starts), for the opt-in statistics. */
   private setupFrom?: number
-  private unsubscribe: () => void
+  private unsubscribe?: () => void
+  private disposed = false
+  private connection?: EventTarget
+  private readonly moved = () => this.state?.phase === 'active' && void this.restartIce()
   /** A group call is running here. */
   otherBusy: () => boolean = () => false
   /** Only relayed candidates, so the other side never learns this device's address (FR-CALL-9). */
   relayOnly = false
 
-  constructor(private readonly core: CoreClient) {
-    this.unsubscribe = core.subscribe((e) => {
+  constructor(private readonly core: CoreClient, options: { deferActivation?: boolean } = {}) {
+    this.disposed = options.deferActivation === true
+    if (!options.deferActivation) this.activate()
+  }
+
+  /** Subscribe only while the React owner is active, including StrictMode replay. */
+  activate() {
+    if (this.unsubscribe) return
+    this.disposed = false
+    this.unsubscribe = this.core.subscribe((e) => {
       if (e.type === 'call') void this.onSignal(e.signal).catch((err) => console.warn('call signal failed', err))
     })
-    // A new network (Wi-Fi to mobile data): find a new path at once.
-    const moved = () => this.state?.phase === 'active' && void this.restartIce()
-    globalThis.addEventListener?.('online', moved)
-    const connection = (navigator as Navigator & { connection?: EventTarget }).connection
-    connection?.addEventListener('change', moved)
+    globalThis.addEventListener?.('online', this.moved)
+    this.connection = (navigator as Navigator & { connection?: EventTarget }).connection
+    this.connection?.addEventListener('change', this.moved)
+  }
+
+  deactivate() {
+    this.disposed = true
+    this.unsubscribe?.()
+    this.unsubscribe = undefined
+    globalThis.removeEventListener?.('online', this.moved)
+    this.connection?.removeEventListener('change', this.moved)
+    this.connection = undefined
+    if (this.state && this.state.phase !== 'ended') void this.hangUp()
   }
 
   dispose() {
-    this.unsubscribe()
-    if (this.state && this.state.phase !== 'ended') void this.hangUp()
+    this.deactivate()
   }
 
   current(): CallState | undefined {
@@ -146,6 +165,7 @@ export class CallController {
 
   /** Calls the other person in a 1:1 conversation. */
   async start(conversationId: string, title: string, video: boolean) {
+    if (this.disposed) return
     if (this.busy || this.otherBusy()) throw new Error("You're already in a call")
     const callId = randomCallId()
     this.reset()
@@ -153,6 +173,7 @@ export class CallController {
     try {
       if (!canEncryptCalls()) throw new Error(NO_FRAME_ENCRYPTION)
       const servers = this.checkRelay(await this.core.iceServers())
+      if (!this.still(callId)) return
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video })
       if (!this.still(callId)) return stopAll(stream)
       const pc = this.connect(servers, stream)
@@ -164,7 +185,10 @@ export class CallController {
       const sdp = pc.localDescription!.sdp
       this.described = true
       await this.core.callSignal(conversationId, { callId, kind: 'offer', sdp, video })
-      this.later(RING_MS, () => void this.hangUp('No answer'))
+      if (!this.still(callId) || this.state?.phase !== 'calling') return
+      this.later(RING_MS, () => {
+        if (this.still(callId) && this.state?.phase === 'calling') void this.hangUp('No answer')
+      })
     } catch (e) {
       if (this.still(callId)) this.finish(mediaError(e, video))
     }
@@ -182,6 +206,7 @@ export class CallController {
     try {
       if (!canEncryptCalls()) throw new Error(NO_FRAME_ENCRYPTION)
       const servers = this.checkRelay(await this.core.iceServers())
+      if (!this.still(callId)) return
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: sendVideo })
       if (!this.still(callId)) return stopAll(stream)
       const pc = this.connect(servers, stream)
@@ -196,26 +221,33 @@ export class CallController {
       const sdp = pc.localDescription!.sdp
       this.described = true
       await this.core.callSignal(conversationId, { callId, kind: 'answer', sdp, toDevice: offer.fromDevice })
-      this.later(CONNECT_MS, () => void this.hangUp("Couldn't connect"))
+      if (!this.still(callId) || this.state?.phase !== 'connecting') return
+      this.later(CONNECT_MS, () => {
+        if (this.still(callId) && this.state?.phase === 'connecting') void this.hangUp("Couldn't connect")
+      })
     } catch (e) {
       if (!this.still(callId)) return
-      await this.signal('hangup')
+      const signalling = this.signal('hangup')
       this.finish(mediaError(e, sendVideo))
+      await signalling
     }
   }
 
   async decline() {
     if (this.state?.phase !== 'incoming') return
-    await this.signal('decline')
+    const signalling = this.signal('decline')
     this.finish('Declined')
+    await signalling
   }
 
   /** Ends the call (or stops calling) for both sides. */
   async hangUp(reason = 'Call ended') {
     if (!this.busy) return
     if (this.state!.phase === 'incoming') return this.decline()
-    await this.signal('hangup')
+    // Do not keep capture alive while signalling waits for the network.
+    const signalling = this.signal('hangup')
     this.finish(reason)
+    await signalling
   }
 
   toggleMute() {
@@ -236,19 +268,34 @@ export class CallController {
   async switchCamera() {
     const sender = this.pc?.getSenders().find((s) => s.track?.kind === 'video')
     const current = sender?.track
-    if (!sender || !current || !this.stream) return
-    const cameras = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput')
-    if (cameras.length < 2) return
-    const at = cameras.findIndex((d) => d.deviceId === current.getSettings().deviceId)
-    const next = cameras[(at + 1) % cameras.length]
-    const media = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: next.deviceId } } })
-    const track = media.getVideoTracks()[0]
-    track.enabled = !this.state?.cameraOff
-    await sender.replaceTrack(track)
-    this.stream.removeTrack(current)
-    current.stop()
-    this.stream.addTrack(track)
-    this.set({ local: new MediaStream(this.stream.getTracks()) })
+    const stream = this.stream
+    const callId = this.state?.callId
+    if (!sender || !current || !stream || !callId || this.cameraSwitch || this.screenChange || this.state?.sharing) return
+    const request = new MediaCapture()
+    this.cameraSwitch = request
+    let installed = false
+    try {
+      const cameras = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput')
+      if (!this.still(callId) || this.stream !== stream || cameras.length < 2) return
+      const at = cameras.findIndex((d) => d.deviceId === current.getSettings().deviceId)
+      const next = cameras[(at + 1) % cameras.length]
+      const media = await request.request({ video: { deviceId: { exact: next.deviceId } } })
+      if (!media || !this.still(callId) || this.stream !== stream) return
+      const track = media.getVideoTracks()[0]
+      // Keep the replacement private while replaceTrack is in flight.
+      track.enabled = false
+      await sender.replaceTrack(track)
+      if (!this.still(callId) || this.stream !== stream) return
+      track.enabled = !this.state?.cameraOff
+      stream.removeTrack(current)
+      current.stop()
+      stream.addTrack(track)
+      installed = true
+      this.set({ local: new MediaStream(stream.getTracks()) })
+    } finally {
+      if (!installed) request.cancel()
+      if (this.cameraSwitch === request) this.cameraSwitch = undefined
+    }
   }
 
   /**
@@ -259,24 +306,47 @@ export class CallController {
    */
   async toggleScreenShare() {
     const sender = this.pc?.getSenders().find((s) => s.track?.kind === 'video')
-    const camera = this.stream?.getVideoTracks()[0]
-    if (!sender || !camera) return
-    if (this.state?.sharing) {
-      sender.track?.stop()
-      await sender.replaceTrack(camera)
-      this.set({ sharing: false, local: new MediaStream(this.stream!.getTracks()) })
-      return
-    }
-    let screen: MediaStream
+    const stream = this.stream
+    const camera = stream?.getVideoTracks()[0]
+    const callId = this.state?.callId
+    if (!sender || !camera || !stream || !callId || !this.still(callId) || this.screenChange || this.cameraSwitch) return
+    const ticket = {}
+    this.screenChange = ticket
+    let screen: MediaStream | undefined
+    let installed = false
     try {
-      screen = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false })
-    } catch {
-      return // cancelled
+      if (this.state?.sharing) {
+        if (this.screen) stopAll(this.screen)
+        this.screen = undefined
+        camera.enabled = false
+        await sender.replaceTrack(camera)
+        if (!this.still(callId) || this.stream !== stream) return
+        camera.enabled = !this.state?.cameraOff
+        this.set({ sharing: false, local: new MediaStream(stream.getTracks()) })
+        return
+      }
+      try {
+        screen = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false })
+      } catch {
+        return // cancelled
+      }
+      if (!this.still(callId) || this.stream !== stream) return
+      this.screen = screen
+      const track = screen.getVideoTracks()[0]
+      track.addEventListener('ended', () => {
+        if (this.still(callId) && this.stream === stream && this.screen === screen && this.state?.sharing) void this.toggleScreenShare()
+      })
+      await sender.replaceTrack(track)
+      if (!this.still(callId) || this.stream !== stream) return
+      installed = true
+      this.set({ sharing: true, local: screen })
+    } finally {
+      if (screen && !installed) {
+        stopAll(screen)
+        if (this.screen === screen) this.screen = undefined
+      }
+      if (this.screenChange === ticket) this.screenChange = undefined
     }
-    const track = screen.getVideoTracks()[0]
-    track.addEventListener('ended', () => this.state?.sharing && void this.toggleScreenShare())
-    await sender.replaceTrack(track)
-    this.set({ sharing: true, local: screen })
   }
 
   /** Plays the call on another audio output, where the browser allows it. */
@@ -290,6 +360,7 @@ export class CallController {
   }
 
   private async onSignal(s: IncomingCallSignal) {
+    if (this.disposed) return
     const state = this.state
     if (s.kind === 'offer' && state && state.callId === s.callId && !state.outgoing && state.phase !== 'incoming') {
       // The caller restarted ICE (a new network): answer the new offer.
@@ -397,9 +468,10 @@ export class CallController {
     }
     // Chromium without RTCRtpScriptTransform: encoded streams must be asked for up front.
     if (useEncodedStreams()) config.encodedInsertableStreams = true
+    // Cleanup must own the tracks even if peer connection setup throws.
+    this.stream = stream
     const pc = new RTCPeerConnection(config)
     this.pc = pc
-    this.stream = stream
     for (const track of stream.getTracks()) {
       const sender = pc.addTrack(track, stream)
       this.core.protectMedia(sender, { conversationId, callId, direction: 'send', kind: track.kind as 'audio' | 'video' })
@@ -526,7 +598,7 @@ export class CallController {
   }
 
   private still(callId: string): boolean {
-    return this.state?.callId === callId && this.state.phase !== 'ended'
+    return !this.disposed && this.state?.callId === callId && this.state.phase !== 'ended'
   }
 
   private later(ms: number, fn: () => void) {
@@ -536,6 +608,11 @@ export class CallController {
 
   /** Releases the camera, microphone and connection. */
   private cleanUp() {
+    this.cameraSwitch?.cancel()
+    this.cameraSwitch = undefined
+    this.screenChange = undefined
+    if (this.screen) stopAll(this.screen)
+    this.screen = undefined
     for (const s of this.pc?.getSenders() ?? []) if (s.track && !this.stream?.getTracks().includes(s.track)) s.track.stop()
     clearTimeout(this.timer)
     clearTimeout(this.dropTimer)

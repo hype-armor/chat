@@ -8,8 +8,10 @@ if (!webkit) throw new Error('Set PW_ALL_BROWSERS=1 for the WebKit navigation di
 // shared-fixture teardown. Do not wrap browser.newContext or start a second trace.
 export default defineConfig(config, {
   projects: [webkit],
-  testMatch: ['**/account.spec.ts', '**/activity.spec.ts', '**/attachments.spec.ts', '**/backup.spec.ts'],
-  workers: 1,
+  // These files produced failures in PR #134. Other full-suite predecessors
+  // are absent. A passing selected run cannot establish a full-suite fix.
+  testMatch: ['**/desktop-layout.spec.ts', '**/safety.spec.ts'],
+  workers: 2,
   retries: 0,
   reporter: [['line'], ['json', { outputFile: 'navigation-diagnostic/report.json' }]],
   outputDir: 'navigation-diagnostic/test-results',

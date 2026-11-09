@@ -1,0 +1,100 @@
+/* Issue 132: keep the jump control inside the messages area, above the composer. */
+.issue132-messages-area {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.issue132-messages-area > .messages-viewport {
+  min-width: 0;
+}
+
+.issue132-scroll-bottom {
+  position: absolute;
+  right: 1rem;
+  bottom: 0.75rem;
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  border-radius: 50%;
+  z-index: 1;
+}
+
+.issue132-recipient-menu {
+  flex: 1;
+  min-width: 0;
+}
+
+.issue132-recipient-menu > .menu {
+  width: 100%;
+}
+
+.issue132-recipient-menu > .menu > button {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  height: auto;
+  min-height: 2.75rem;
+  padding: 0.25rem;
+  border-radius: 0.5rem;
+  background: none;
+  color: inherit;
+  text-align: left;
+}
+
+.issue132-recipient-menu .who {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.issue132-recipient-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.issue132-recipient-heading > .conversation-name {
+  flex: 0 1 auto;
+}
+
+.issue132-recipient-locality {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.issue132-locality-setting {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.issue132-locality-setting > label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.issue132-locality-setting input {
+  width: auto;
+}
+
+.issue132-locality-setting p {
+  margin: 0;
+}
+
+.issue132-name-chevron {
+  flex: none;
+}
+
+.issue132-recipient-menu .menu-items {
+  left: 0;
+  right: auto;
+  max-width: min(22rem, calc(100vw - 2rem));
+}
