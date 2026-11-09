@@ -48,3 +48,4 @@ revisited; do it with a new ADR that supersedes the old one.
 | [0039](0039-encrypted-local-chat-drafts.md) | Encrypted device-local drafts with revision-fenced send acceptance | Accepted |
 | [0040](0040-server-storage-and-account-limits.md) | Shared ciphertext storage quotas, operator controls, and account send limits | Accepted |
 | [0041](0041-encrypted-message-reactions.md) | Verified encrypted message reactions with deterministic account ordering and durable tombstones | Accepted |
+| [0042](0042-encrypted-message-deletion.md) | Own-device deletion synchronization and authenticated 1-hour everyone-deletion requests with durable tombstones | Accepted for implementation |

@@ -3,20 +3,24 @@ import { createPortal } from 'react-dom'
 import './messageActions.css'
 import { REACTION_EMOJI } from '../core/reactions'
 import { reactionLabel } from './reactions'
+import { useDeletionDeadline } from './deletion'
 
 const LONG_PRESS_MS = 550
 const MOVE_LIMIT_PX = 10
 const NATIVE_TARGET = 'a, button, summary, input, textarea, select, [contenteditable], audio, video, img, canvas, iframe, [role="button"], [role="link"], [role="menu"]'
 
 /** A message keeps native link/media gestures. Its own menu has no permanent trigger. */
-export function MessageActions({ children, className, title, author, enabled, onReply, onReact }: {
+export function MessageActions({ children, className, title, author, enabled, onReply, onReact, onDeleteForMe, onDeleteForEveryone, deleteForEveryoneUntil }: {
   children: ReactNode
   className: string
   title: string
   author: string
   enabled: boolean
-  onReply: () => void
+  onReply?: () => void
   onReact?: (emoji: string) => void
+  onDeleteForMe?: () => void
+  onDeleteForEveryone?: () => void
+  deleteForEveryoneUntil?: number
 }) {
   const root = useRef<HTMLLIElement>(null)
   const menu = useRef<HTMLDivElement>(null)
@@ -29,6 +33,8 @@ export function MessageActions({ children, className, title, author, enabled, on
   const [pending, setPending] = useState(false)
   const [placed, setPlaced] = useState(false)
   const [selecting, setSelecting] = useState(false)
+  const now = useDeletionDeadline(deleteForEveryoneUntil)
+  const everyoneAvailable = !!onDeleteForEveryone && deleteForEveryoneUntil !== undefined && now <= deleteForEveryoneUntil
 
   const cancelPress = () => {
     if (press.current) clearTimeout(press.current.timer)
@@ -149,11 +155,11 @@ export function MessageActions({ children, className, title, author, enabled, on
       viewport?.removeEventListener('resize', fit)
       viewport?.removeEventListener('scroll', fit)
     }
-  }, [position, selecting])
+  }, [position, selecting, everyoneAvailable])
 
   useLayoutEffect(() => {
     if (position && placed) menu.current?.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true })
-  }, [position, placed, selecting])
+  }, [position, placed, selecting, everyoneAvailable])
 
   return <li
     ref={root}
@@ -229,8 +235,10 @@ export function MessageActions({ children, className, title, author, enabled, on
     >
       {selecting ? REACTION_EMOJI.map((emoji) => <button key={emoji} type="button" role="menuitem" tabIndex={-1}
         aria-label={reactionLabel(emoji)} onClick={() => { close(true); onReact?.(emoji) }}>{emoji} {reactionLabel(emoji)}</button>) : <>
-        <button ref={reply} type="button" role="menuitem" tabIndex={-1} onClick={() => { close(); onReply() }}>Reply</button>
+        {onReply && <button ref={reply} type="button" role="menuitem" tabIndex={-1} onClick={() => { close(); onReply() }}>Reply</button>}
         {onReact && <button type="button" role="menuitem" tabIndex={-1} onClick={() => setSelecting(true)}>React</button>}
+        {onDeleteForMe && <button type="button" role="menuitem" tabIndex={-1} onClick={() => { close(true); onDeleteForMe() }}>Delete for me</button>}
+        {everyoneAvailable && <button type="button" role="menuitem" tabIndex={-1} onClick={() => { close(true); onDeleteForEveryone?.() }}>Delete for everyone</button>}
       </>}
     </div>, document.body)}
   </li>

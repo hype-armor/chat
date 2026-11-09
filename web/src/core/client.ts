@@ -1,6 +1,8 @@
 import { scriptUrl } from '../trusted-types'
 import type {
   AppView,
+  DeleteAccepted,
+  DeletionScope,
   Draft,
   DraftSave,
   TextSent,
@@ -146,6 +148,16 @@ export class CoreClient {
   async saveDraft(conversationId: string, text: string, expectedRevision: number): Promise<DraftSave> {
     const { applied, draft } = expect(await this.call({ type: 'saveDraft', conversationId, text, expectedRevision }), 'draftSaved')
     return { applied, draft }
+  }
+
+  async deleteMessage(conversationId: string, messageId: string, scope: DeletionScope): Promise<DeleteAccepted> {
+    const { accepted, scope: resultScope } = expect(await this.call({ type: 'deleteMessage', conversationId, messageId, scope }), 'deleteAccepted')
+    return { accepted, scope: resultScope }
+  }
+
+  async retryDeletion(conversationId: string, deletionEventId: string): Promise<DeleteAccepted> {
+    const { accepted, scope } = expect(await this.call({ type: 'retryDeletion', conversationId, deletionEventId }), 'deleteAccepted')
+    return { accepted, scope }
   }
 
   async react(conversationId: string, targetId: string, emoji: string): Promise<void> {

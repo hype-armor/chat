@@ -19,6 +19,7 @@ message Content {
     Call call = 10;
     Typing typing = 12;
     Reaction reaction = 14;
+    Deletion deletion = 15;
   }
   // Original envelope message id in this conversation, exactly 16 bytes.
   // Absent for an ordinary message. Only used on user-visible messages.
@@ -42,6 +43,14 @@ message Reaction {
   bytes target_hash = 2;
   bytes target_author = 3;
   string emoji = 4;
+}
+
+// Encrypted deletion request. The authenticated sender account must equal
+// target_author. The worker verifies the original hash and the 1-hour window.
+message Deletion {
+  bytes target = 1;
+  bytes target_hash = 2;
+  bytes target_author = 3;
 }
 
 message Text {

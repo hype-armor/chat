@@ -40,6 +40,16 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
 ## Ground rules
 
 - No hand-rolled cryptography; no plaintext or extra metadata on the server.
+- Message deletion follows ADR-0042: Me syncs verified suppression across own
+  devices through authenticated private DeviceSync; unverified originals stay
+  device-only. Everyone requires an authentic own original and a request within
+  1 hour. Keep hash/author tombstones
+  and immutable retry intent before erasing content. Never reconstruct legacy
+  hashes, expose tombstone internals to UI, or let replay/media/draft callbacks
+  restore deleted content. Transport capsules are encrypted, minimal, and excluded
+  from history, UI, search, downloads, and backup. Rebuilt sidebar previews must
+  preserve missed-call notices, exclude other notices/reaction controls, and honor
+  deletion tombstones.
 - Storage writes must reserve ciphertext bytes in the shared quota ledger before object-store I/O
   (ADR-0040). Release charges only after confirmed deletion and fenced writers. Account send
   limits must remain inside the authorized send transaction. Operator policy changes must use
@@ -75,7 +85,9 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   Reply actions require worker-confirmed eligibility. Own sends reach the
   bottom; incoming messages must not displace a reader who scrolled up.
   Map error fallbacks must preserve map dimensions so dialog controls do not move
-  during activation.
+  during activation. Fixture data mutations do not guarantee rendered rows. Await
+  the intended row identity/count before focusing it or opening its action menu;
+  a live `last()` locator can still resolve an older row during history refresh.
 - Live sharing has no app-wide banner or layout offset. Keep the conversation-list
   sharing icon, live message card and Stop sharing control. The Conversation menu
   must offer Stop sharing location for active shares, even with an expired or

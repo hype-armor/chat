@@ -159,6 +159,11 @@ export class CoreClient {
      */
     sendCall(conversation_id: Uint8Array, call_id: Uint8Array, kind: number, sdp: string, candidate: string, video: boolean, to_device: Uint8Array, group: boolean, sent_at_ms: number, message_id: Uint8Array): Uint8Array;
     /**
+     * Deletes only authenticated own-account content. Original verification and
+     * the inclusive 1-hour eligibility window remain the worker's responsibility.
+     */
+    sendDeletion(conversation_id: Uint8Array, target: Uint8Array, target_hash: Uint8Array, target_author: Uint8Array, sent_at_ms: number, message_id: Uint8Array): Uint8Array;
+    /**
      * For the account's self conversation only (ADR-0019).
      */
     sendDeviceSync(conversation_id: Uint8Array, state: Uint8Array, sent_at_ms: number, message_id: Uint8Array): Uint8Array;
@@ -230,6 +235,12 @@ export class EventView {
     get contentHash(): Uint8Array | undefined;
     set contentHash(value: Uint8Array | null | undefined);
     conversationId: Uint8Array;
+    get deletionTargetAuthor(): Uint8Array | undefined;
+    set deletionTargetAuthor(value: Uint8Array | null | undefined);
+    get deletionTargetHash(): Uint8Array | undefined;
+    set deletionTargetHash(value: Uint8Array | null | undefined);
+    get deletionTarget(): Uint8Array | undefined;
+    set deletionTarget(value: Uint8Array | null | undefined);
     /**
      * `DeviceSync` state from one of the account's own devices.
      */
@@ -512,6 +523,9 @@ export interface InitOutput {
     readonly __wbg_get_eventview_call: (a: number) => number;
     readonly __wbg_get_eventview_contentHash: (a: number) => [number, number];
     readonly __wbg_get_eventview_conversationId: (a: number) => [number, number];
+    readonly __wbg_get_eventview_deletionTarget: (a: number) => [number, number];
+    readonly __wbg_get_eventview_deletionTargetAuthor: (a: number) => [number, number];
+    readonly __wbg_get_eventview_deletionTargetHash: (a: number) => [number, number];
     readonly __wbg_get_eventview_deviceSync: (a: number) => [number, number];
     readonly __wbg_get_eventview_displayName: (a: number) => [number, number];
     readonly __wbg_get_eventview_groupAdmins: (a: number) => [number, number];
@@ -593,6 +607,9 @@ export interface InitOutput {
     readonly __wbg_set_eventview_call: (a: number, b: number) => void;
     readonly __wbg_set_eventview_contentHash: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_conversationId: (a: number, b: number, c: number) => void;
+    readonly __wbg_set_eventview_deletionTarget: (a: number, b: number, c: number) => void;
+    readonly __wbg_set_eventview_deletionTargetAuthor: (a: number, b: number, c: number) => void;
+    readonly __wbg_set_eventview_deletionTargetHash: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_deviceSync: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_displayName: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_groupAdmins: (a: number, b: number, c: number) => void;
@@ -673,6 +690,7 @@ export interface InitOutput {
     readonly coreclient_restore: (a: number, b: number) => [number, number, number];
     readonly coreclient_sendAttachment: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number, number, number];
     readonly coreclient_sendCall: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => [number, number, number, number];
+    readonly coreclient_sendDeletion: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
     readonly coreclient_sendDeviceSync: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly coreclient_sendGroupInfo: (a: number, b: number, c: number, d: number, e: number, f: any, g: number, h: number, i: number) => [number, number, number, number];
     readonly coreclient_sendLiveLocation: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => [number, number, number, number];

@@ -320,7 +320,10 @@ describe('device-local text drafts', () => {
     values.set(`messages:${first}`, [orphan])
     values.set(`messages:${second}`, [{ ...orphan, text: 'unrelated orphan' }])
     await expect(engine.messages(first)).resolves.toMatchObject([{ text: 'orphan', status: 'failed' }])
-    expect(engine['store'].getJson).toHaveBeenCalledExactlyOnceWith(`messages:${first}`)
+    // The account deletion ledger is also required before history can be exposed.
+    // Only the selected conversation's message history can be read for recovery.
+    const historyReads = vi.mocked(engine['store'].getJson).mock.calls.filter(([key]) => key.startsWith('messages:'))
+    expect(historyReads).toEqual([[`messages:${first}`]])
     expect(values.get(`messages:${second}`)).toMatchObject([{ text: 'unrelated orphan', status: 'sending' }])
   })
 

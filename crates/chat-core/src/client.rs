@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use chat_proto::{
     PROTOCOL_VERSION,
-    v1::{Content, ContentType, Envelope},
+    v1::{Content, ContentType, Envelope, content},
 };
 use prost::Message;
 use serde::{Deserialize, Serialize};
@@ -337,11 +337,21 @@ impl Client {
             .get_mut(&env.conversation_id)
             .ok_or(Error::Malformed("unknown conversation"))?;
         Ok(match envelope::open(conv, &self.device, env)? {
-            Received::Application { sender, data } => Event::Message {
-                conversation_id: env.conversation_id.clone(),
-                sender,
-                content: Content::decode(data.as_slice())?,
-            },
+            Received::Application { sender, data } => {
+                let content = Content::decode(data.as_slice())?;
+                if let Some(content::Body::Deletion(deletion)) = &content.body
+                    && !valid_deletion(&sender, deletion, content.sent_at_ms)
+                {
+                    // MLS already advanced its receiver ratchet. Ignore the invalid
+                    // application body, but keep that state for the next message.
+                    return Ok(Event::Ignored);
+                }
+                Event::Message {
+                    conversation_id: env.conversation_id.clone(),
+                    sender,
+                    content,
+                }
+            }
             Received::EpochChanged(epoch) => Event::EpochChanged {
                 conversation_id: env.conversation_id.clone(),
                 epoch,
@@ -391,6 +401,21 @@ impl Client {
             .get(id)
             .ok_or(Error::Malformed("unknown conversation"))
     }
+}
+
+/// Checks protocol shape and MLS author authority, not original eligibility.
+/// The worker must verify the authentic original hash and signed time difference.
+pub(crate) fn valid_deletion(
+    sender: &[u8],
+    deletion: &chat_proto::v1::Deletion,
+    sent_at_ms: u64,
+) -> bool {
+    sender.len() == crate::mls::IDENTITY_LEN
+        && deletion.target.len() == 16
+        && deletion.target_hash.len() == 32
+        && deletion.target_author.len() == 16
+        && sender[..16] == deletion.target_author
+        && (1..=9_007_199_254_740_991).contains(&sent_at_ms)
 }
 
 /// Binds a quote to authenticated sender identity and decoded protobuf content.
@@ -588,6 +613,169 @@ mod tests {
         assert!(
             matches!(bob.receive(&next).unwrap(), Event::Message { content, .. } if content == text("after ignored reaction"))
         );
+    }
+
+    #[test]
+    fn deletions_bind_own_account_across_devices_and_survive_legacy_restart() {
+        #[derive(Clone, PartialEq, prost::Message)]
+        struct LegacyContent {
+            #[prost(uint64, tag = "1")]
+            sent_at_ms: u64,
+            #[prost(message, optional, tag = "2")]
+            text: Option<Text>,
+        }
+        let mut author_id = vec![1; 16];
+        author_id.extend([2; 16]);
+        let mut linked_id = vec![1; 16];
+        linked_id.extend([3; 16]);
+        let peer_id = vec![4; 32];
+        let mut author = Client::new(Device::new(&author_id).unwrap());
+        let mut linked = Client::new(Device::new(&linked_id).unwrap());
+        let mut peer = Client::new(Device::new(&peer_id).unwrap());
+        let linked_kp = linked.key_packages(1).unwrap().remove(0);
+        let peer_kp = peer.key_packages(1).unwrap().remove(0);
+        let started = author
+            .start_conversation(
+                &[
+                    JoinPackage {
+                        identity: &linked_id,
+                        key_package: &linked_kp,
+                    },
+                    JoinPackage {
+                        identity: &peer_id,
+                        key_package: &peer_kp,
+                    },
+                ],
+                vec![1; 16],
+            )
+            .unwrap();
+        linked.receive(&started.welcome).unwrap();
+        peer.receive(&started.welcome).unwrap();
+        let id = started.conversation_id;
+        let original = text("original from another own device");
+        let hash = content_hash(&author_id, &original);
+        let original_env = author.send(&id, &original, vec![2; 16]).unwrap();
+        linked.receive(&original_env).unwrap();
+        peer.receive(&original_env).unwrap();
+        let deletion = Content {
+            sent_at_ms: 3_600_001,
+            reply_to: None,
+            reply_to_hash: None,
+            body: Some(content::Body::Deletion(chat_proto::v1::Deletion {
+                target: vec![2; 16],
+                target_hash: hash,
+                target_author: vec![1; 16],
+            })),
+        };
+        let env = linked.send(&id, &deletion, vec![3; 16]).unwrap();
+        let Event::Message {
+            sender,
+            content,
+            conversation_id,
+        } = peer.receive(&env).unwrap()
+        else {
+            panic!("expected an authenticated deletion");
+        };
+        assert_eq!(sender, linked_id);
+        assert_eq!(conversation_id, id);
+        assert_eq!(content, deletion);
+        assert!(matches!(
+            author.receive(&env).unwrap(),
+            Event::Message { .. }
+        ));
+        // An older reader has no tag 15. Decryption must still persist the ratchet.
+        let old = LegacyContent::decode(content.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(old.sent_at_ms, 3_600_001);
+        assert!(old.text.is_none());
+        let mut peer = Client::restore(&peer.snapshot().unwrap()).unwrap();
+        let next = linked
+            .send(&id, &text("after deletion"), vec![4; 16])
+            .unwrap();
+        assert!(
+            matches!(peer.receive(&next).unwrap(), Event::Message { content, .. } if content == text("after deletion"))
+        );
+    }
+
+    #[test]
+    fn malformed_and_forged_deletions_are_ignored_without_losing_the_ratchet() {
+        let sender_id = vec![1; 32];
+        let recipient_id = vec![2; 32];
+        let mut sender = Client::new(Device::new(&sender_id).unwrap());
+        let mut recipient = Client::new(Device::new(&recipient_id).unwrap());
+        let kp = recipient.key_packages(1).unwrap().remove(0);
+        let started = sender
+            .start_conversation(
+                &[JoinPackage {
+                    identity: &recipient_id,
+                    key_package: &kp,
+                }],
+                vec![1; 16],
+            )
+            .unwrap();
+        recipient.receive(&started.welcome).unwrap();
+        let id = started.conversation_id;
+        let valid = chat_proto::v1::Deletion {
+            target: vec![3; 16],
+            target_hash: vec![4; 32],
+            target_author: vec![1; 16],
+        };
+        assert!(valid_deletion(&sender_id, &valid, 1));
+        assert!(valid_deletion(&sender_id, &valid, 9_007_199_254_740_991));
+        assert!(!valid_deletion(&sender_id[..31], &valid, 1));
+        let mut invalid = Vec::new();
+        for width in [0, 15, 17] {
+            invalid.push((
+                chat_proto::v1::Deletion {
+                    target: vec![3; width],
+                    ..valid.clone()
+                },
+                1,
+            ));
+            invalid.push((
+                chat_proto::v1::Deletion {
+                    target_author: vec![1; width],
+                    ..valid.clone()
+                },
+                1,
+            ));
+        }
+        for width in [0, 31, 33] {
+            invalid.push((
+                chat_proto::v1::Deletion {
+                    target_hash: vec![4; width],
+                    ..valid.clone()
+                },
+                1,
+            ));
+        }
+        invalid.push((
+            chat_proto::v1::Deletion {
+                target_author: vec![2; 16],
+                ..valid.clone()
+            },
+            1,
+        ));
+        for at in [0, 9_007_199_254_740_992, u64::MAX] {
+            invalid.push((valid.clone(), at));
+        }
+        for (deletion, at) in invalid {
+            assert!(!valid_deletion(&sender_id, &deletion, at));
+            let content = Content {
+                sent_at_ms: at,
+                reply_to: None,
+                reply_to_hash: None,
+                body: Some(content::Body::Deletion(deletion)),
+            };
+            let env = sender.send(&id, &content, vec![5; 16]).unwrap();
+            assert!(matches!(recipient.receive(&env).unwrap(), Event::Ignored));
+            recipient = Client::restore(&recipient.snapshot().unwrap()).unwrap();
+            let next = sender
+                .send(&id, &text("after invalid deletion"), vec![6; 16])
+                .unwrap();
+            assert!(
+                matches!(recipient.receive(&next).unwrap(), Event::Message { content, .. } if content == text("after invalid deletion"))
+            );
+        }
     }
 
     #[test]

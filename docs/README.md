@@ -28,6 +28,10 @@ Architecture Decision Records (ADRs) under [`adr/`](adr/).
 Message reactions use [ADR-0041](adr/0041-encrypted-message-reactions.md): verified
 original bindings, encrypted durable updates, deterministic account ordering, and removal tombstones.
 
+Message deletion uses [ADR-0042](adr/0042-encrypted-message-deletion.md): encrypted
+own-device suppression (device-only fallback for unverified originals) and
+authenticated own-message deletion requests for everyone within 1 hour.
+
 ## Conventions
 
 - Requirement IDs: `FR-<AREA>-<n>` (functional), `NFR-<AREA>-<n>` (non-functional).

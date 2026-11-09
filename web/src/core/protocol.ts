@@ -169,7 +169,16 @@ export type ReplyPreview = {
   unavailable?: boolean
 }
 
+export type DeletionScope = 'me' | 'everyone'
+export type DeleteAccepted = { accepted: true; scope: DeletionScope }
+
 export type ChatMessage = {
+  canDeleteForMe?: boolean
+  deleteForMeLocalOnly?: boolean
+  canDeleteForEveryone?: boolean
+  deleteForEveryoneUntil?: number
+  deleted?: boolean
+  deletionStatus?: { id: string; status: 'sending' | 'failed'; error?: string }
   canReact?: boolean
   /** The latest own reaction is provisional until the server accepts its envelope. */
   reactionStatus?: { id: string; status: 'sending' | 'failed'; error?: string }
@@ -262,6 +271,8 @@ export type CoreRequest =
   | { type: 'messages'; conversationId: string }
   | { type: 'getDraft'; conversationId: string }
   | { type: 'saveDraft'; conversationId: string; text: string; expectedRevision: number }
+  | { type: 'deleteMessage'; conversationId: string; messageId: string; scope: DeletionScope }
+  | { type: 'retryDeletion'; conversationId: string; deletionEventId: string }
   | { type: 'react'; conversationId: string; targetId: string; emoji: string }
   | { type: 'sendText'; conversationId: string; text: string; replyTo?: string; draftRevision?: number }
   | { type: 'setTyping'; conversationId: string; active: boolean }
@@ -328,6 +339,7 @@ export type CoreResponseBody =
   | ({ type: 'fileSent' } & TextSent)
   | { type: 'typing'; typists: Typist[] }
   | { type: 'view'; view: AppView }
+  | { type: 'deleteAccepted'; accepted: true; scope: DeletionScope }
   | { type: 'ok' }
   | { type: 'conversation'; conversationId: string }
   | { type: 'messages'; messages: ChatMessage[] }
@@ -359,7 +371,7 @@ export type CoreEvent =
   | { type: 'draft'; conversationId: string; draft: Draft }
   | { type: 'typing'; conversationId: string; typists: Typist[] }
   | { type: 'view'; view: AppView }
-  | { type: 'messages'; conversationId: string }
+  | { type: 'messages'; conversationId: string; deletions?: { messageId: string; scope: DeletionScope }[] }
   /** An attachment upload or download moved on (ADR-0025). */
   | { type: 'progress'; conversationId: string; messageId: string; done: number; total: number }
   /** Call signalling for the call screen (ADR-0028). */

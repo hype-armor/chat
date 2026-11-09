@@ -1,9 +1,9 @@
 //! JavaScript bindings used by the web client's core worker.
 
 use chat_proto::v1::{
-    Ack, Attachment, Authenticate, Call, ClientFrame, Content, ContentType, DeviceSync, Envelope,
-    GroupInfo, LiveLocation, Location, Ping, Profile, Reaction, Receipt, SendEnvelope, ServerFrame,
-    Text, Typing, client_frame, content, receipt, server_frame,
+    Ack, Attachment, Authenticate, Call, ClientFrame, Content, ContentType, Deletion, DeviceSync,
+    Envelope, GroupInfo, LiveLocation, Location, Ping, Profile, Reaction, Receipt, SendEnvelope,
+    ServerFrame, Text, Typing, client_frame, content, receipt, server_frame,
 };
 use js_sys::{Array, Uint8Array};
 use prost::Message;
@@ -225,6 +225,12 @@ pub struct EventView {
     pub text: Option<String>,
     #[wasm_bindgen(getter_with_clone)]
     pub reaction: Option<Vec<u8>>,
+    #[wasm_bindgen(getter_with_clone, js_name = deletionTarget)]
+    pub deletion_target: Option<Vec<u8>>,
+    #[wasm_bindgen(getter_with_clone, js_name = deletionTargetHash)]
+    pub deletion_target_hash: Option<Vec<u8>>,
+    #[wasm_bindgen(getter_with_clone, js_name = deletionTargetAuthor)]
+    pub deletion_target_author: Option<Vec<u8>>,
     /// Original message id, only for valid user-visible reply references.
     #[wasm_bindgen(getter_with_clone, js_name = replyTo)]
     pub reply_to: Option<Vec<u8>>,
@@ -330,6 +336,9 @@ impl EventView {
             sent_at_ms: 0.0,
             text: None,
             reaction: None,
+            deletion_target: None,
+            deletion_target_hash: None,
+            deletion_target_author: None,
             reply_to: None,
             reply_to_hash: None,
             content_hash: None,
@@ -909,6 +918,41 @@ impl CoreClient {
         )
     }
 
+    /// Deletes only authenticated own-account content. Original verification and
+    /// the inclusive 1-hour eligibility window remain the worker's responsibility.
+    #[wasm_bindgen(js_name = sendDeletion)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn send_deletion(
+        &mut self,
+        conversation_id: &[u8],
+        target: Vec<u8>,
+        target_hash: Vec<u8>,
+        target_author: Vec<u8>,
+        sent_at_ms: f64,
+        message_id: Vec<u8>,
+    ) -> Result<Vec<u8>, JsError> {
+        self.last_sent_content_hash = None;
+        let deletion = Deletion {
+            target,
+            target_hash,
+            target_author,
+        };
+        if conversation_id.len() != 16
+            || message_id.len() != 16
+            || !exact_timestamp(sent_at_ms).is_some_and(|at| {
+                crate::client::valid_deletion(self.inner.identity(), &deletion, at)
+            })
+        {
+            return Err(JsError::new("invalid deletion"));
+        }
+        self.send(
+            conversation_id,
+            sent_at_ms,
+            content::Body::Deletion(deletion),
+            message_id,
+        )
+    }
+
     /// Ephemeral typing state. The worker must drop stale or superseded events.
     #[wasm_bindgen(js_name = sendTyping)]
     pub fn send_typing(
@@ -1060,6 +1104,13 @@ impl CoreClient {
                     view.reply_to_hash = content.reply_to_hash.filter(|hash| hash.len() == 32);
                 }
                 match content.body {
+                    Some(content::Body::Deletion(deletion)) => {
+                        // Client::receive already checked the authenticated author,
+                        // timestamp, and field widths before creating this event.
+                        view.deletion_target = Some(deletion.target);
+                        view.deletion_target_hash = Some(deletion.target_hash);
+                        view.deletion_target_author = Some(deletion.target_author);
+                    }
                     Some(content::Body::Reaction(r)) => {
                         if r.target.len() == 16
                             && r.target_hash.len() == 32
@@ -1227,6 +1278,89 @@ fn valid_typing_times(sent: u64, expires: u64) -> bool {
 #[cfg(test)]
 mod interaction_tests {
     use super::*;
+
+    #[test]
+    fn deletion_bindings_expose_authenticated_fields_and_clear_visible_hashes() {
+        let sender_id = vec![1; 32];
+        let receiver_id = vec![2; 32];
+        let mut sender = Client::new(Device::new(&sender_id).unwrap());
+        let mut receiver = Client::new(Device::new(&receiver_id).unwrap());
+        let kp = receiver.key_packages(1).unwrap().remove(0);
+        let started = sender
+            .start_conversation(
+                &[JoinPackage {
+                    identity: &receiver_id,
+                    key_package: &kp,
+                }],
+                vec![1; 16],
+            )
+            .unwrap();
+        receiver.receive(&started.welcome).unwrap();
+        let id = started.conversation_id;
+        let mut sender = CoreClient {
+            inner: sender,
+            last_sent_content_hash: None,
+        };
+        let mut receiver = CoreClient {
+            inner: receiver,
+            last_sent_content_hash: None,
+        };
+        let original = sender
+            .send_text(&id, "original".into(), 1.0, vec![2; 16], None, None)
+            .unwrap();
+        let hash = sender.last_sent_content_hash().unwrap();
+        let original_view = receiver.receive(&original).unwrap();
+        assert_eq!(original_view.content_hash.as_ref(), Some(&hash));
+        let deletion = sender
+            .send_deletion(
+                &id,
+                vec![2; 16],
+                hash.clone(),
+                vec![1; 16],
+                3_600_001.0,
+                vec![3; 16],
+            )
+            .unwrap();
+        assert!(sender.last_sent_content_hash().is_none());
+        let view = receiver.receive(&deletion).unwrap();
+        assert_eq!(view.kind, "message");
+        assert_eq!(view.conversation_id, id);
+        assert_eq!(view.sender, sender_id);
+        assert_eq!(view.sent_at_ms, 3_600_001.0);
+        assert_eq!(view.deletion_target, Some(vec![2; 16]));
+        assert_eq!(view.deletion_target_hash, Some(hash));
+        assert_eq!(view.deletion_target_author, Some(vec![1; 16]));
+        assert!(view.content_hash.is_none());
+        assert!(view.text.is_none());
+        assert!(view.reply_to.is_none());
+        assert!(view.reaction.is_none());
+
+        // Bypass sendDeletion to model a malicious peer with a valid MLS key.
+        let forged = Content {
+            sent_at_ms: 2,
+            reply_to: None,
+            reply_to_hash: None,
+            body: Some(content::Body::Deletion(Deletion {
+                target: vec![2; 16],
+                target_hash: vec![3; 32],
+                target_author: vec![2; 16],
+            })),
+        };
+        let env = sender.inner.send(&id, &forged, vec![4; 16]).unwrap();
+        let ignored = receiver.receive(&env.encode_to_vec()).unwrap();
+        assert_eq!(ignored.kind, "ignored");
+        assert!(ignored.deletion_target.is_none());
+        assert!(ignored.deletion_target_hash.is_none());
+        assert!(ignored.deletion_target_author.is_none());
+        let mut receiver = CoreClient::restore(&receiver.snapshot().unwrap()).unwrap();
+        let next = sender
+            .send_text(&id, "next".into(), 3.0, vec![5; 16], None, None)
+            .unwrap();
+        assert_eq!(
+            receiver.receive(&next).unwrap().text.as_deref(),
+            Some("next")
+        );
+    }
 
     #[test]
     fn outgoing_replies_require_an_identifier_and_hash_together() {

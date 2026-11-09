@@ -2,6 +2,8 @@
 // encrypted storage, REST calls and the WebSocket. The UI thread only
 // receives `AppView` snapshots and message lists.
 
+import { markMeSyncDirty, meBindingKey, meDeletionBindings, meDeletionChunks, mergeMeDeletions, parseMeDeletions, validMeBinding, type MeDeletionBinding } from './me-deletion-sync'
+import { DELETE_WINDOW_MS, addCandidate, emptyDeletions, equivalent, mergeDeletions, newRequestTime, promoteCandidates, safeTime, suppresses, timely, validBinding, type DeletionBinding, type DeletionLedger, type DeletionRecord, type DeletionOriginal } from './deletions'
 import { bindingMatches, validReaction, reactionStates, reactionChips, type ReactionUpdate } from './reactions'
 
 import init, {
@@ -88,6 +90,8 @@ import {
 } from './keys'
 import type {
   AppView,
+  DeleteAccepted,
+  DeletionScope,
   Draft,
   DraftSave,
   TextSent,
@@ -121,7 +125,7 @@ import {
   updateDue,
 } from './live'
 import { type MediaTransformOptions, frameTransform } from './media'
-import { CALL_KINDS, type CallEnd, type CallRecord, GIVE_UP_MS, STALE_OFFER_MS, callNotice, safeSignalText } from './calls'
+import { CALL_KINDS, type CallEnd, type CallRecord, GIVE_UP_MS, STALE_OFFER_MS, callNotice, isMissedCallNotice, safeSignalText } from './calls'
 import { acceptsGroupInfo, designatedCommitter, isGroupView, parseAdmins } from './roles'
 import { SecureStore } from './storage'
 import { TypingClock, TypingLeases, TYPING_REFRESH_MS, TYPING_TTL_MS } from './typing'
@@ -163,6 +167,7 @@ type StoredFile = Omit<FileInfo, 'thumbnail'> & {
 
 /** A message as stored; `messages()` hands the UI a `ChatMessage` without keys. */
 type StoredMessage = Omit<ChatMessage, 'file' | 'reply' | 'reactions' | 'canReact' | 'reactionStatus'> & {
+  hidden?: boolean
   reactionEvent?: ReactionUpdate
   file?: StoredFile
   /** Hashes bind previews to authenticated MLS content, not mutable outer IDs. */
@@ -218,6 +223,8 @@ type LiveSession = {
   /** No fixed duration; remote copies use `expiresAt` as a renewable lease. */
   untilStopped?: boolean
   lastSentAt: number
+  /** Immutable Native original evidence, not the timestamp/hash of a renewal. */
+  binding?: { hash: string; author: string; at: number }
   last?: LocationInfo
 }
 
@@ -231,6 +238,8 @@ type Outgoing = {
   silent?: boolean
   /** Transient failures so far (rate limits, server trouble). */
   attempts?: number
+  /** Private own-device deletion-sync batch, never exposed to the UI. */
+  meDeletionBatch?: string
 }
 
 /**
@@ -261,6 +270,8 @@ type State = {
   /** Account id (hex) → username number, for contacts this user looked up. */
   usernames: Record<string, string>
   outbox: Outgoing[]
+  meDeletionBatches?: Record<string, { revision: number; failed: boolean }>
+  pendingMeDeletions?: { conversationId: string; device: string; bindings: MeDeletionBinding[] }[]
   /** Device-local revision fences. Never include in backup or device sync. */
   draftClears: Record<string, number>
   early: Early[]
@@ -310,6 +321,7 @@ const STATS_EVERY_MS = 24 * 3600_000
 /** What a backup holds (ADR-0022): no MLS state, keys or tokens. */
 type BackupPayload = {
   version: 1
+  deletions?: DeletionLedger
   createdAt: number
   displayName: string
   avatar?: string
@@ -376,7 +388,7 @@ export class Engine {
    * device linked or restored a moment ago). Applied once the server's device
    * list confirms it (audit H1).
    */
-  private pendingSyncs: { conversationId: string; device: string; bytes: Uint8Array }[] = []
+  private pendingSyncs: { conversationId: string; device: string; bytes: Uint8Array; accountId: string; epoch: number }[] = []
   /** Downloads under way, by message id. */
   private downloads = new Map<string, Promise<Blob>>()
   private nextRequestId = 1
@@ -413,6 +425,19 @@ export class Engine {
 
   /** Serialises every mutation of core state and storage. */
   private lock: Promise<unknown> = Promise.resolve()
+  private deletionCache?: { accountId: string; epoch: number; ledger: DeletionLedger }
+  private deletionLock: Promise<unknown> = Promise.resolve()
+  private deletionClock = new TypingClock()
+  private starting = false
+  private deletionGeneration = 0
+  private deletionPreviewsReady = new Set<string>()
+  private acceptingDeletions = new Set<string>()
+  private acceptingMeDeletionSync = new Set<string>()
+  private meDeletionSyncTimer?: ReturnType<typeof setTimeout>
+  private hiddenSendCleanupTimer?: ReturnType<typeof setTimeout>
+  /** Only a fresh directory response can authorize replay of an unapplied incoming journal. */
+  private meDirectorySession?: { accountId: string; epoch: number; core: CoreClient }
+  private deletionKnown = new Map<string, DeletionOriginal[]>()
   private draftEpoch = 0
   private endingSession = false
   private draftChanges = new Map<string, Draft>()
@@ -423,9 +448,10 @@ export class Engine {
   constructor(private readonly emit: (event: CoreEvent) => void) {}
 
   async start() {
+    this.starting = true
     // Back on the network: reconnect now rather than after the back-off.
     self.addEventListener('online', () => {
-      if (this.ws || !this.account) return
+      if (this.starting || this.ws || !this.account) return
       clearTimeout(this.reconnectTimer)
       this.reconnectMs = 1000
       this.connect()
@@ -438,9 +464,20 @@ export class Engine {
       this.core = CoreClient.restore(snapshot)
       this.state = { ...emptyState(), ...(await this.store.getJson<State>('app')) }
       this.recent = new RecentIds(this.state.seen)
+      await this.loadMeDeletionInbox()
+      let deletions = await this.readDeletions()
+      if (meDeletionBindings(deletions).length && deletions.meSyncRevision === undefined) deletions = await this.changeDeletions((ledger) => { markMeSyncDirty(ledger); return true })
+      await this.reconcileLiveProducers()
+      for (const conversationId of new Set(deletions.records.map((t) => t.conversation))) {
+        this.emitDeletionBarrier(conversationId, deletions)
+        await this.cleanupDeletion(conversationId).catch(() => undefined)
+      }
       if (this.state.live.length > 0 || this.state.liveSeen.length > 0) this.scheduleLiveSweep()
+      await this.reconcileHiddenSends().catch(() => this.scheduleHiddenSendCleanup())
+      this.starting = false
       this.connect()
     }
+    this.starting = false
     this.emitView()
   }
 
@@ -462,7 +499,7 @@ export class Engine {
         request: c.request ?? false,
         unread: c.unread ?? 0,
         verification: !isGroupView(c) && c.peers.length === 1 ? this.verificationOf(c.peers[0]) : undefined,
-        lastText: c.lastText,
+        lastText: this.deletionCache?.accountId === this.account!.accountId && (!this.deletionCache.ledger.records.some((t) => t.conversation === c.id) || this.deletionPreviewsReady.has(c.id)) ? c.lastText : undefined,
         lastAt: c.lastAt,
       }))
     return {
@@ -482,7 +519,7 @@ export class Engine {
       backup: this.state.backup ? { lastAt: this.state.backup.lastAt } : undefined,
       media: this.state.media,
       liveSharing: this.state.live
-        .filter((l) => l.untilStopped === true || l.expiresAt > Date.now())
+        .filter((l) => this.liveProducerAllowed(l) && (l.untilStopped === true || l.expiresAt > Date.now()))
         .map((l) => ({
           conversationId: l.conversationId,
           title: this.state.conversations[l.conversationId] ? this.title(this.state.conversations[l.conversationId]) : '',
@@ -510,7 +547,7 @@ export class Engine {
         if (!c.self && !c.status) this.queueProfile(c.id)
       }
       const self = Object.values(this.state.conversations).find((c) => c.self && !c.status)
-      if (self) this.queueDeviceSync(self.id)
+      if (self) await this.queueDeviceSync(self.id)
       await this.persist()
     })
     this.emit({ type: 'avatar', account: this.myAccount() })
@@ -555,6 +592,11 @@ export class Engine {
   private async register(reg: Registered, displayName: string, prepare?: () => Promise<void>) {
     await this.exclusive(async () => {
       this.draftEpoch++
+      this.deletionCache = undefined
+      this.deletionPreviewsReady.clear()
+      this.deletionKnown.clear()
+      this.pendingSyncs = []
+      this.deletionClock = new TypingClock()
       this.endingSession = false
       this.draftChanges.clear()
       this.core = this.pending!.intoClient(makeIdentity(reg.account_id, reg.device_id))
@@ -607,10 +649,14 @@ export class Engine {
 
   /** Encrypts this device's history and uploads it. */
   async backupNow() {
+    const session = this.deletionSession()
+    const generation = this.deletionGeneration
     const { account } = this.ready()
     const key = await this.store.getKey('backup')
+    this.assertDeletionSession(session)
     if (!key || !this.state.backup) return
     const payload = await this.exclusive(async () => {
+      this.assertDeletionSession(session)
       const messages: Record<string, StoredMessage[]> = {}
       const conversations: State['conversations'] = {}
       for (const c of Object.values(this.state.conversations)) {
@@ -621,6 +667,7 @@ export class Engine {
       const { names, avatars, usernames, blocked, verified, keys, readReceipts } = this.state
       return {
         version: 1,
+        deletions: structuredClone(await this.readDeletions()),
         createdAt: Date.now(),
         displayName: account.displayName,
         avatar: account.avatar,
@@ -628,12 +675,18 @@ export class Engine {
         messages,
       } satisfies BackupPayload
     })
-    await api.uploadBackup(account.token, await sealBackup(key, payload))
+    const sealed = await sealBackup(key, payload)
+    this.assertDeletionSession(session)
+    if (generation !== this.deletionGeneration) return
+    await api.uploadBackup(account.token, sealed)
+    this.assertDeletionSession(session)
+    if (generation !== this.deletionGeneration) return
     await this.exclusive(async () => {
+      this.assertDeletionSession(session)
       if (this.state.backup) this.state.backup.lastAt = payload.createdAt
       await this.persist()
     })
-    this.backupDirty = false
+    this.backupDirty = generation !== this.deletionGeneration
     this.emitView()
   }
 
@@ -654,11 +707,19 @@ export class Engine {
       this.account!.displayName = backup.displayName
       this.account!.avatar = backup.avatar
       await this.store.putJson('account', this.account)
+      await this.changeDeletions((ledger) => {
+        const previousMe = new Set(meDeletionBindings(ledger).map((b) => b.conversation + b.hash + b.author))
+        const merged = mergeDeletions(ledger, backup.deletions ?? emptyDeletions())
+        if (meDeletionBindings(merged).some((b) => !previousMe.has(b.conversation + b.hash + b.author))) markMeSyncDirty(ledger)
+        ledger.records = merged.records
+        ledger.candidates = merged.candidates
+        return true
+      })
       const restored = backup.state
       for (const c of Object.values(restored.conversations)) {
         c.status = c.status ?? 'restoring'
         c.request = undefined
-        await this.store.putJson(`messages:${c.id}`, backup.messages[c.id] ?? [])
+        await this.store.putJson(`messages:${c.id}`, this.redactedHistory(c.id, backup.messages[c.id] ?? [], await this.readDeletions()))
       }
       // This device is the account's own: its key must not raise an alert.
       Object.assign(this.state, restored, {
@@ -666,6 +727,7 @@ export class Engine {
         backup: { lastAt: backup.createdAt },
         expectedOwn: [deviceHex(reg.device_id)],
       })
+      for (const conversationId of new Set((await this.readDeletions()).records.map((t) => t.conversation))) await this.cleanupDeletion(conversationId).catch(() => undefined)
       await this.store.putKey('backup', keys.encryption)
       await this.persist()
     })
@@ -802,6 +864,11 @@ export class Engine {
     // Invalidate queued RPCs and transport now, then clear after an in-flight write ends.
     this.endingSession = true
     this.draftEpoch++
+    clearTimeout(this.meDeletionSyncTimer)
+    this.meDeletionSyncTimer = undefined
+    clearTimeout(this.hiddenSendCleanupTimer)
+    this.hiddenSendCleanupTimer = undefined
+    this.meDirectorySession = undefined
     clearTimeout(this.retryTimer)
     clearTimeout(this.reconnectTimer)
     const ws = this.ws
@@ -811,6 +878,13 @@ export class Engine {
     this.waiters.clear()
     ws?.close()
     await this.exclusive(async () => {
+      await this.deletionLock
+      this.deletionCache = undefined
+      this.deletionPreviewsReady.clear()
+      this.deletionKnown.clear()
+      this.pendingSyncs = []
+      this.acceptingMeDeletionSync.clear()
+      this.deletionClock = new TypingClock()
       this.account = undefined
       this.core = undefined
       this.state = emptyState()
@@ -856,12 +930,13 @@ export class Engine {
       if (!current()) return
       const mine = devices.map((d) => deviceHex(d.device_id))
       this.state.myDevices = mine
+      this.meDirectorySession = { accountId: session.accountId, epoch: session.epoch, core }
       // Syncs that waited for this list (a device linked a moment ago).
       const ready = this.pendingSyncs.filter((p) => mine.includes(p.device))
       this.pendingSyncs = this.pendingSyncs.filter((p) => !mine.includes(p.device))
       for (const pending of ready) {
         await this.exclusive(async () => {
-          if (current()) await this.applyDeviceSync(pending.conversationId, pending.bytes)
+          if (current() && pending.accountId === session.accountId && pending.epoch === session.epoch) await this.applyDeviceSync(pending.conversationId, pending.bytes, pending.device)
         })
         if (!current()) return
       }
@@ -889,7 +964,7 @@ export class Engine {
     } catch (e) {
       console.warn('device sync failed', e)
     }
-    if (current()) this.emitView()
+    if (current()) { await this.flushMeDeletionSync(); this.emitView() }
   }
 
   private syncRosterMatches(conversationId: string, expected: SyncRoster): boolean {
@@ -1072,14 +1147,14 @@ export class Engine {
         envelope: toBase64(started.welcome),
         recipients: invitee.devices,
       })
-      this.queueDeviceSync(id)
+      await this.queueDeviceSync(id)
       await this.persist()
     })
     void this.flushOutbox()
   }
 
   /** Shares names and group metadata with this account's other devices. */
-  private queueDeviceSync(selfId: string) {
+  private async queueDeviceSync(selfId: string) {
     const sync: DeviceSync = {
       displayName: this.account!.displayName,
       avatar: this.account!.avatar ?? null,
@@ -1100,6 +1175,7 @@ export class Engine {
         Date.now(),
         messageId,
       )
+      this.acceptingMeDeletionSync.add(toHex(messageId))
       this.state.outbox.push({
         messageId: toHex(messageId),
         conversationId: selfId,
@@ -1111,10 +1187,13 @@ export class Engine {
     for (const avatars of avatarSyncChunks(this.state.avatars)) {
       queue({ names: {}, usernames: {}, conversations: {}, avatars })
     }
+    await this.queueMeDeletionSync(selfId, true)
   }
 
   /** Applies a `DeviceSync` from another of this account's devices. */
-  private async applyDeviceSync(conversationId: string, bytes: Uint8Array) {
+  private async applyDeviceSync(conversationId: string, bytes: Uint8Array, senderDevice?: string) {
+    if (senderDevice && !this.privateSelfContext(conversationId, senderDevice)) return
+    if (senderDevice) await this.applyMeDeletionSync(conversationId, bytes, senderDevice)
     const sync = parseDeviceSync(bytes)
     const conv = this.conv(conversationId)
     if (!sync || !conv) return
@@ -1376,7 +1455,7 @@ export class Engine {
     await this.exclusive(async () => {
       this.state.blocked = blocked
       const self = Object.values(this.state.conversations).find((c) => c.self && !c.status)
-      if (self) this.queueDeviceSync(self.id)
+      if (self) await this.queueDeviceSync(self.id)
       await this.persist()
     })
     this.emitView()
@@ -1752,16 +1831,563 @@ export class Engine {
     await api.subscribePush(this.ready().account.token, subscription)
   }
 
+  /** Identifiers invalidate cached UI content; they never authorize a network action. */
+  private privateSelfContext(conversationId: string, senderDevice?: string, requireCurrentDevices = true): boolean {
+    const conv = this.conv(conversationId)
+    if (!conv || conv.status || this.endingSession || !this.core || !this.account) return false
+    if (!conv.self && (conv.peers.length > 0 || conv.name || conv.admins?.length || conv.request)) return false
+    try {
+      const members = (this.core.members(fromHex(conversationId)) as Uint8Array[]).map(splitIdentity)
+      const devices = new Set(this.state.myDevices)
+      return members.length > 0 && members.every((m) => m.account === this.myAccount() && (!requireCurrentDevices || devices.has(toHex(m.device)))) &&
+        members.some((m) => toHex(m.device) === deviceHex(this.account!.deviceId)) &&
+        (senderDevice === undefined || (!requireCurrentDevices || devices.has(senderDevice)) && members.some((m) => toHex(m.device) === senderDevice))
+    } catch { return false }
+  }
+
+  private rememberDeletionOriginals(conversationId: string, originals: DeletionOriginal[]) {
+    const known = this.deletionKnown.get(conversationId) ?? []
+    for (const m of originals) if (m.kind !== 'notice' && validContentHash(m.contentHash) && !known.some((k) => k.id === m.id && k.from === m.from && k.contentHash === m.contentHash)) {
+      known.push({ id: m.id, from: m.from, contentHash: m.contentHash, sentAt: m.sentAt, live: m.live ? { sessionId: m.live.sessionId } : undefined })
+    }
+    this.deletionKnown.set(conversationId, known)
+  }
+
+  private async loadMeDeletionInbox() {
+    const session = this.deletionSession()
+    const saved = await this.store.getJson<NonNullable<State['pendingMeDeletions']>>('me-deletion-inbox:' + session.accountId)
+    this.assertDeletionSession(session)
+    if (!saved?.length) return
+    const pending = this.state.pendingMeDeletions ??= []
+    for (const item of saved) {
+      const old = pending.find((p) => p.conversationId === item.conversationId && p.device === item.device)
+      if (old) old.bindings = [...new Map([...old.bindings, ...item.bindings].map((b) => [meBindingKey(b), b])).values()]
+      else pending.push(item)
+    }
+  }
+
+  private meDeletionSyncAlert() {
+    if (this.endingSession || !this.account) return
+    const id = 'me-deletion-sync'
+    if (!this.state.alerts.some((a) => a.id === id)) this.state.alerts.push({ id, text: 'Message deletion sync to your devices is unconfirmed. It will retry.' })
+    this.emitView()
+  }
+
+  private scheduleMeDeletionSync() {
+    if (this.meDeletionSyncTimer || this.endingSession || !this.account) return
+    const session = this.deletionSession()
+    this.meDeletionSyncTimer = setTimeout(() => {
+      this.meDeletionSyncTimer = undefined
+      try { this.assertDeletionSession(session) } catch { return }
+      void this.flushMeDeletionSync()
+    }, 5_000)
+  }
+
+  private async flushMeDeletionSync() {
+    if (!this.account || this.endingSession || this.connection !== 'online') return
+    const session = this.deletionSession()
+    try {
+      await this.exclusive(async () => {
+        this.assertDeletionSession(session)
+        const pending = [...(this.state.pendingMeDeletions ?? [])]
+        for (const item of pending) {
+          const confirmed = this.meDirectorySession
+          if (!confirmed || confirmed.accountId !== session.accountId || confirmed.epoch !== session.epoch || confirmed.core !== session.core) continue
+          if (!this.privateSelfContext(item.conversationId, item.device)) continue
+          for (const bytes of meDeletionChunks(item.bindings)) await this.applyMeDeletionSync(item.conversationId, bytes, item.device)
+        }
+        const self = Object.values(this.state.conversations).find((c) => this.privateSelfContext(c.id))
+        const queued = self ? await this.queueMeDeletionSync(self.id) : false
+        const gated = this.state.outbox.some((o) => this.acceptingMeDeletionSync.has(o.messageId))
+        const ledger = await this.readDeletions()
+        const healthy = (ledger.meSyncRevision ?? 0) <= (ledger.meSyncAcknowledged ?? 0) && !this.state.pendingMeDeletions?.length
+        const hadAlert = this.state.alerts.some((a) => a.id === 'me-deletion-sync')
+        if (healthy) this.state.alerts = this.state.alerts.filter((a) => a.id !== 'me-deletion-sync')
+        if (queued || gated || pending.length || healthy && hadAlert) await this.persist()
+      })
+      this.assertDeletionSession(session)
+      void this.flushOutbox()
+    } catch {
+      try { this.assertDeletionSession(session) } catch { return }
+      this.meDeletionSyncAlert(); this.scheduleMeDeletionSync()
+    }
+  }
+
+  /** The caller holds the mutation lock. Each batch contains the complete verified Me union. */
+  private async queueMeDeletionSync(selfId: string, bootstrap = false): Promise<boolean> {
+    const session = this.deletionSession()
+    if (!this.privateSelfContext(selfId)) return false
+    let ledger = await this.readDeletions()
+    this.assertDeletionSession(session)
+    const bindings = meDeletionBindings(ledger)
+    if (!bindings.length) return false
+    if (bootstrap || ledger.meSyncRevision === undefined) ledger = await this.changeDeletions((next) => { markMeSyncDirty(next); return true })
+    this.assertDeletionSession(session)
+    const revision = ledger.meSyncRevision ?? 0
+    if (revision <= (ledger.meSyncAcknowledged ?? 0)) return false
+    const batches = this.state.meDeletionBatches ??= {}
+    for (const [id, batch] of Object.entries(batches)) {
+      if (!this.state.outbox.some((o) => o.meDeletionBatch === id)) delete batches[id]
+      else if (batch.revision >= revision) return false
+    }
+    const batchId = toHex(randomId())
+    const queued: Outgoing[] = []
+    try {
+      for (const bytes of meDeletionChunks(bindings)) {
+        const id = randomId()
+        const envelope = session.core.sendDeviceSync(fromHex(selfId), bytes, Date.now(), id)
+        queued.push({ messageId: toHex(id), conversationId: selfId, envelope: toBase64(envelope), recipients: this.recipients(selfId), meDeletionBatch: batchId })
+      }
+    } catch (error) {
+      // No partial batch can acknowledge the full union. Preserve the advanced ratchet.
+      this.scheduleMeDeletionSync()
+      throw error
+    }
+    this.assertDeletionSession(session)
+    batches[batchId] = { revision, failed: false }
+    for (const item of queued) this.acceptingMeDeletionSync.add(item.messageId)
+    this.state.outbox.push(...queued)
+    return true
+  }
+
+  private async settleMeDeletionBatch(item: Outgoing, failed: boolean) {
+    const id = item.meDeletionBatch
+    const batch = id && this.state.meDeletionBatches?.[id]
+    if (!id || !batch) return
+    batch.failed ||= failed
+    if (failed) this.meDeletionSyncAlert()
+    if (this.state.outbox.some((o) => o.meDeletionBatch === id)) return
+    try {
+      if (!batch.failed) await this.changeDeletions((ledger) => {
+        ledger.meSyncAcknowledged = Math.max(ledger.meSyncAcknowledged ?? 0, batch.revision)
+        return true
+      })
+    } catch { this.scheduleMeDeletionSync() }
+    finally { delete this.state.meDeletionBatches![id] }
+    const ledger = await this.readDeletions()
+    if ((ledger.meSyncRevision ?? 0) > (ledger.meSyncAcknowledged ?? 0) || this.state.pendingMeDeletions?.length) this.scheduleMeDeletionSync()
+    else { this.state.alerts = this.state.alerts.filter((a) => a.id !== 'me-deletion-sync'); this.emitView() }
+  }
+
+  private stageMeDeletionInput(conversationId: string, device: string, bindings: MeDeletionBinding[]) {
+    if (!bindings.length) return
+    const pending = this.state.pendingMeDeletions ??= []
+    const old = pending.find((p) => p.conversationId === conversationId && p.device === device)
+    const union = new Map([...(old?.bindings ?? []), ...bindings].map((b) => [meBindingKey(b), b]))
+    if (old) old.bindings = [...union.values()]
+    else pending.push({ conversationId, device, bindings: [...union.values()] })
+  }
+
+  private async applyMeDeletionSync(conversationId: string, bytes: Uint8Array, senderDevice: string) {
+    const session = this.deletionSession()
+    if (!this.privateSelfContext(conversationId, senderDevice)) return
+    const bindings = parseMeDeletions(bytes)
+    if (!bindings.length) return
+    let novel: MeDeletionBinding[] = []
+    let ledger: DeletionLedger
+    try {
+      ledger = await this.changeDeletions((next) => {
+        novel = mergeMeDeletions(next, bindings)
+        if (!novel.length) return false
+        for (const conversation of new Set(novel.map((b) => b.conversation))) {
+          this.mergeDeletionEvidence(next, conversation, this.deletionKnown.get(conversation) ?? [])
+        }
+        return true
+      })
+    } catch {
+      this.assertDeletionSession(session)
+      // The normal app/ratchet commit retains authenticated, normalized input for retry.
+      // Never acknowledge and forget a valid own-device union because ledger cleanup failed.
+      this.stageMeDeletionInput(conversationId, senderDevice, bindings)
+      this.meDeletionSyncAlert(); this.scheduleMeDeletionSync()
+      return
+    }
+    this.assertDeletionSession(session)
+    const accepted = new Set(meDeletionBindings(ledger).map(meBindingKey))
+    this.state.pendingMeDeletions = this.state.pendingMeDeletions?.map((p) => ({ ...p, bindings: p.bindings.filter((b) => !accepted.has(meBindingKey(b))) })).filter((p) => p.bindings.length)
+    if (!novel.length) return
+    for (const conversation of new Set(novel.map((b) => b.conversation))) {
+      for (const record of ledger.records.filter((t) => t.conversation === conversation && t.scope === 'me')) this.applyDeletionEffects(record)
+      this.emitDeletionBarrier(conversation, ledger, this.deletionKnown.get(conversation) ?? [])
+      await this.cleanupDeletion(conversation).catch(() => undefined)
+    }
+    this.scheduleMeDeletionSync()
+    this.emitView()
+  }
+
+  private emitDeletionBarrier(conversationId: string, ledger: DeletionLedger, originals: DeletionOriginal[] = []) {
+    const scopes = new Map<string, DeletionScope>()
+    for (const record of ledger.records.filter((t) => t.conversation === conversationId)) {
+      const aliases = new Set([record.target, ...(record.aliases ?? []), ...originals.filter((m) => suppresses(record, m, conversationId, this.myAccount())).map((m) => m.id)])
+      for (const id of aliases) if (id && scopes.get(id) !== 'me') scopes.set(id, record.scope)
+    }
+    if (scopes.size) this.emit({ type: 'messages', conversationId, deletions: [...scopes].map(([messageId, scope]) => ({ messageId, scope })) })
+  }
+
+  private mergeDeletionEvidence(ledger: DeletionLedger, conversationId: string, originals: (DeletionOriginal & { file?: { size: number } })[]): boolean {
+    let changed = promoteCandidates(ledger, conversationId, originals, this.myAccount())
+    for (const record of ledger.records.filter((t) => t.conversation === conversationId)) {
+      const aliases = new Set([record.target, ...(record.aliases ?? [])].filter(Boolean))
+      for (const original of originals) if (suppresses(record, original, conversationId, this.myAccount())) {
+        aliases.add(original.id)
+        if (!record.target) { record.target = original.id; changed = true }
+        if (original.live && !record.liveSession) { record.liveSession = original.live.sessionId; changed = true }
+        if (original.file && record.fileParts === undefined) { record.fileParts = Math.ceil(sealedLength(original.file.size) / transfers.PIECE_BYTES); changed = true }
+      }
+      if (aliases.size !== record.aliases?.length) { record.aliases = [...aliases]; changed = true }
+    }
+    return changed
+  }
+
+  private refreshDeletionPreview(conversationId: string, list: StoredMessage[]) {
+    const conv = this.conv(conversationId)
+    if (!conv) return
+    // History reads must preserve missed-call summaries, including pre-deletion records.
+    // Other notices and reaction controls never become sidebar previews.
+    const last = list.filter((m) => !m.hidden && !m.reactionEvent && (m.kind !== 'notice' || isMissedCallNotice(m.text))).reduce<StoredMessage | undefined>((latest, m) => !latest || m.sentAt >= latest.sentAt ? m : latest, undefined)
+    conv.lastText = !last ? undefined : last.deleted ? 'Message deleted' : last.live ? 'Live location' : last.location ? 'Location' : last.file ? [attachmentLabel(last.file.mime, last.file.name, last.file.voiceNote), last.text].filter(Boolean).join(': ') : last.text
+    this.deletionPreviewsReady.add(conversationId)
+  }
+
+  private deletionAllowed(conversationId: string): boolean {
+    const conv = this.conv(conversationId)
+    if (!conv || conv.status || this.state.pendingCommit?.conversationId === conversationId || !this.core || this.endingSession) return false
+    try {
+      return (this.core.members(fromHex(conversationId)) as Uint8Array[]).some((m) => toHex(m) === toHex(this.core!.identity()))
+    } catch { return false } // An unavailable roster cannot grant deletion authority.
+  }
+
+  private deletionSession() {
+    const session = { ...this.draftSession(), core: this.ready().core }
+    this.assertDeletionSession(session)
+    return session
+  }
+
+  private assertDeletionSession(session: { accountId: string; epoch: number; core: CoreClient }) {
+    this.assertReactionSession(session)
+    if (this.core !== session.core) throw new Error('The deletion session ended')
+  }
+
+  private async readDeletions(): Promise<DeletionLedger> {
+    const session = this.deletionSession()
+    if (this.deletionCache?.accountId === session.accountId && this.deletionCache.epoch === session.epoch) return this.deletionCache.ledger
+    const ledger = (await this.store.getJson<DeletionLedger>('deletions:' + session.accountId)) ?? emptyDeletions()
+    this.assertDeletionSession(session)
+    if (this.deletionCache?.accountId !== session.accountId || this.deletionCache.epoch !== session.epoch) {
+      this.deletionCache = { ...session, ledger }
+    }
+    return this.deletionCache.ledger
+  }
+
+  private changeDeletions(change: (ledger: DeletionLedger) => boolean): Promise<DeletionLedger> {
+    const session = this.deletionSession()
+    const run = this.deletionLock.then(async () => {
+      this.assertDeletionSession(session)
+      const ledger = structuredClone(await this.readDeletions())
+      this.assertDeletionSession(session)
+      if (change(ledger)) {
+        // This atomic encrypted write is the irreversible local acceptance point.
+        await this.store.putJson('deletions:' + session.accountId, ledger)
+        this.assertDeletionSession(session)
+        this.deletionCache = { ...session, ledger }
+        this.backupDirty = true
+        this.deletionGeneration++
+      }
+      return ledger
+    })
+    this.deletionLock = run.catch(() => undefined)
+    return run
+  }
+
+  private redactedHistory(conversationId: string, list: StoredMessage[], ledger: DeletionLedger): StoredMessage[] {
+    const records = ledger.records.filter((t) => t.conversation === conversationId)
+    return list.filter((m) => !m.reactionEvent || !records.some((t) => t.hash
+      ? t.hash === m.reactionEvent!.hash && t.author === m.reactionEvent!.author
+      : t.target === m.reactionEvent!.target)).map((m) => {
+      const matches = records.filter((t) => suppresses(t, m, conversationId, this.myAccount()))
+      if (!matches.length) return m
+      const hidden = matches.some((t) => t.scope === 'me')
+      return { id: m.id, from: m.from, sentAt: m.sentAt, status: m.status,
+        contentHash: m.contentHash, text: '', deleted: true, hidden }
+    })
+  }
+
+  private deletionStatus(conversationId: string, m: StoredMessage, ledger: DeletionLedger): ChatMessage['deletionStatus'] {
+    const records = ledger.records.filter((t) => t.scope === 'everyone' && suppresses(t, m, conversationId, this.myAccount()))
+    if (records.some((t) => t.remote)) return undefined
+    const intent = records.find((t) => t.localIntent && t.eventId && !t.acknowledged)
+    if (!intent?.eventId) return undefined
+    const status = this.state.outbox.some((o) => o.conversationId === conversationId && o.messageId === intent.eventId) ? 'sending' : 'failed'
+    return { id: intent.eventId, status, error: status === 'failed' ? intent.error ?? 'Deletion delivery is unconfirmed. Retry the request.' : undefined }
+  }
+
+  async deleteMessage(conversationId: string, messageId: string, scope: DeletionScope): Promise<DeleteAccepted> {
+    const session = this.deletionSession()
+    if (scope !== 'me' && scope !== 'everyone') throw new Error('Invalid deletion scope')
+    await this.exclusive(async () => {
+      this.assertDeletionSession(session)
+      const list = await this.stored(conversationId)
+      this.assertDeletionSession(session)
+      const target = list.find((m) => m.id === messageId && m.kind !== 'notice' && !m.reactionEvent)
+      if (!target) throw new Error('The original message is unavailable')
+      const ledger = await this.readDeletions()
+      this.assertDeletionSession(session)
+      const previous = ledger.records.find((t) => t.scope === scope && suppresses(t, target, conversationId, this.myAccount()))
+      if (scope === 'everyone' && (!this.deletionAllowed(conversationId) || target.from !== 'me')) throw new Error('This message cannot be deleted for everyone')
+      if (previous) return
+      if (target.deleted && scope === 'everyone') throw new Error('The original message was deleted')
+      const verified = validContentHash(target.contentHash)
+      const syncable = validMeBinding({ conversation: conversationId, hash: target.contentHash, author: target.from === 'me' ? this.myAccount() : target.from })
+      const requestAt = scope === 'everyone' ? newRequestTime(target.sentAt, this.deletionClock.now()) : undefined
+      if (scope === 'everyone') {
+        this.checkCanSend(conversationId)
+        if (!this.deletionAllowed(conversationId) || target.from !== 'me' || !verified || requestAt === undefined) throw new Error('This message cannot be deleted for everyone')
+      }
+      // Keep only an already accepted Me upload's private transport source outside history/backup.
+      if (scope === 'me' && target.status === 'sending' && target.file && this.state.transfers.some((t) => t.kind === 'upload' && t.messageId === target.id)) {
+        const { file } = target
+        const capsule = { sentAt: target.sentAt, text: target.text, replyTo: target.replyTo, replyToHash: target.replyToHash,
+          file: { key: file.key, digest: file.digest, size: file.size, mime: file.mime, name: file.name, durationMs: file.durationMs, voiceNote: file.voiceNote, blobId: file.blobId, uploadId: file.uploadId } }
+        await this.registerHiddenSend(conversationId, target.id)
+        await this.store.putJson('hidden-send:' + conversationId + ':' + target.id, capsule)
+        this.assertDeletionSession(session)
+      }
+      const record: DeletionRecord = { localIntent: scope === 'everyone', scope, conversation: conversationId, target: target.id,
+        hash: verified ? target.contentHash : undefined,
+        author: target.from === 'me' ? this.myAccount() : target.from,
+        originalAt: verified ? target.sentAt : undefined, liveSession: target.live?.sessionId, fileParts: target.file ? Math.ceil(sealedLength(target.file.size) / transfers.PIECE_BYTES) : undefined,
+        requestAt, eventId: scope === 'everyone' ? toHex(randomId()) : undefined,
+        status: scope === 'everyone' ? 'failed' : undefined,
+      }
+      record.aliases = list.filter((m) => suppresses(record, m, conversationId, this.myAccount())).map((m) => m.id)
+      try {
+        await this.changeDeletions((next) => { next.records.push(record); if (scope === 'me' && syncable) markMeSyncDirty(next); return true })
+      } catch (error) {
+        if (scope === 'me') await this.removeHiddenSend(conversationId, target.id).catch(() => undefined)
+        throw error
+      }
+      this.assertDeletionSession(session)
+      // No cleanup error can turn an accepted tombstone into a rejected deletion.
+      this.applyDeletionEffects(record)
+      this.emitDeletionBarrier(conversationId, await this.readDeletions(), list)
+      await this.cleanupDeletion(conversationId).catch(() => undefined)
+      if (scope === 'everyone') await this.sendDeletionIntent(record, session)
+      else {
+        try {
+          const self = Object.values(this.state.conversations).find((c) => this.privateSelfContext(c.id))
+          if (self && syncable) await this.queueMeDeletionSync(self.id)
+          await this.persist()
+        } catch { this.meDeletionSyncAlert(); this.scheduleMeDeletionSync() }
+      }
+    })
+    this.assertDeletionSession(session)
+    this.emit({ type: 'messages', conversationId })
+    this.emitView()
+    void this.flushOutbox()
+    return { accepted: true, scope }
+  }
+
+  async retryDeletion(conversationId: string, deletionEventId: string): Promise<DeleteAccepted> {
+    const session = this.deletionSession()
+    await this.exclusive(async () => {
+      this.assertDeletionSession(session)
+      const ledger = await this.readDeletions()
+      this.assertDeletionSession(session)
+      this.checkCanSend(conversationId)
+      const record = ledger.records.find((t) => t.conversation === conversationId && t.scope === 'everyone' && t.localIntent && t.eventId === deletionEventId && t.author === this.myAccount())
+      if (!record || !record.hash || !record.author || !record.requestAt || !timely(record.originalAt ?? 0, record.requestAt)) throw new Error('No accepted deletion intent')
+      if (!this.deletionAllowed(conversationId)) throw new Error('Conversation unavailable')
+      if (ledger.records.some((t) => t.remote && equivalent(t, record))) return
+      if (!this.state.outbox.some((o) => o.conversationId === conversationId && o.messageId === deletionEventId)) await this.sendDeletionIntent(record, session)
+    })
+    this.assertDeletionSession(session)
+    this.emit({ type: 'messages', conversationId })
+    void this.flushOutbox()
+    return { accepted: true, scope: 'everyone' }
+  }
+
+  private async sendDeletionIntent(record: DeletionRecord, session: ReturnType<Engine['deletionSession']>) {
+    const id = record.eventId!
+    this.acceptingDeletions.add(id)
+    try {
+      this.assertDeletionSession(session)
+      this.checkCanSend(record.conversation)
+      const ledger = await this.readDeletions()
+      this.assertDeletionSession(session)
+      if (!ledger.records.some((t) => t.localIntent && t.eventId === id && equivalent(t, record))) throw new Error('Deletion intent unavailable')
+      if (!this.deletionAllowed(record.conversation)) throw new Error('Conversation unavailable')
+      const core = session.core
+      const envelope = core.sendDeletion(fromHex(record.conversation), fromHex(record.target), fromHex(record.hash!), fromHex(record.author!), record.requestAt!, fromHex(id))
+      this.state.outbox.push({ conversationId: record.conversation, messageId: id, envelope: toBase64(envelope), recipients: this.recipients(record.conversation) })
+      await this.changeDeletions((next) => { const intent = next.records.find((t) => t.eventId === id)!; intent.status = 'sending'; intent.error = undefined; return true })
+      this.assertDeletionSession(session)
+      await this.persist()
+      this.assertDeletionSession(session)
+    } catch (error) {
+      try { this.assertDeletionSession(session) } catch { return }
+      this.state.outbox = this.state.outbox.filter((o) => o.messageId !== id)
+      // Persist the advanced ratchet, never roll it back. Local erasure is already accepted.
+      try {
+        this.assertDeletionSession(session)
+        await this.changeDeletions((next) => { const intent = next.records.find((t) => t.eventId === id); if (!intent) return false; intent.status = 'failed'; intent.error = 'Deletion delivery is unconfirmed. Retry the request.'; return true })
+        await this.persist()
+      } catch { /* Recovery derives failure from an accepted intent without a queue item. */ }
+    } finally {
+      this.acceptingDeletions.delete(id)
+    }
+  }
+
+  private applyDeletionEffects(record: DeletionRecord) {
+    const conv = this.conv(record.conversation)
+    if (conv) conv.lastText = undefined
+    this.deletionPreviewsReady.delete(record.conversation)
+    const targets = new Set([record.target, ...(record.aliases ?? [])])
+    if (record.scope === 'everyone') this.state.outbox = this.state.outbox.filter((o) => o.conversationId !== record.conversation || !targets.has(o.messageId))
+    this.state.live = this.state.live.filter((l) => !(l.conversationId === record.conversation && record.author === this.myAccount() &&
+      (record.hash && l.binding?.author === record.author && l.binding.hash === record.hash || record.liveSession && l.sessionId === record.liveSession)))
+    if (this.state.live.length === 0) this.liveFix = undefined
+    this.state.liveSeen = this.state.liveSeen.filter((l) => l.conversationId !== record.conversation || !targets.has(l.messageId))
+    this.state.transfers = this.state.transfers.filter((t) => !(t.conversationId === record.conversation && targets.has(t.messageId) && (record.scope === 'everyone' || t.kind === 'download')))
+  }
+
+  private async registerHiddenSend(conversationId: string, messageId: string) {
+    const session = this.deletionSession()
+    const key = 'hidden-send-index:' + session.accountId
+    const refs = (await this.store.getJson<{ conversationId: string; messageId: string }[]>(key)) ?? []
+    this.assertDeletionSession(session)
+    if (refs.some((r) => r.conversationId === conversationId && r.messageId === messageId)) return
+    // Discovery must commit before the capsule body. A failed rollback must remain discoverable.
+    await this.store.putJson(key, [...refs, { conversationId, messageId }])
+    this.assertDeletionSession(session)
+  }
+
+  private scheduleHiddenSendCleanup() {
+    if (this.hiddenSendCleanupTimer || !this.account || this.endingSession) return
+    const session = this.deletionSession()
+    this.hiddenSendCleanupTimer = setTimeout(() => {
+      this.hiddenSendCleanupTimer = undefined
+      void this.exclusive(async () => { this.assertDeletionSession(session); await this.reconcileHiddenSends() }).catch(() => {
+        try { this.assertDeletionSession(session) } catch { return }
+        this.scheduleHiddenSendCleanup()
+      })
+    }, 5_000)
+  }
+
+  private async removeHiddenSend(conversationId: string, messageId: string) {
+    const session = this.deletionSession()
+    const capsuleKey = 'hidden-send:' + conversationId + ':' + messageId
+    let absent = false
+    try { absent = await this.store.getJson(capsuleKey) === undefined } catch { /* A malformed/unreadable record still needs physical deletion. */ }
+    this.assertDeletionSession(session)
+    try { if (!absent) await this.store.deleteBytes(capsuleKey) }
+    catch (error) {
+      this.assertDeletionSession(session)
+      this.scheduleHiddenSendCleanup()
+      throw error
+    }
+    this.assertDeletionSession(session)
+    const key = 'hidden-send-index:' + session.accountId
+    const refs = (await this.store.getJson<{ conversationId: string; messageId: string }[]>(key)) ?? []
+    this.assertDeletionSession(session)
+    const remaining = refs.filter((r) => r.conversationId !== conversationId || r.messageId !== messageId)
+    // Never forget discovery until physical deletion succeeds. A stale index entry has no body.
+    if (remaining.length !== refs.length) await this.store.putJson(key, remaining)
+    this.assertDeletionSession(session)
+    if (!remaining.length) { clearTimeout(this.hiddenSendCleanupTimer); this.hiddenSendCleanupTimer = undefined }
+  }
+
+  /** The caller holds the mutation lock, or startup has not connected yet. */
+  private async reconcileHiddenSends(conversationId?: string) {
+    const session = this.deletionSession()
+    const refs = (await this.store.getJson<{ conversationId: string; messageId: string }[]>('hidden-send-index:' + session.accountId)) ?? []
+    this.assertDeletionSession(session)
+    const ledger = await this.readDeletions()
+    for (const ref of refs) {
+      if (conversationId !== undefined && ref.conversationId !== conversationId) continue
+      const pending = this.state.transfers.some((t) => t.kind === 'upload' && t.conversationId === ref.conversationId && t.messageId === ref.messageId) ||
+        this.state.outbox.some((o) => o.conversationId === ref.conversationId && o.messageId === ref.messageId)
+      const records = ledger.records.filter((t) => t.conversation === ref.conversationId)
+      // No tombstone means the readable original remains the transport source, not this duplicate.
+      let needed = false
+      if (pending && records.some((t) => t.scope === 'me')) {
+        try {
+          const rows = (await this.store.getJson<StoredMessage[]>('messages:' + ref.conversationId)) ?? []
+          this.assertDeletionSession(session)
+          const original = rows.find((m) => m.id === ref.messageId)
+          const matches = (t: DeletionRecord) => original ? suppresses(t, original, ref.conversationId, this.myAccount()) : t.target === ref.messageId || t.aliases?.includes(ref.messageId)
+          needed = records.some((t) => t.scope === 'me' && matches(t)) && !records.some((t) => t.scope === 'everyone' && matches(t))
+        } catch { this.assertDeletionSession(session); continue }
+      }
+      if (!needed) await this.removeHiddenSend(ref.conversationId, ref.messageId).catch(() => undefined)
+      this.assertDeletionSession(session)
+    }
+  }
+
+  private async cleanupDeletion(conversationId: string) {
+    const session = this.deletionSession()
+    let ledger = await this.readDeletions()
+    const raw = (await this.store.getJson<StoredMessage[]>('messages:' + conversationId)) ?? []
+    this.assertDeletionSession(session)
+    this.rememberDeletionOriginals(conversationId, raw)
+    let changed = false
+    ledger = await this.changeDeletions((next) => { changed = this.mergeDeletionEvidence(next, conversationId, raw); return changed })
+    if (changed) this.emitDeletionBarrier(conversationId, ledger, raw)
+    for (const record of ledger.records.filter((t) => t.conversation === conversationId)) this.applyDeletionEffects(record)
+    const redacted = this.redactedHistory(conversationId, raw, ledger)
+    await this.store.putJson('messages:' + conversationId, redacted)
+    this.assertDeletionSession(session)
+    this.refreshDeletionPreview(conversationId, redacted)
+    for (const original of raw) {
+      if (!ledger.records.some((t) => suppresses(t, original, conversationId, this.myAccount()))) continue
+      const pendingMe = ledger.records.some((t) => t.scope === 'me' && suppresses(t, original, conversationId, this.myAccount())) &&
+        (this.state.transfers.some((t) => t.kind === 'upload' && t.messageId === original.id) || this.state.outbox.some((o) => o.messageId === original.id))
+      if (!pendingMe) {
+        await this.store.putFile(original.id, undefined).catch(() => undefined)
+        const parts = original.file ? Math.ceil(sealedLength(original.file.size) / transfers.PIECE_BYTES) : ledger.records.find((t) => suppresses(t, original, conversationId, this.myAccount()))?.fileParts
+        if (parts !== undefined) for (let part = 0; part < parts; part++) await this.store.putFile(original.id + '#' + part, undefined).catch(() => undefined)
+        await this.removeHiddenSend(conversationId, original.id).catch(() => undefined)
+      }
+    }
+  }
+
+  private async incomingDeletion(conversationId: string, binding: DeletionBinding, from: string) {
+    if (from !== binding.author || !validBinding(binding) || binding.requestAt > this.deletionClock.now() + 2_000) return
+    const raw = (await this.store.getJson<StoredMessage[]>('messages:' + conversationId)) ?? []
+    const ledger = await this.changeDeletions((next) => {
+      addCandidate(next, binding)
+      this.mergeDeletionEvidence(next, conversationId, raw)
+      return true
+    })
+    if (!ledger.records.some((t) => t.scope === 'everyone' && t.hash === binding.hash && t.author === from)) return
+    for (const record of ledger.records.filter((t) => t.conversation === conversationId)) this.applyDeletionEffects(record)
+    this.emitDeletionBarrier(conversationId, ledger, raw)
+    await this.cleanupDeletion(conversationId).catch(() => undefined)
+    this.emit({ type: 'messages', conversationId })
+    this.emitView()
+  }
+
+  private async assertReadable(conversationId: string, messageId: string, session: ReturnType<Engine['deletionSession']>) {
+    this.assertDeletionSession(session)
+    const message = (await this.stored(conversationId)).find((m) => m.id === messageId)
+    this.assertDeletionSession(session)
+    if (!message || message.deleted) throw new Error('The message was deleted')
+  }
+
   /** Messages for the UI: sender names resolved, attachment keys left out. */
   async messages(conversationId: string): Promise<ChatMessage[]> {
+    const session = this.account ? this.deletionSession() : undefined
     return this.exclusive(async () => {
+      if (session) this.assertDeletionSession(session)
       const now = Date.now()
       const list = await this.stored(conversationId)
       await this.recoverUnacceptedMessages(conversationId, list)
-      const visible = list.filter((m) => !m.reactionEvent)
-      const replyLookup = buildReplyLookup(visible)
+      const ledger = this.account ? await this.readDeletions() : emptyDeletions()
+      if (ledger.records.some((t) => t.conversation === conversationId)) await this.cleanupDeletion(conversationId).catch(() => undefined)
+      if (session) this.assertDeletionSession(session)
+      const visible = list.filter((m) => !m.reactionEvent && !m.hidden)
+      const replyLookup = buildReplyLookup(visible.filter((m) => !m.deleted))
       const originals = new Map<string, StoredMessage>()
-      for (const m of visible) if (m.kind !== 'notice' && !originals.has(m.id)) originals.set(m.id, m)
+      for (const m of visible) if (!m.deleted && m.kind !== 'notice' && !originals.has(m.id)) originals.set(m.id, m)
       const updates = list.flatMap((m) => m.reactionEvent ? [m.reactionEvent] : [])
       const reactionRecords = new Map(list.flatMap((m) => m.reactionEvent ? [[m.reactionEvent, m] as const] : []))
       const updatesByTarget = new Map<string, ReactionUpdate[]>()
@@ -1777,14 +2403,20 @@ export class Engine {
       }
       // Derived evidence must not hide readable history when storage is full.
       if (changed) await this.store.putJson('messages:' + conversationId, list).catch(() => undefined)
-      return visible.map(({ file, contentHash, replyToHash, reactionEvent: _event, ...m }) => ({
+      if (session) this.assertDeletionSession(session)
+      return visible.map(({ file, contentHash, replyToHash, reactionEvent: _event, hidden: _hidden, ...m }) => ({
         ...m,
-        canReact: this.reactionAllowed(conversationId) && m.kind !== 'notice' && validReplyId(m.id) && validContentHash(contentHash) &&
+        canDeleteForMe: m.kind !== 'notice',
+        deleteForMeLocalOnly: !validMeBinding({ conversation: conversationId, hash: contentHash, author: m.from === 'me' ? this.myAccount() : m.from }),
+        canDeleteForEveryone: !m.deleted && m.kind !== 'notice' && m.from === 'me' && validContentHash(contentHash) && this.deletionAllowed(conversationId) && newRequestTime(m.sentAt, this.deletionClock.now()) !== undefined,
+        deleteForEveryoneUntil: !m.deleted && m.from === 'me' && validContentHash(contentHash) ? m.sentAt + DELETE_WINDOW_MS : undefined,
+        deletionStatus: this.deletionStatus(conversationId, { ...m, contentHash }, ledger),
+        canReact: !m.deleted && this.reactionAllowed(conversationId) && m.kind !== 'notice' && validReplyId(m.id) && validContentHash(contentHash) &&
           originals.get(m.id)?.contentHash === contentHash,
         reactions: originals.get(m.id)?.contentHash === contentHash
           ? reactionChips(reactionStates(updatesByTarget.get(m.id) ?? [], { ...m, contentHash }, this.myAccount()), this.myAccount()) : [],
         reactionStatus: this.reactionStatus(updatesByTarget.get(m.id) ?? [], reactionRecords, { ...m, contentHash }),
-        canReply: m.kind !== 'notice' && validReplyId(m.id) && validContentHash(contentHash) &&
+        canReply: !m.deleted && m.kind !== 'notice' && validReplyId(m.id) && validContentHash(contentHash) &&
           replyLookup.get(m.id)?.contentHash === contentHash,
         // An ended session shows no point, even before the sweep forgets it.
         live: m.live && (m.live.ended || m.live.expiresAt <= now ? { ...m.live, ended: true, latest: undefined } : m.live),
@@ -1815,7 +2447,7 @@ export class Engine {
       const list = await this.stored(conversationId)
       this.assertReactionSession(session)
       const { core } = this.ready()
-      const target = list.find((m) => !m.reactionEvent && m.kind !== 'notice' && m.id === targetId)
+      const target = list.find((m) => !m.deleted && !m.reactionEvent && m.kind !== 'notice' && m.id === targetId)
       if (!target) throw new Error('The original message is unavailable')
       const updates = list.flatMap((m) => m.reactionEvent ? [m.reactionEvent] : [])
       const me = this.myAccount()
@@ -1897,7 +2529,7 @@ export class Engine {
       const failed = list.find((m) => m.id === messageId && m.status === 'failed' && m.reactionEvent)
       const previous = failed?.reactionEvent
       if (!previous || previous.account !== this.myAccount()) return
-      const target = list.find((m) => m.id === previous.target && m.kind !== 'notice')
+      const target = list.find((m) => !m.deleted && m.id === previous.target && m.kind !== 'notice')
       if (!target) throw new Error('The original message is unavailable')
       const updates = list.flatMap((m) => m.reactionEvent ? [m.reactionEvent] : [])
       const own = reactionStates(updates, target, this.myAccount()).find((r) => r.account === this.myAccount())
@@ -1919,6 +2551,8 @@ export class Engine {
 
   private async recordReaction(conversationId: string, update: ReactionUpdate, list?: StoredMessage[], outgoingId?: string) {
     if (!validReaction(update)) return
+    const deletionLedger = await this.readDeletions()
+    if (deletionLedger.records.some((t) => t.conversation === conversationId && (t.hash ? t.hash === update.hash && t.author === update.author : t.target === update.target))) return
     list ??= await this.stored(conversationId)
     const original = list.find((m) => !m.reactionEvent && m.kind !== 'notice' && m.id === update.target)
     const anchor = list.some((m) => {
@@ -2047,7 +2681,24 @@ export class Engine {
   }
 
   private async stored(conversationId: string): Promise<StoredMessage[]> {
-    return (await this.store.getJson<StoredMessage[]>(`messages:${conversationId}`)) ?? []
+    const session = this.account ? this.deletionSession() : undefined
+    const raw = (await this.store.getJson<StoredMessage[]>(`messages:${conversationId}`)) ?? []
+    if (session) this.assertDeletionSession(session)
+    if (!this.account) return raw
+    this.rememberDeletionOriginals(conversationId, raw)
+    let ledger = await this.readDeletions()
+    if (ledger.candidates.some((c) => c.conversation === conversationId)) {
+      let promoted = false
+      ledger = await this.changeDeletions((next) => { promoted = this.mergeDeletionEvidence(next, conversationId, raw); return promoted })
+      if (promoted) this.emitDeletionBarrier(conversationId, ledger, raw)
+    }
+    for (const record of ledger.records.filter((t) => t.conversation === conversationId)) {
+      this.applyDeletionEffects(record)
+      for (const original of raw.filter((m) => suppresses(record, m, conversationId, this.myAccount()))) this.applyDeletionEffects({ ...record, target: original.id })
+    }
+    const redacted = this.redactedHistory(conversationId, raw, ledger)
+    this.refreshDeletionPreview(conversationId, redacted)
+    return redacted
   }
 
   /**
@@ -2105,10 +2756,44 @@ export class Engine {
 
   // ---- live location (FR-LOC-2/3/6, doc 06 §2) --------------------------------
 
+  private liveProducerAllowed(producer: LiveSession): boolean {
+    const binding = producer.binding
+    if (!binding || !validContentHash(binding.hash) || !validReplyId(binding.author) || !safeTime(binding.at) || binding.author !== this.myAccount()) return false
+    const cache = this.deletionCache
+    if (!cache || cache.accountId !== this.account?.accountId || cache.epoch !== this.draftEpoch || this.endingSession) return false
+    return !cache.ledger.records.some((record) => suppresses(record, { id: producer.messageId, from: binding.author, contentHash: binding.hash, sentAt: binding.at }, producer.conversationId, this.myAccount()))
+  }
+
+  /** The caller holds the mutation lock, or startup has not connected yet. */
+  private async reconcileLiveProducers() {
+    const session = this.deletionSession()
+    await this.readDeletions()
+    let changed = false
+    const retained: LiveSession[] = []
+    for (const producer of this.state.live) {
+      if (!producer.binding) {
+        try {
+          const rows = (await this.store.getJson<StoredMessage[]>('messages:' + producer.conversationId)) ?? []
+          this.assertDeletionSession(session)
+          const original = rows.find((m) => m.id === producer.messageId && m.from === 'me' && m.live?.sessionId === producer.sessionId && validContentHash(m.contentHash) && safeTime(m.sentAt))
+          // Migrate only retained Native evidence. Never hash a normalized row or regenerate content.
+          if (original?.contentHash) producer.binding = { hash: original.contentHash, author: this.myAccount(), at: original.sentAt }
+        } catch { this.assertDeletionSession(session) }
+        changed = true
+      }
+      if (this.liveProducerAllowed(producer)) retained.push(producer)
+      else changed = true
+    }
+    this.state.live = retained
+    if (!retained.length) this.liveFix = undefined
+    return changed
+  }
+
   /** Starts sharing in one conversation for a fixed duration or until stopped. */
   async startLive(conversationId: string, durationMs: number | null, location: LocationInfo) {
+    const operation = this.deletionSession()
     prepareArea(location.latitude, location.longitude, this.token())
-    const { core } = this.ready()
+    const { core } = operation
     this.checkCanSend(conversationId)
     if (durationMs !== null && !(LIVE_DURATIONS_MS as readonly number[]).includes(durationMs)) {
       throw new Error('Choose 15 minutes, 1 hour, 8 hours or until stopped')
@@ -2117,9 +2802,11 @@ export class Engine {
     const point = safeLocation(location.latitude, location.longitude, location.accuracyM, '')
     if (!point) throw new Error("That location doesn't look right")
     // Replacing a session can wait on storage while the composer starts a newer draft.
-    const now = await this.exclusive(async () => this.compositionSentAt())
+    const now = await this.exclusive(async () => { this.assertDeletionSession(operation); return this.compositionSentAt() })
+    this.assertDeletionSession(operation)
     await this.stopLive(conversationId)
     await this.exclusive(async () => {
+      this.assertDeletionSession(operation)
       const session: LiveSession = {
         sessionId: toHex(randomId()),
         conversationId,
@@ -2149,6 +2836,7 @@ export class Engine {
         envelope: toBase64(this.encode(core, conversationId, message)),
         recipients: this.recipients(conversationId),
       })
+      if (validContentHash(message.contentHash)) session.binding = { hash: message.contentHash, author: splitIdentity(core.identity()).account, at: message.sentAt }
       this.state.live.push(session)
       await this.appendMessage(conversationId, message)
       await this.persist()
@@ -2168,18 +2856,31 @@ export class Engine {
    * offline would arrive stale. Resuming renews the same card, not a new post.
    */
   async liveUpdate(location: LocationInfo) {
+    const session = this.deletionSession()
+    const generation = this.deletionGeneration
     const point = safeLocation(location.latitude, location.longitude, location.accuracyM, '')
     if (!point) return
     // Kept for the sweep: the page reports only changes, so a move held back
     // by the rate floor, and the heartbeat, go out from there.
+    await this.exclusive(async () => {
+      this.assertDeletionSession(session)
+      if (await this.reconcileLiveProducers()) await this.persist()
+    })
+    this.assertDeletionSession(session)
+    if (!this.state.live.length) return
     this.liveFix = point
     if (this.connection !== 'online') return
     await this.endExpiredLive()
+    this.assertDeletionSession(session)
+    if (generation !== this.deletionGeneration) return
     let sent = false
     await this.exclusive(async () => {
       const { core } = this.ready()
+      this.assertDeletionSession(session)
+      if (generation !== this.deletionGeneration) return
       const now = Date.now()
       for (const session of this.state.live) {
+        if (!this.liveProducerAllowed(session)) continue
         if (this.state.conversations[session.conversationId]?.status) continue
         if (!updateDue(now, session.lastSentAt, session.last, point)) continue
         const untilStopped = session.untilStopped === true
@@ -2637,6 +3338,8 @@ export class Engine {
   ) {
     const sessionId = view.sessionId.length === 16 ? toHex(view.sessionId) : undefined
     const place = view.location
+    const ledger = await this.readDeletions()
+    if (ledger.records.some((t) => t.conversation === conversationId && t.author === from && t.liveSession === sessionId)) { place?.free(); return }
     const point = place && safeLocation(place.latitude, place.longitude, place.accuracyM, '')
     if (point) prepareArea(point.latitude, point.longitude, this.token())
     place?.free()
@@ -2795,7 +3498,7 @@ export class Engine {
       await this.sendTypingLocked(conversationId, false)
       const messageId = randomId()
       const sentAt = this.compositionSentAt()
-      const target = replyTo && (await this.stored(conversationId)).find((m) => m.id === replyTo && m.kind !== 'notice')
+      const target = replyTo && (await this.stored(conversationId)).find((m) => !m.deleted && m.id === replyTo && m.kind !== 'notice')
       if (replyTo && (!validReplyId(replyTo) || !target)) throw new Error('The reply target is not in this conversation')
       if (target && !validContentHash(target.contentHash)) throw new Error('The original message cannot be verified on this device. Cancel the reply and send a new message.')
       const message: StoredMessage = {
@@ -2868,7 +3571,7 @@ export class Engine {
     const session = this.draftSession()
     const conv = this.group(conversationId)
     if (conv.status) throw new Error("You're no longer in this conversation")
-    const failed = (await this.stored(conversationId)).find((m) => m.id === messageId && m.status === 'failed')
+    const failed = (await this.stored(conversationId)).find((m) => !m.deleted && m.id === messageId && m.status === 'failed')
     this.assertReactionSession(session)
     if (failed?.reactionEvent) return this.retryReaction(conversationId, messageId, session)
     if (failed?.file && !failed.file.blobId) {
@@ -2882,9 +3585,13 @@ export class Engine {
       const list = await this.stored(conversationId)
       this.assertReactionSession(session)
       const { core } = this.ready()
-      const message = list.find((m) => m.id === messageId && m.from === 'me' && m.status === 'failed')
+      const message = list.find((m) => !m.deleted && m.id === messageId && m.from === 'me' && m.status === 'failed')
       if (!message) return
       const envelope = this.encode(core, conversationId, message)
+      if (message.live && validContentHash(message.contentHash)) {
+        const producer = this.state.live.find((l) => l.conversationId === conversationId && l.messageId === messageId && l.sessionId === message.live!.sessionId)
+        if (producer) producer.binding = { hash: message.contentHash, author: splitIdentity(core.identity()).account, at: message.live.untilStopped ? message.live.expiresAt - MAX_LIVE_DURATION_MS : message.sentAt }
+      }
       this.state.outbox.push({
         messageId,
         conversationId,
@@ -2909,6 +3616,7 @@ export class Engine {
   }
 
   private encodeBody(core: CoreClient, conversationId: string, m: StoredMessage): Uint8Array {
+    if (m.deleted) throw new Error('The message was deleted')
     const id = fromHex(m.id)
     if (m.replyTo && (!validReplyId(m.replyTo) || !validContentHash(m.replyToHash))) {
       throw new Error('The original message cannot be verified on this device. Cancel the reply and send a new message.')
@@ -3040,7 +3748,12 @@ export class Engine {
 
   /** Remembers a transfer to resume, or forgets it (`add` false). */
   private async trackTransfer(conversationId: string, messageId: string, kind: 'upload' | 'download', add: boolean) {
+    const session = this.deletionSession()
     await this.exclusive(async () => {
+      this.assertDeletionSession(session)
+      if (add && kind === 'download') await this.assertReadable(conversationId, messageId, session)
+      if (add && kind === 'upload' && !(await this.uploadSource(conversationId, messageId, session))?.file) return
+      this.assertDeletionSession(session)
       const others = this.state.transfers.filter((t) => t.messageId !== messageId)
       this.state.transfers = add ? [...others, { conversationId, messageId, kind }] : others
       await this.persist()
@@ -3049,17 +3762,36 @@ export class Engine {
 
   /** Updates one stored attachment's details under the lock. */
   private async updateFile(conversationId: string, messageId: string, change: Partial<StoredFile>) {
+    const session = this.deletionSession()
     await this.exclusive(async () => {
+      this.assertDeletionSession(session)
       const list = await this.stored(conversationId)
+      this.assertDeletionSession(session)
       const message = list.find((m) => m.id === messageId)
-      if (!message?.file) return
+      if (message?.deleted && 'uploadId' in change) {
+        const source = await this.uploadSource(conversationId, messageId, session)
+        if (source?.file) {
+          source.file.uploadId = change.uploadId
+          const { text, sentAt, replyTo, replyToHash, file } = source
+          await this.registerHiddenSend(conversationId, messageId)
+          await this.store.putJson('hidden-send:' + conversationId + ':' + messageId, { text, sentAt, replyTo, replyToHash, file })
+          this.assertDeletionSession(session)
+        }
+        return
+      }
+      if (!message?.file || message.deleted) return
       Object.assign(message.file, change)
       await this.store.putJson(`messages:${conversationId}`, list)
     })
   }
 
   private progress(conversationId: string, messageId: string): transfers.Progress {
-    return (done, total) => this.emit({ type: 'progress', conversationId, messageId, done, total })
+    const session = this.deletionSession()
+    const generation = this.deletionGeneration
+    return (done, total) => {
+      if (generation !== this.deletionGeneration || this.endingSession || session.epoch !== this.draftEpoch || session.accountId !== this.account?.accountId) return
+      this.emit({ type: 'progress', conversationId, messageId, done, total })
+    }
   }
 
   /** Picks up uploads and downloads cut short by a reload or lost connection. */
@@ -3070,111 +3802,142 @@ export class Engine {
     }
   }
 
+  private async uploadSource(conversationId: string, messageId: string, session: ReturnType<Engine['deletionSession']>): Promise<StoredMessage | undefined> {
+    this.assertDeletionSession(session)
+    const current = (await this.stored(conversationId)).find((m) => m.id === messageId)
+    this.assertDeletionSession(session)
+    if (!current?.deleted) return current
+    const capsule = await this.store.getJson<Pick<StoredMessage, 'text' | 'sentAt' | 'replyTo' | 'replyToHash' | 'file'>>('hidden-send:' + conversationId + ':' + messageId)
+    const ledger = await this.readDeletions()
+    this.assertDeletionSession(session)
+    if (!capsule || !this.state.transfers.some((t) => t.kind === 'upload' && t.conversationId === conversationId && t.messageId === messageId) || ledger.records.some((t) => t.scope === 'everyone' && suppresses(t, current, conversationId, this.myAccount()))) return undefined
+    return { ...capsule, id: messageId, from: 'me', status: 'sending' }
+  }
+
   private async uploadAndSend(conversationId: string, messageId: string) {
     if (this.inflight.has(messageId)) return
+    const session = this.deletionSession()
     this.inflight.add(messageId)
     try {
-      const { account } = this.ready()
-      const pending = (await this.stored(conversationId)).find((m) => m.id === messageId)
-      if (!pending?.file || pending.status !== 'sending') return this.trackTransfer(conversationId, messageId, 'upload', false)
+      await this.exclusive(async () => { this.assertDeletionSession(session); await this.reconcileHiddenSends(conversationId).catch(() => this.scheduleHiddenSendCleanup()) })
+      const pending = await this.uploadSource(conversationId, messageId, session)
+      if (!pending?.file || pending.status !== 'sending') return
       await this.trackTransfer(conversationId, messageId, 'upload', true)
+      this.assertDeletionSession(session)
       let blobId = pending.file.blobId
       if (!blobId) {
         const body = await this.store.getFile(messageId)
-        if (!body) throw new Error('This file is no longer on this device')
-        const session = {
-          id: pending.file.uploadId,
-          save: (uploadId: string | undefined) => this.updateFile(conversationId, messageId, { uploadId }),
-        }
-        blobId = uuidToHex(await transfers.upload(account.token, body, session, this.progress(conversationId, messageId)))
+        this.assertDeletionSession(session)
+        if (!body || !(await this.uploadSource(conversationId, messageId, session))?.file) throw new Error('This file is no longer on this device')
+        const upload = { id: pending.file.uploadId, save: async (uploadId: string | undefined) => {
+          this.assertDeletionSession(session)
+          await this.updateFile(conversationId, messageId, { uploadId })
+          this.assertDeletionSession(session)
+        } }
+        blobId = uuidToHex(await transfers.upload(this.ready().account.token, body, upload, this.progress(conversationId, messageId)))
       }
       await this.exclusive(async () => {
-        const { core } = this.ready()
+        this.assertDeletionSession(session)
         this.checkCanSend(conversationId)
-        const list = await this.stored(conversationId)
-        const message = list.find((m) => m.id === messageId)
+        await this.reconcileHiddenSends(conversationId).catch(() => this.scheduleHiddenSendCleanup())
+        const message = await this.uploadSource(conversationId, messageId, session)
+        this.assertDeletionSession(session)
         if (!message?.file || message.status !== 'sending') return
         message.file.blobId = blobId
-        const envelope = this.encode(core, conversationId, message)
-        this.state.outbox.push({
-          messageId,
-          conversationId,
-          envelope: toBase64(envelope),
-          recipients: this.recipients(conversationId),
-        })
-        await this.store.putJson(`messages:${conversationId}`, list)
+        const envelope = this.encode(session.core, conversationId, message)
+        this.state.outbox.push({ messageId, conversationId, envelope: toBase64(envelope), recipients: this.recipients(conversationId) })
+        const list = await this.stored(conversationId)
+        this.assertDeletionSession(session)
+        const visible = list.findIndex((m) => m.id === messageId && !m.deleted)
+        if (visible >= 0) list[visible] = message
+        await this.store.putJson('messages:' + conversationId, list)
+        this.assertDeletionSession(session)
         this.state.transfers = this.state.transfers.filter((t) => t.messageId !== messageId)
         await this.persist()
+        this.assertDeletionSession(session)
       })
+      this.assertDeletionSession(session)
       void this.flushOutbox()
-    } catch (e) {
-      if (this.connection !== 'online' && !(e instanceof ApiError)) return // resumes after reconnecting
+    } catch (error) {
+      try { this.assertDeletionSession(session) } catch { return }
+      if (this.connection !== 'online' && !(error instanceof ApiError)) return
       await this.trackTransfer(conversationId, messageId, 'upload', false)
-      await this.exclusive(() => this.setStatus(conversationId, messageId, 'failed', describeError(e)))
+      await this.exclusive(async () => {
+        this.assertDeletionSession(session)
+        await this.setStatus(conversationId, messageId, 'failed', describeError(error))
+        await this.removeHiddenSend(conversationId, messageId).catch(() => undefined)
+        await this.cleanupDeletion(conversationId).catch(() => undefined)
+        await this.reconcileHiddenSends(conversationId).catch(() => this.scheduleHiddenSendCleanup())
+      })
     } finally {
       this.inflight.delete(messageId)
     }
   }
 
-  /**
-   * Downloads a message's sealed file to this device (resuming an earlier
-   * attempt) unless it is already here.
-   */
   private fetchAttachment(conversationId: string, messageId: string): Promise<Blob> {
     const running = this.downloads.get(messageId)
     if (running) return running
+    const session = this.deletionSession()
+    const readable = () => this.assertReadable(conversationId, messageId, session)
     const run = (async () => {
-      const { account } = this.ready()
+      await readable()
       const f = (await this.stored(conversationId)).find((m) => m.id === messageId)?.file
+      await readable()
       if (!f) throw new Error('No such file')
       const kept = await this.store.getFile(messageId)
+      await readable()
       if (kept) return kept
       if (!f.blobId) throw new Error('This file was not uploaded')
       const total = sealedLength(f.size)
       await this.trackTransfer(conversationId, messageId, 'download', true)
+      // Fence every chunk read/write, including cache writes after a delayed HTTP response.
+      const guardedStore = new Proxy(this.store, { get: (store, key) => {
+        if (key === 'getFile') return async (id: string) => { await readable(); const body = await store.getFile(id); await readable(); return body }
+        if (key === 'putFile') return async (id: string, body: Blob | undefined) => {
+          if (body) await readable()
+          await store.putFile(id, body)
+          if (body) { try { await readable() } catch (error) { await store.putFile(id, undefined).catch(() => undefined); throw error } }
+        }
+        return Reflect.get(store, key)
+      } })
       try {
-        const body = await transfers.download(
-          account.token,
-          hexToUuid(f.blobId),
-          total,
-          this.store,
-          messageId,
-          this.progress(conversationId, messageId),
-        )
+        const body = await transfers.download(this.ready().account.token, hexToUuid(f.blobId), total, guardedStore, messageId, this.progress(conversationId, messageId))
+        await readable()
         await this.updateFile(conversationId, messageId, { downloaded: true })
+        await readable()
         await this.trackTransfer(conversationId, messageId, 'download', false)
+        await readable()
         this.emit({ type: 'messages', conversationId })
         return body
-      } catch (e) {
-        // Lost connection: kept to resume. Anything else (expired…): given up.
-        if (e instanceof ApiError || this.connection === 'online') {
-          await this.trackTransfer(conversationId, messageId, 'download', false)
-        }
-        throw e
+      } catch (error) {
+        this.assertDeletionSession(session)
+        if (error instanceof ApiError || this.connection === 'online') await this.trackTransfer(conversationId, messageId, 'download', false)
+        throw error
       }
     })()
     this.downloads.set(messageId, run)
-    void run.catch(() => undefined).finally(() => this.downloads.delete(messageId))
+    void run.catch(() => undefined).finally(() => { if (this.downloads.get(messageId) === run) this.downloads.delete(messageId) })
     return run
   }
 
-  /**
-   * The decrypted file of a message: from this device if it was sent or
-   * opened here before, else downloaded (and kept sealed for next time).
-   */
   async openAttachment(conversationId: string, messageId: string): Promise<Blob> {
-    const message = (await this.stored(conversationId)).find((m) => m.id === messageId)
-    const f = message?.file
+    const session = this.deletionSession()
+    await this.assertReadable(conversationId, messageId, session)
+    const f = (await this.stored(conversationId)).find((m) => m.id === messageId)?.file
+    await this.assertReadable(conversationId, messageId, session)
     if (!f) throw new Error('No such file')
     const body = await this.fetchAttachment(conversationId, messageId)
+    await this.assertReadable(conversationId, messageId, session)
     try {
-      // Other types (SVG, HTML…) are never handed out as something a browser renders.
       const type = isPhoto(f.mime) || isPlayable(f.mime) ? f.mime : 'application/octet-stream'
-      return await openFile(body, fromBase64(f.key), f.size, fromBase64(f.digest), type)
-    } catch (e) {
+      const opened = await openFile(body, fromBase64(f.key), f.size, fromBase64(f.digest), type)
+      await this.assertReadable(conversationId, messageId, session)
+      return opened
+    } catch (error) {
+      this.assertDeletionSession(session)
       await this.store.putFile(messageId, undefined)
       await this.updateFile(conversationId, messageId, { downloaded: undefined })
-      throw new Error(`This file could not be opened: ${describeError(e)}`)
+      throw new Error(`This file could not be opened: ${describeError(error)}`)
     }
   }
 
@@ -3279,8 +4042,10 @@ export class Engine {
           await this.process(envelope, id)
         }
         this.recent.add(id)
-        await this.persist()
       }
+      // A previous write can fail after this in-memory ID was marked as seen.
+      // Retry that durable commit before acknowledging a duplicate delivery.
+      await this.persist()
     })
     // Never acknowledge an old socket delivery on a replacement connection.
     if (!currentSocket()) return
@@ -3425,6 +4190,11 @@ export class Engine {
       const from = splitIdentity(event.sender).account
       const conv = this.state.conversations[conversationId]
       const mine = from === this.myAccount()
+      if (event.deletionTarget !== undefined || event.deletionTargetHash !== undefined || event.deletionTargetAuthor !== undefined) {
+        if (!conv || conv.status || event.deletionTarget?.length !== 16 || event.deletionTargetHash?.length !== 32 || event.deletionTargetAuthor?.length !== 16) return
+        await this.incomingDeletion(conversationId, { conversation: conversationId, target: toHex(event.deletionTarget), hash: toHex(event.deletionTargetHash), author: toHex(event.deletionTargetAuthor), requestAt: event.sentAtMs }, from)
+        return
+      }
       if (event.reaction !== undefined) {
         if (!conv || conv.status || conv.request || this.state.blocked.includes(from)) return
         const bytes = event.reaction
@@ -3453,12 +4223,16 @@ export class Engine {
         // rather than dropping it.
         const senderDevice = toHex(splitIdentity(event.sender).device)
         if (mine && this.state.myDevices.includes(senderDevice)) {
-          await this.applyDeviceSync(conversationId, event.deviceSync)
+          await this.applyDeviceSync(conversationId, event.deviceSync, senderDevice)
         } else if (mine) {
+          // Retain normalized input before a consumed MLS ratchet can be persisted or acknowledged.
+          // This is not acceptance: directory and private-self checks still gate replay after reload.
+          if (this.privateSelfContext(conversationId, senderDevice, false)) this.stageMeDeletionInput(conversationId, senderDevice, parseMeDeletions(event.deviceSync))
           this.pendingSyncs.push({
             conversationId,
             device: senderDevice,
             bytes: new Uint8Array(event.deviceSync),
+            accountId: this.ready().account.accountId, epoch: this.draftEpoch,
           })
           void this.syncOwnDevices()
         }
@@ -3581,7 +4355,21 @@ export class Engine {
     try {
       while (currentSession() && this.state.outbox.length > 0 && this.connection === 'online') {
         const item = this.state.outbox[0]
-        if (this.acceptingText.has(item.messageId) || this.acceptingReactions.has(item.messageId)) return
+        if (item.meDeletionBatch && (!this.privateSelfContext(item.conversationId) || this.recipients(item.conversationId).sort().join(',') !== [...item.recipients].sort().join(','))) {
+          const cancel = async () => {
+            if (!currentSession()) return
+            const batch = item.meDeletionBatch!
+            const removed = this.state.outbox.filter((o) => o.meDeletionBatch === batch)
+            this.state.outbox = this.state.outbox.filter((o) => o.meDeletionBatch !== batch)
+            for (const old of removed) this.acceptingMeDeletionSync.delete(old.messageId)
+            if (this.state.meDeletionBatches) delete this.state.meDeletionBatches[batch]
+            await this.persist()
+            this.scheduleMeDeletionSync()
+          }
+          await (locked ? cancel() : this.exclusive(cancel))
+          continue
+        }
+        if (this.acceptingText.has(item.messageId) || this.acceptingReactions.has(item.messageId) || this.acceptingDeletions.has(item.messageId) || this.acceptingMeDeletionSync.has(item.messageId)) return
         const result = await this.request((id) =>
           encodeSend(
             id,
@@ -3607,10 +4395,15 @@ export class Engine {
         if (outcome.kind === 'failed') console.warn('send failed', result.errorCode, result.errorMessage)
         const settle = async () => {
           if (!currentSession()) return
-          this.state.outbox.shift()
+          if (!this.state.outbox.includes(item)) return // Deletion can cancel an in-flight original.
+          this.state.outbox = this.state.outbox.filter((queued) => queued !== item)
+          if (item.meDeletionBatch) await this.settleMeDeletionBatch(item, outcome.kind === 'failed')
           if (outcome.kind === 'failed')
             await this.setStatus(item.conversationId, item.messageId, 'failed', outcome.reason)
           else await this.setStatus(item.conversationId, item.messageId, 'sent')
+          await this.removeHiddenSend(item.conversationId, item.messageId).catch(() => undefined)
+          await this.cleanupDeletion(item.conversationId).catch(() => undefined)
+          await this.reconcileHiddenSends(item.conversationId).catch(() => this.scheduleHiddenSendCleanup())
           await this.persist()
         }
         await (locked ? settle() : this.exclusive(settle))
@@ -3710,7 +4503,7 @@ export class Engine {
     if (conv) await this.observeKeysIn(p.conversationId)
     if (!this.core!.hasPendingProposals(fromHex(p.conversationId))) delete this.state.leaving[p.conversationId]
     if (p.invitees && conv?.self) {
-      this.queueDeviceSync(p.conversationId)
+      await this.queueDeviceSync(p.conversationId)
     } else if (p.invitees) {
       for (const i of p.invitees) {
         if (i.account !== this.myAccount() && i.username) this.state.usernames[i.account] = i.username
@@ -3932,7 +4725,19 @@ export class Engine {
   private async appendMessage(conversationId: string, message: StoredMessage) {
     const list = await this.stored(conversationId)
     list.push(message)
-    await this.store.putJson(`messages:${conversationId}`, list)
+    this.rememberDeletionOriginals(conversationId, list)
+    let changed = false
+    const ledger = await this.changeDeletions((next) => { changed = this.mergeDeletionEvidence(next, conversationId, list); return changed })
+    if (changed) this.emitDeletionBarrier(conversationId, ledger, list)
+    const redacted = this.redactedHistory(conversationId, list, ledger)
+    for (const record of ledger.records.filter((t) => suppresses(t, message, conversationId, this.myAccount()))) this.applyDeletionEffects({ ...record, target: message.id })
+    await this.store.putJson(`messages:${conversationId}`, redacted)
+    this.refreshDeletionPreview(conversationId, redacted)
+    if (redacted.find((m) => m.id === message.id)?.deleted) {
+      this.emit({ type: 'messages', conversationId })
+      this.emitView()
+      return
+    }
     const conv = this.conv(conversationId)
     if (conv && message.kind !== 'notice') {
       conv.lastText = message.live
@@ -3949,6 +4754,20 @@ export class Engine {
   }
 
   private async setStatus(conversationId: string, messageId: string, status: ChatMessage['status'], error?: string) {
+    if (this.account) {
+      const ledger = await this.readDeletions()
+      if (ledger.records.some((t) => t.localIntent && t.conversation === conversationId && t.eventId === messageId)) {
+        await this.changeDeletions((next) => {
+          const intent = next.records.find((t) => t.localIntent && t.conversation === conversationId && t.eventId === messageId)!
+          intent.acknowledged = status === 'sent'
+          intent.status = status === 'failed' ? 'failed' : undefined
+          intent.error = status === 'failed' ? 'Deletion delivery is unconfirmed. Retry the request.' : undefined
+          return true
+        })
+        this.emit({ type: 'messages', conversationId })
+        return
+      }
+    }
     const list = await this.stored(conversationId)
     const message = list.find((m) => m.id === messageId)
     // A receipt may already have moved it past 'sent'.
@@ -3980,8 +4799,12 @@ export class Engine {
   private async persist() {
     this.backupDirty = true
     this.state.seen = this.recent.toJSON()
+    // Retain already decrypted own-device input before persisting a consumed MLS ratchet.
+    // If both ledger and app writes fail, replay must not lose the only normalized input.
+    if (this.state.pendingMeDeletions) await this.store.putJson('me-deletion-inbox:' + this.ready().account.accountId, this.state.pendingMeDeletions)
     await this.store.putBytes('core', this.core!.snapshot())
     await this.store.putJson('app', this.state)
+    this.acceptingMeDeletionSync.clear()
     for (const [conversationId, draft] of this.draftChanges) this.emit({ type: 'draft', conversationId, draft })
     this.draftChanges.clear()
   }

@@ -6,6 +6,9 @@ import { nearMessageBottom } from './useMessageScroll'
 const base: ChatMessage = { id: 'envelope-id', from: 'me', text: 'Hello', sentAt: 1, status: 'sent' }
 
 describe('quoteMessage', () => {
+  it('cannot copy original content into a deleted quote', () => {
+    expect(quoteMessage({ ...base, deleted: true })).toEqual({ messageId: base.id, text: 'Original message unavailable', unavailable: true })
+  })
   it('keeps the original envelope ID and an accessible sender label', () => {
     expect(quoteMessage(base)).toEqual({ messageId: 'envelope-id', from: 'me', fromName: 'You', text: 'Hello' })
   })

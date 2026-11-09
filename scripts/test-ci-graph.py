@@ -91,6 +91,8 @@ def validate(workflow):
         "web-checks": [
             "test ! -e web/src/core/pkg", "scripts/ci/wasm-types/chat_core.d.ts",
             "pnpm typecheck", "vitest run", "src/core/replies.test.ts",
+            "src/core/deletions.test.ts", "src/core/me-deletion-sync.test.ts",
+            "src/core/devices.test.ts", "src/core/calls.test.ts", "src/ui/deletion.test.ts",
         ],
         "rust-checks": [
             "cargo clippy --workspace --all-targets -- -D warnings",
@@ -253,6 +255,15 @@ class GraphTests(unittest.TestCase):
                 self.rejected(lambda w: w["jobs"]["web-build"].update(steps=[
                     step for step in w["jobs"]["web-build"]["steps"]
                     if command not in step.get("run", "")
+                ]))
+
+    def test_focused_deletion_checks_are_mandatory(self):
+        for command in ("src/core/deletions.test.ts", "src/core/me-deletion-sync.test.ts",
+                        "src/core/devices.test.ts", "src/core/calls.test.ts", "src/ui/deletion.test.ts"):
+            with self.subTest(command=command):
+                self.rejected(lambda w: w["jobs"]["web-checks"].update(steps=[
+                    {**step, "run": step["run"].replace(command, "")} if "run" in step else step
+                    for step in w["jobs"]["web-checks"]["steps"]
                 ]))
 
     def test_all_browser_engines_are_mandatory(self):

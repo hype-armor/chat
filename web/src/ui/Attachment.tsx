@@ -1,6 +1,6 @@
 // Photos and files in a conversation (ADR-0024). Files are decrypted in the
 // core worker; this only shows what it hands back.
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CoreClient } from '../core/client'
 import { type FileInfo, isPhoto, isPlayable } from '../core/protocol'
 import { formatDuration } from './media'
@@ -14,7 +14,7 @@ export function formatSize(bytes: number): string {
 /** An object URL for `blob`, revoked when it changes or on unmount. */
 function useObjectUrl(blob: Blob | undefined): string | undefined {
   const [url, setUrl] = useState<string>()
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!blob) return setUrl(undefined)
     const u = URL.createObjectURL(blob)
     setUrl(u)
@@ -30,6 +30,7 @@ function save(blob: Blob, name: string) {
   a.download = name
   a.click()
   setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  return url
 }
 
 export function Attachment({
@@ -46,6 +47,23 @@ export function Attachment({
   /** Ours and still uploading. */
   sending: boolean
 }) {
+  const root = useRef<HTMLDivElement>(null)
+  const lifetime = useRef(0)
+  const downloads = useRef(new Set<string>())
+  useLayoutEffect(() => {
+    const node = root.current
+    lifetime.current++
+    return () => {
+      lifetime.current++
+      node?.querySelectorAll<HTMLMediaElement>('audio, video').forEach((media) => {
+        media.pause()
+        media.removeAttribute('src')
+        media.load()
+      })
+      for (const url of downloads.current) URL.revokeObjectURL(url)
+      downloads.current.clear()
+    }
+  }, [conversationId, messageId])
   const photo = isPhoto(file.mime)
   const playable = isPlayable(file.mime)
   const video = playable && file.mime.startsWith('video/')
@@ -70,17 +88,19 @@ export function Attachment({
   }, [core, messageId])
 
   const open = async () => {
+    const generation = lifetime.current
     if (full) return full
     setBusy(true)
     setError(undefined)
     try {
       const blob = await core.openAttachment(conversationId, messageId)
+      if (lifetime.current !== generation) return undefined
       if (photo || playable) setFull(blob)
       return blob
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      if (lifetime.current === generation) setError(e instanceof Error ? e.message : String(e))
     } finally {
-      setBusy(false)
+      if (lifetime.current === generation) setBusy(false)
     }
   }
 
@@ -90,8 +110,9 @@ export function Attachment({
   }, [photo, file.downloaded])
 
   const download = async () => {
+    const generation = lifetime.current
     const blob = await open()
-    if (blob) save(blob, file.name)
+    if (blob && lifetime.current === generation) downloads.current.add(save(blob, file.name))
   }
 
   const aspect = file.width && file.height ? file.width / file.height : undefined
@@ -105,7 +126,7 @@ export function Attachment({
   const label = file.voiceNote ? 'Voice note' : file.name
   const duration = file.durationMs ? ` · ${formatDuration(file.durationMs)}` : ''
   return (
-    <div className={`attachment${generic ? ' file-card' : ''}`} data-testid="attachment">
+    <div ref={root} className={`attachment${generic ? ' file-card' : ''}`} data-testid="attachment">
       {generic && (
         <svg className="file-icon" viewBox="0 0 40 48" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
           <path d="M5 2h20l10 10v34H5V2Z" strokeLinejoin="round" />
