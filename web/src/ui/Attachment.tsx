@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import type { CoreClient } from '../core/client'
 import { type FileInfo, isPhoto, isPlayable } from '../core/protocol'
 import { formatDuration } from './media'
+import { ImageAttachment } from './ImageViewer'
 
 export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -32,24 +33,25 @@ function save(blob: Blob, name: string) {
   setTimeout(() => URL.revokeObjectURL(url), 60_000)
 }
 
-export function Attachment({
-  core,
-  conversationId,
-  messageId,
-  file,
-  sending,
-}: {
+type AttachmentProps = {
   core: CoreClient
   conversationId: string
   messageId: string
   file: FileInfo
   /** Ours and still uploading. */
   sending: boolean
-}) {
-  const photo = isPhoto(file.mime)
+}
+
+export function Attachment(props: AttachmentProps) {
+  // Only the existing raster allowlist can enter the viewer. SVG and unsupported
+  // images remain downloads, like other generic files.
+  return isPhoto(props.file.mime) ? <ImageAttachment {...props} /> : <FileAttachment {...props} />
+}
+
+function FileAttachment({ core, conversationId, messageId, file, sending }: AttachmentProps) {
   const playable = isPlayable(file.mime)
   const video = playable && file.mime.startsWith('video/')
-  const generic = !photo && !playable
+  const generic = !playable
   const extension = file.name.includes('.') ? file.name.split('.').pop()!.toUpperCase() : ''
   const fileType = ['PDF', 'TXT', 'CSV', 'DOC', 'DOCX', 'XLS', 'XLSX', 'ZIP', 'GZ', 'TAR'].includes(extension) ? extension : 'FILE'
   const [thumb] = useState(() => (file.thumbnail ? new Blob([file.thumbnail], { type: 'image/jpeg' }) : undefined))
@@ -75,7 +77,7 @@ export function Attachment({
     setError(undefined)
     try {
       const blob = await core.openAttachment(conversationId, messageId)
-      if (photo || playable) setFull(blob)
+      if (playable) setFull(blob)
       return blob
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -83,11 +85,6 @@ export function Attachment({
       setBusy(false)
     }
   }
-
-  // Photos already on this device show full size (ADR-0025).
-  useEffect(() => {
-    if (photo && file.downloaded && !full && !busy) void open()
-  }, [photo, file.downloaded])
 
   const download = async () => {
     const blob = await open()
@@ -136,16 +133,6 @@ export function Attachment({
             </span>
           )}
         </button>
-      ) : photo && (thumbUrl || fullUrl) ? (
-        <button
-          type="button"
-          className="photo"
-          onClick={() => void open()}
-          disabled={busy || !!full}
-          aria-label={full ? `Photo ${file.name}` : `Show photo ${file.name}`}
-        >
-          <img src={fullUrl ?? thumbUrl} alt={file.name} style={mediaStyle} data-full={!!fullUrl} />
-        </button>
       ) : (
         <span className="file-name" title={file.name}>{generic ? file.name : `📎 ${file.name}`}</span>
       )}
@@ -161,7 +148,7 @@ export function Attachment({
           <>
             {' · '}
             <button type="button" className="link small" onClick={() => void download()} disabled={busy}>
-              {busy ? 'Opening…' : photo || playable ? 'Save' : 'Download'}
+              {busy ? 'Opening…' : playable ? 'Save' : 'Download'}
             </button>
           </>
         )}

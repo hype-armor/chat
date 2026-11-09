@@ -1,5 +1,5 @@
 import { type Browser, expect, test } from './fixtures'
-import { closeSettings, messages, openChat, openSettings, randomUsername, startChat } from './support'
+import { closeSettings, conversationAction, messages, openChat, openSettings, randomUsername, startChat } from './support'
 
 test.skip(!process.env.E2E_SERVER, 'needs chat-server and PostgreSQL (set E2E_SERVER=1 and DATABASE_URL)')
 
@@ -216,8 +216,8 @@ test('until-stopped location sharing continues until the sender stops it (FR-LOC
   await expect(card).toContainText('48.85840, 2.29450')
   await expect(card).toHaveCount(1)
 
-  // Both the contact photo and name open the same details view.
-  await bob.locator('.conversation-title .avatar').click()
+  // The recipient menu provides the contact details and shared location.
+  await conversationAction(bob, 'Verify safety number')
   const details = bob.getByRole('complementary', { name: 'Conversation details' })
   const contactLocation = details.getByRole('region', { name: 'Contact live location' })
   await expect(contactLocation).toBeVisible()
@@ -235,7 +235,7 @@ test('until-stopped location sharing continues until the sender stops it (FR-LOC
   await expect(card).toContainText('Live location · until stopped')
 
   await details.getByRole('button', { name: /^(Close details|Back to conversation)$/ }).click()
-  await bob.locator('.conversation-title .conversation-name').click()
+  await conversationAction(bob, 'Verify safety number')
   await expect(contactLocation).toContainText('48.85840, 2.30270 · ±8 m')
 
   await ownCard.getByRole('button', { name: 'Stop sharing', exact: true }).click()

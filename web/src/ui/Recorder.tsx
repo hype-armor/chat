@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { MediaInfo } from '../core/protocol'
 import { formatDuration, recorderType } from './media'
+import { MediaCapture, mediaAccessError, permissionGuidance } from './permissions'
 
 /** Longest voice note. */
 const MAX_MS = 5 * 60_000
@@ -23,16 +24,28 @@ export function Recorder({
   onError: (message: string) => void
 }) {
   const [elapsed, setElapsed] = useState<number>()
+  const [pending, setPending] = useState(false)
   const recording = useRef<Recording>(undefined)
+  const capture = useRef<MediaCapture>(undefined)
+  const mounted = useRef(false)
   const send = useRef(false)
 
   const stop = (andSend: boolean) => {
     send.current = andSend
-    recording.current?.recorder.stop()
+    const recorder = recording.current?.recorder
+    if (recorder && recorder.state !== 'inactive') recorder.stop()
+    capture.current?.cancel()
   }
 
-  // Leaving the conversation discards a recording in progress.
-  useEffect(() => () => stop(false), [])
+  // A late permission grant must not start recording after leaving.
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      stop(false)
+      capture.current = undefined
+    }
+  }, [])
 
   useEffect(() => {
     if (elapsed === undefined) return
@@ -47,33 +60,48 @@ export function Recorder({
   }, [elapsed === undefined])
 
   const start = async () => {
+    // The ref closes the gap before React renders the disabled button.
+    if (capture.current || disabled || hidden) return
     const type = recorderType()
     if (!type || !navigator.mediaDevices?.getUserMedia) return onError("This browser can't record voice notes")
-    let stream: MediaStream
+    const request = new MediaCapture()
+    capture.current = request
+    send.current = false
+    setPending(true)
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    } catch {
-      return onError('Allow the microphone to record a voice note')
-    }
-    const recorder = new MediaRecorder(stream, { mimeType: type })
-    const r: Recording = { recorder, stream, startedAt: Date.now(), chunks: [] }
-    recorder.ondataavailable = (e) => e.data.size > 0 && r.chunks.push(e.data)
-    recorder.onstop = () => {
-      for (const track of stream.getTracks()) track.stop()
+      const stream = await request.request({ audio: true })
+      if (!stream) return
+      const recorder = new MediaRecorder(stream, { mimeType: type })
+      const r: Recording = { recorder, stream, startedAt: Date.now(), chunks: [] }
+      recorder.ondataavailable = (e) => e.data.size > 0 && r.chunks.push(e.data)
+      recorder.onstop = () => {
+        request.cancel()
+        if (!mounted.current || capture.current !== request) return
+        recording.current = undefined
+        capture.current = undefined
+        setElapsed(undefined)
+        onRecordingChange(false)
+        const durationMs = Date.now() - r.startedAt
+        if (!send.current || durationMs < 500) return
+        const mime = type.split(';')[0]
+        const ext = mime === 'audio/mp4' ? 'm4a' : mime.split('/')[1]
+        const file = new File(r.chunks, `voice-note.${ext}`, { type: mime })
+        onRecorded(file, { durationMs, voiceNote: true })
+      }
+      recording.current = r
+      recorder.start(1000)
+      setElapsed(0)
+      onRecordingChange(true)
+    } catch (error) {
+      request.cancel()
       recording.current = undefined
-      setElapsed(undefined)
-      onRecordingChange(false)
-      const durationMs = Date.now() - r.startedAt
-      if (!send.current || durationMs < 500) return
-      const mime = type.split(';')[0]
-      const ext = mime === 'audio/mp4' ? 'm4a' : mime.split('/')[1]
-      const file = new File(r.chunks, `voice-note.${ext}`, { type: mime })
-      onRecorded(file, { durationMs, voiceNote: true })
+      if (mounted.current && capture.current === request) {
+        capture.current = undefined
+        onError(mediaAccessError(error, 'microphone'))
+      }
+    } finally {
+      if (mounted.current) setPending(false)
     }
-    recording.current = r
-    recorder.start(1000)
-    setElapsed(0)
-    onRecordingChange(true)
   }
 
   if (elapsed === undefined) {
@@ -82,8 +110,9 @@ export function Recorder({
         type="button"
         className="icon"
         onClick={() => void start()}
-        disabled={disabled}
+        disabled={disabled || pending}
         hidden={hidden}
+        title={permissionGuidance('microphone')}
         aria-label="Record a voice note"
       >
         🎤

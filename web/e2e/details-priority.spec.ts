@@ -1,5 +1,5 @@
 import { type Page, expect, test } from './fixtures'
-import { conversationDetails } from './support'
+import { conversationAction, conversationDetails } from './support'
 
 test.skip(!process.env.E2E_UI_FIXTURES, 'use playwright.fixtures.config.ts; UI focus only, no call media or transport')
 
@@ -18,7 +18,7 @@ async function openDetails(page: Page, disableEncryption = false) {
   await page.route('**/v1/**', (route) => route.abort('blockedbyclient'))
   await page.goto(`/e2e/interactions-fixture.html?${new URLSearchParams({ title, group: '1' })}`)
   await page.getByRole('button', { name: new RegExp(title) }).click()
-  await page.getByRole('button', { name: 'Group info', exact: true }).click()
+  await conversationAction(page, 'Group info')
   await expect(conversationDetails(page)).toHaveAttribute('aria-modal', 'true')
   const supported = await page.evaluate(() => (window as unknown as {
     interactionFixture: { canEncryptCalls(): boolean }

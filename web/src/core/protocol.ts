@@ -5,6 +5,9 @@ import type { MapInfo } from './maps'
 
 export type ConnectionState = 'offline' | 'connecting' | 'online'
 
+export type LocalityPlace = { city: string; region: string; country: string }
+export type LocalityInfo = LocalityPlace & { updatedAt: number; expiresAt: number }
+
 export type ConversationSummary = {
   id: string
   title: string
@@ -16,6 +19,8 @@ export type ConversationSummary = {
   memberCount: number
   /** 1:1 chats: the other person's account id. */
   peer?: string
+  /** Opt-in coarse locality from this direct conversation, never exact coordinates. */
+  locality?: LocalityInfo
   /** From someone with no connection to this user, until accepted (FR-SAF-3). */
   request: boolean
   /** Received messages not seen yet. */
@@ -44,6 +49,10 @@ export type AppView =
       alerts: { id: string; text: string }[]
       /** Whether this user sends read receipts (FR-MSG-5). */
       readReceipts: boolean
+      /** Device-local explicit opt-in. Excluded from device sync and backups. */
+      localitySharing?: boolean
+      localityStatus?: 'off' | 'locating' | 'ready' | 'unavailable'
+      myLocality?: LocalityInfo
       /** Whether this device sends and shows encrypted typing indicators. */
       typingIndicators: boolean
       /** Calls go only through the server's relay (FR-CALL-9). */
@@ -262,6 +271,9 @@ export type CoreRequest =
   | { type: 'setTyping'; conversationId: string; active: boolean }
   | { type: 'typing'; conversationId: string }
   | { type: 'setTypingIndicators'; on: boolean }
+  | { type: 'setLocalitySharing'; account: string; on: boolean }
+  | { type: 'updateLocality'; account: string; location: LocationInfo }
+  | { type: 'localityUnavailable'; account: string }
   | { type: 'sendLocation'; conversationId: string; location: LocationInfo }
   | { type: 'startLive'; conversationId: string; durationMs: number | null; location: LocationInfo }
   | { type: 'liveUpdate'; location: LocationInfo }

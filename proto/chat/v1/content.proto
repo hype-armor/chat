@@ -18,6 +18,7 @@ message Content {
     LiveLocation live_location = 9;
     Call call = 10;
     Typing typing = 12;
+    Locality locality = 14;
   }
   // Original envelope message id in this conversation, exactly 16 bytes.
   // Absent for an ordinary message. Only used on user-visible messages.
@@ -33,6 +34,16 @@ message Content {
 message Typing {
   bool active = 1;
   uint64 expires_at_ms = 2;
+}
+
+// Coarse foreground locality, shared only after explicit opt-in (ADR-0041).
+// Exact coordinates never enter this body. An empty city revokes the locality.
+// Both updates and revocations expire within 1 hour of Content.sent_at_ms.
+message Locality {
+  string city = 1;
+  string region = 2;
+  string country = 3;
+  uint64 expires_at_ms = 4;
 }
 
 message Text {

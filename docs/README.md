@@ -21,6 +21,7 @@ Architecture Decision Records (ADRs) under [`adr/`](adr/).
 | — | [Chat interaction comparison](ui-feature-comparison.md) | Scoped reference-app comparison, UI gaps, and regression coverage |
 | — | [WebKit navigation diagnostic](testing-webkit-navigation.md) | Targeted signup-stall capture, baseline comparison, and artifact privacy |
 | — | [Server management](server-management.md) | Storage quotas, account limits, operator commands, and user usage view |
+| — | [Browser permissions](browser-permissions.md) | Browser-controlled grants, capture cleanup, and security headers |
 | — | [ADR index](adr/README.md) | Decision log |
 
 ## Conventions

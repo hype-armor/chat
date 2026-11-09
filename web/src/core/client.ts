@@ -153,6 +153,18 @@ export class CoreClient {
     return { ...(draft === undefined ? {} : { draft }), ...(consumedRevision === undefined ? {} : { consumedRevision }) }
   }
 
+  async setLocalitySharing(account: string, on: boolean) {
+    expect(await this.call({ type: 'setLocalitySharing', account, on }), 'ok')
+  }
+
+  async updateLocality(account: string, location: LocationInfo) {
+    expect(await this.call({ type: 'updateLocality', account, location }), 'ok')
+  }
+
+  async localityUnavailable(account: string) {
+    expect(await this.call({ type: 'localityUnavailable', account }), 'ok')
+  }
+
   async setTyping(conversationId: string, active: boolean) {
     expect(await this.call({ type: 'setTyping', conversationId, active }), 'ok')
   }

@@ -2,6 +2,7 @@ import { type FormEvent, useEffect, useRef, useState } from 'react'
 import type { CoreClient } from '../core/client'
 import { parseLinkCode } from '../core/devices'
 import type { DeviceInfo } from '../core/protocol'
+import { MediaCapture, mediaAccessError, permissionGuidance } from './permissions'
 
 const isLinkCode = (text: string) => parseLinkCode(text) !== undefined
 
@@ -147,9 +148,12 @@ export function Scanner({
 }) {
   const video = useRef<HTMLVideoElement>(null)
   const [error, setError] = useState<string>()
+  // Parent renders can replace callbacks without restarting camera access.
+  const callbacks = useRef({ accept, onCode })
+  callbacks.current = { accept, onCode }
 
   useEffect(() => {
-    let stream: MediaStream | undefined
+    const capture = new MediaCapture()
     let timer: ReturnType<typeof setTimeout> | undefined
     let live = true
     const canvas = document.createElement('canvas')
@@ -165,30 +169,35 @@ export function Scanner({
           ctx.drawImage(v, 0, 0, canvas.width, canvas.height)
           const frame = ctx.getImageData(0, 0, canvas.width, canvas.height)
           const text = await core.decodeQr(new Uint8Array(frame.data.buffer), frame.width, frame.height)
-          if (live && text && accept(text)) {
-            onCode(text)
+          if (live && text && callbacks.current.accept(text)) {
+            capture.cancel()
+            callbacks.current.onCode(text)
             return
           }
         }
       }
-      timer = setTimeout(() => void scan(), 250)
+      if (live) timer = setTimeout(() => void scan().catch(failed), 250)
     }
-    navigator.mediaDevices
-      .getUserMedia({ video: { facingMode: 'environment' } })
-      .then((s) => {
-        stream = s
-        if (!live || !video.current) return
-        video.current.srcObject = s
-        void video.current.play()
-        void scan()
-      })
-      .catch(() => live && setError('Camera unavailable; type the code instead.'))
+    const failed = (error: unknown) => {
+      capture.cancel()
+      if (live) setError(`${mediaAccessError(error, 'camera')} Type the code instead.`)
+    }
+    // Skip StrictMode's discarded effect before it can open a second prompt.
+    void Promise.resolve().then(async () => {
+      if (!live) return
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera access is unavailable in this browser.')
+      const stream = await capture.request({ video: { facingMode: 'environment' } })
+      if (!stream || !live || !video.current) return
+      video.current.srcObject = stream
+      await video.current.play()
+      await scan()
+    }).catch(failed)
     return () => {
       live = false
       clearTimeout(timer)
-      for (const track of stream?.getTracks() ?? []) track.stop()
+      capture.cancel()
     }
-  }, [core, accept, onCode])
+  }, [core])
 
   return (
     <div className="scanner">
@@ -199,6 +208,7 @@ export function Scanner({
       ) : (
         <video ref={video} muted playsInline aria-label="Camera" />
       )}
+      <p className="small muted">{permissionGuidance('camera')}</p>
       <button type="button" className="link" onClick={onClose}>
         Stop scanning
       </button>

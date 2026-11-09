@@ -1,0 +1,25 @@
+import { defineConfig, devices } from '@playwright/test'
+
+// Dedicated isolated services. No chat server or real capture devices.
+const port = Number(process.env.E2E_PERMISSION_FIXTURE_PORT ?? 14373)
+if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Invalid permission fixture port')
+const origin = `http://127.0.0.1:${port}`
+export default defineConfig({
+  testDir: 'e2e',
+  testMatch: 'permissions.fixture.spec.ts',
+  workers: 1,
+  use: { baseURL: origin },
+  projects: [
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    ...(process.env.PW_ALL_BROWSERS ? [
+      { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
+      { name: 'webkit', use: { ...devices['Desktop Safari'] } },
+    ] : []),
+  ],
+  webServer: {
+    command: `node node_modules/vite/bin/vite.js --host 127.0.0.1 --port ${port} --strictPort`,
+    url: `${origin}/e2e/permissions-fixture.html`,
+    reuseExistingServer: false,
+    env: { CHAT_SERVER_URL: 'http://127.0.0.1:18080' },
+  },
+})

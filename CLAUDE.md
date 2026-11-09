@@ -42,16 +42,28 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   (ADR-0038). Never include draft text in typing events.
 - UI regression tests must cover native link selection, quoted replies, typing
   expiry, message/link action gestures, non-selectable message metadata, and scroll position
-  during keyboard/media resize. The idle composer must not reserve an empty\n  typing-indicator row or inherit gaps from generic form styles.
+  during keyboard/media resize. The idle composer must not reserve an empty
+  typing-indicator row or inherit gaps from generic form styles.
   Reply actions require worker-confirmed eligibility. Own sends reach the
   bottom; incoming messages must not displace a reader who scrolled up.
   Map error fallbacks must preserve map dimensions so dialog controls do not move
-  during activation.
+  during activation. Map labels must use bundled/local resources, not external glyph or sprite
+  origins. Accuracy areas must use the reported radius in metres and update with live fixes.
+  Preserve account-scoped conversation reading positions across navigation. Keep the
+  scroll-to-bottom chevron available whenever the viewport is not at the bottom.
+  Image viewers must use worker-opened attachments, make background regions inert,
+  release object URLs, and yield focus to incoming call dialogs.
 - Live sharing has no app-wide banner or layout offset. Keep the conversation-list
   sharing icon, live message card and Stop sharing control. The Conversation menu
   must offer Stop sharing location for active shares, even with an expired or
   off-screen card. Removing the banner must not stop the watcher or change expiry.
 - Run browser tests against isolated test services, never a live deployment.
+- Browser and OS permission grants belong to the browser. Do not cache fake grants or keep
+  idle camera/microphone streams to avoid prompts. Prevent duplicate capture requests and
+  stop active or late-granted tracks when the requesting operation ends.
+- Automatic city/state sharing must require device-local opt-in. Resolve coordinates only
+  in the worker with bundled offline data. Send only authenticated encrypted coarse locality,
+  expire it, exclude it from backup/sync, and label nearest-city results as approximate.
 - Rust Docker build stages must retain the shared BuildKit Cargo lock and CPU-sized
   job budget. Use `scripts/compose-build.sh` for sequential image builds and run
   `scripts/test-compose-build.sh` after changes to build controls.

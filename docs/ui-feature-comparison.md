@@ -28,7 +28,7 @@ This project must retain its own encryption and worker boundaries regardless of 
 
 ### P0: Preserve reading position and safe navigation
 
-- Keep own-send-to-bottom behavior. Keep conversation opening at the latest message.
+- Keep own-send-to-bottom behavior. Open new conversations at the latest message, and restore saved reading positions when returning.
 - Follow incoming messages only when the reader is near the bottom.
 - Preserve the visible message position when the reader scrolls up.
 - Test viewport changes and delayed media growth in pinned and unpinned states.
@@ -79,8 +79,8 @@ The development fixture runner does not establish production CSP compliance; ret
 
 - Chromium passed the first 11 fixture cases, including link errors, share cancellation, failed-send draft isolation, typing expiry, and mid-history media growth.
 - Firefox passed those same 11 cases.
-- A later 12th case reproduced a queued-scroll/container-resize failure on Chromium. It moves message 20 and resizes in one evaluation, without dispatching a scroll event.
-- That regression test remains active. The UI owner must fix the position reset before the full suite can pass.
+- The queued-scroll/container-resize regression moves message 20 and resizes in one evaluation, without dispatching a scroll event.
+- Issue #132 validation passed that regression on Chromium and Firefox. The test remains active.
 - WebKit could not launch because the local host lacks required libraries. No WebKit behavior was verified.
 - `TMPDIR=/var/tmp pnpm --filter web exec tsc -b --force --noEmit` passed after the DOM configuration fix.
 - `PW_ALL_BROWSERS=1` enables Chromium, Firefox, and WebKit in the fixture configuration. CI must install each engine and its host dependencies.

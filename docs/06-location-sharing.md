@@ -45,6 +45,23 @@
   last point after 8 hours without an update. Continuous background sharing
   arrives with native wrappers.
 
+## Automatic approximate locality
+
+ADR-0041 adds an optional **Automatic current location** setting under privacy settings.
+It defaults to off and applies only to this device.
+After explicit consent, the visible page obtains fixes for a worker-only offline lookup.
+The worker uses bundled GeoNames data, not an external geocoder or coordinate-dependent tile request.
+It sends only a nearby city, known region, country code, and expiry through MLS.
+Exact coordinates never enter the locality content body or profile.
+Only accepted direct conversations receive locality updates.
+The recipient-name header displays **Near city, region** because this is not a municipal boundary lookup.
+US and Canadian regions use known abbreviations; other regions use known names or remain absent.
+Distant, inaccurate, or ambiguous fixes can produce no label.
+Updates expire within 1 hour, and turning the setting off sends an encrypted revocation.
+Consent and cached locality stay outside backup and device sync.
+Location access stops while the page is hidden.
+Privacy settings contain the source and CC BY 4.0 attribution links.
+
 ## 3. Privacy
 
 - Coordinates are never visible to the server (FR-LOC-4).
@@ -63,10 +80,19 @@
   mode.
 - **How it's served (ADR-0026):** one `basemap.pmtiles` file on the web
   pod at `/tiles/`. The core worker reads tiles by range for the page's map
-  (a `chat://` protocol), so the page fetches no map data itself. Label
-  layers wait for self-hosted glyphs.
+  (a `chat://` protocol), so the page fetches no map data itself. MapLibre 6
+  renders text labels with local fonts. The style has no glyph, font, or sprite
+  URL. Sprite-only symbols remain disabled. Static locations, sharing previews,
+  and live locations show the reported accuracy radius in metres.
 - Reverse geocoding (place names) is done by the **sender** and sent inside
-  the encrypted message, or skipped.
+  the encrypted message, or skipped. Automatic coarse locality lookup can use
+  the bundled GeoNames gazetteer in the core worker. No coordinates leave the
+  worker for this lookup. It returns an approximate **Near city, region** label,
+  not confirmed municipal membership. It rejects poor fixes, distant places,
+  and comparable cross-border candidates. It cannot identify water near a
+  coast. See `web/src/core/locality-data/README.md` for attribution, data sources,
+  regeneration steps, and the distance and accuracy limits. Sharing the label
+  requires separate explicit consent and encrypted locality metadata (ADR-0041).
 - Persistent per-conversation indicators during live sharing (FR-LOC-6):
   a location icon in the conversation list and the live-location message card
   with **Stop sharing**. The conversation menu also has **Stop sharing location**
