@@ -8,6 +8,7 @@ import type { LocalTrack, Participant, RemoteTrack, Room } from 'livekit-client'
 type LiveKit = typeof import('livekit-client')
 import { type CoreClient, canEncryptCalls, useEncodedStreams } from '../core/client'
 import type { IncomingCallSignal } from '../core/protocol'
+import { mediaAccessError } from './permissions'
 
 /** Video tiles shown at once (FR-CALL-6); everyone else is listed by name. */
 export const MAX_VIDEO_TILES = 16
@@ -88,20 +89,39 @@ export class GroupCallController {
   private lk?: LiveKit
   private names: Record<string, string> = {}
   private timer?: ReturnType<typeof setTimeout>
-  private unsubscribe: () => void
+  private unsubscribe?: () => void
   private readonly callIds = new CallIds()
+  private generation = 0
+  private disposed = false
+  private actions = new Map<string, object>()
+  private tracks = new Set<LocalTrack>()
   /** Another call (1:1) is running here. */
   otherBusy: () => boolean = () => false
 
-  constructor(private readonly core: CoreClient) {
-    this.unsubscribe = core.subscribe((e) => {
+  constructor(private readonly core: CoreClient, options: { deferActivation?: boolean } = {}) {
+    this.disposed = options.deferActivation === true
+    if (!options.deferActivation) this.activate()
+  }
+
+  /** Restore a retained controller when its React owner sets up again. */
+  activate() {
+    if (this.unsubscribe) return
+    this.disposed = false
+    this.unsubscribe = this.core.subscribe((e) => {
       if (e.type === 'call' && e.signal.group) this.onStarted(e.signal)
     })
   }
 
+  deactivate() {
+    this.disposed = true
+    this.unsubscribe?.()
+    this.unsubscribe = undefined
+    this.cleanUp()
+    this.set(undefined)
+  }
+
   dispose() {
-    this.unsubscribe()
-    void this.room?.disconnect()
+    this.deactivate()
   }
 
   current(): GroupCallState | undefined {
@@ -120,31 +140,37 @@ export class GroupCallController {
   /** Starts a call in a group: tells the members, then joins its room. */
   async start(conversationId: string, title: string, video: boolean) {
     if (this.busy || this.otherBusy()) throw new Error("You're already in a call")
+    if (this.disposed) return
+    const generation = ++this.generation
     const callId = this.callIds.start()
     this.show({ conversationId, callId, title, video, phase: 'joining' })
     try {
       if (!canEncryptCalls()) throw new Error(NO_FRAME_ENCRYPTION)
       await this.core.callSignal(conversationId, { callId, kind: 'offer', group: true, video })
-      await this.connect(video)
+      if (this.live(generation)) await this.connect(video, generation)
     } catch (e) {
+      if (!this.live(generation)) return
       if (canEncryptCalls()) this.core.recordCall('group', false)
-      this.finish(e instanceof Error ? e.message : String(e))
+      this.finish(mediaAccessError(e, video ? 'camera-and-microphone' : 'microphone'))
     }
   }
 
   /** Joins a call already going in a group. */
   async join(conversationId: string, offered: string, title: string, video: boolean) {
     if (this.busy || this.otherBusy()) throw new Error("You're already in a call")
+    if (this.disposed) return
+    const generation = ++this.generation
     // The call id stays: its keys and their frame counter stay in the core
     // worker too (audit M10).
     const callId = this.callIds.rejoin(offered)
     this.show({ conversationId, callId, title, video, phase: 'joining' })
     try {
       if (!canEncryptCalls()) throw new Error(NO_FRAME_ENCRYPTION)
-      await this.connect(video)
+      await this.connect(video, generation)
     } catch (e) {
+      if (!this.live(generation)) return
       if (canEncryptCalls()) this.core.recordCall('group', false)
-      this.finish(e instanceof Error ? e.message : String(e))
+      this.finish(mediaAccessError(e, video ? 'camera-and-microphone' : 'microphone'))
     }
   }
 
@@ -161,68 +187,78 @@ export class GroupCallController {
   }
 
   async leave() {
-    await this.room?.disconnect()
+    // Invalidate pending capture before the SDK waits for network teardown.
     this.finish('You left the call')
   }
 
   async toggleMute() {
-    const s = this.state
-    if (!s || !this.room) return
-    await this.room.localParticipant.setMicrophoneEnabled(s.muted)
-    this.set({ ...s, muted: !s.muted })
+    await this.action('microphone', async (room, lk, generation) => {
+      const muted = !this.state!.muted
+      const pub = room.localParticipant.getTrackPublication(lk.Track.Source.Microphone)
+      if (pub?.track) {
+        if (muted) await pub.track.mute()
+        else await pub.track.unmute()
+      } else if (!muted) {
+        const tracks = await lk.createLocalTracks({ video: false, audio: true })
+        if (!await this.publish(tracks, room, generation)) return
+      }
+      if (this.live(generation, room)) this.set({ ...this.state!, muted })
+    })
   }
 
   async toggleCamera() {
-    const s = this.state
-    const lk = this.lk
-    if (!s || !this.room || !lk) return
-    const pub = this.room.localParticipant.getTrackPublication(lk.Track.Source.Camera)
-    if (pub?.track) {
-      if (s.cameraOff) await pub.track.unmute()
-      else await pub.track.mute()
-    } else {
-      await this.publish(await lk.createLocalTracks({ video: true, audio: false }))
-    }
-    this.set({ ...this.state!, cameraOff: !s.cameraOff })
-    this.refresh()
+    await this.action('camera', async (room, lk, generation) => {
+      const cameraOff = !this.state!.cameraOff
+      const pub = room.localParticipant.getTrackPublication(lk.Track.Source.Camera)
+      if (pub?.track) {
+        if (cameraOff) await pub.track.unmute()
+        else await pub.track.mute()
+      } else if (!cameraOff) {
+        const tracks = await lk.createLocalTracks({ video: true, audio: false })
+        if (!await this.publish(tracks, room, generation)) return
+      }
+      if (this.live(generation, room)) this.set({ ...this.state!, cameraOff })
+    })
   }
 
   /** Next camera; LiveKit swaps the track on the same (encrypted) sender. */
   async switchCamera() {
-    const room = this.room
-    if (!room) return
-    const cameras = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput')
-    if (cameras.length < 2) return
-    const current = room.getActiveDevice('videoinput')
-    const at = cameras.findIndex((d) => d.deviceId === current)
-    await room.switchActiveDevice('videoinput', cameras[(at + 1) % cameras.length].deviceId)
-    this.refresh()
+    await this.action('camera', async (room, _lk, generation) => {
+      if (this.state?.cameraOff) return
+      const cameras = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput')
+      if (!this.live(generation, room) || cameras.length < 2) return
+      const current = room.getActiveDevice('videoinput')
+      const at = cameras.findIndex((d) => d.deviceId === current)
+      await room.switchActiveDevice('videoinput', cameras[(at + 1) % cameras.length].deviceId)
+    })
   }
 
   /** Shares the screen as its own track (FR-CALL-7), encrypted like the others. */
   async toggleScreenShare() {
-    const room = this.room
-    const lk = this.lk
-    const s = this.state
-    if (!room || !lk || !s) return
-    const pub = room.localParticipant.getTrackPublication(lk.Track.Source.ScreenShare)
-    if (pub?.track) {
-      await room.localParticipant.unpublishTrack(pub.track)
-      this.set({ ...this.state!, sharing: false })
-    } else {
-      let tracks: LocalTrack[]
-      try {
-        tracks = await lk.createLocalScreenTracks({ audio: false })
-      } catch {
-        return // cancelled
+    await this.action('screen', async (room, lk, generation) => {
+      const pub = room.localParticipant.getTrackPublication(lk.Track.Source.ScreenShare)
+      if (pub?.track) {
+        const track = pub.track
+        await room.localParticipant.unpublishTrack(track)
+        track.stop()
+        this.tracks.delete(track)
+        if (this.live(generation, room)) this.set({ ...this.state!, sharing: false })
+      } else {
+        let tracks: LocalTrack[]
+        try {
+          tracks = await lk.createLocalScreenTracks({ audio: false })
+        } catch {
+          return // cancelled
+        }
+        for (const t of tracks) {
+          t.mediaStreamTrack.addEventListener('ended', () => {
+            if (this.live(generation, room) && this.state?.sharing) void this.toggleScreenShare()
+          })
+        }
+        if (!await this.publish(tracks, room, generation, lk.Track.Source.ScreenShare)) return
+        if (this.live(generation, room)) this.set({ ...this.state!, sharing: true })
       }
-      for (const t of tracks) {
-        t.mediaStreamTrack.addEventListener('ended', () => this.state?.sharing && void this.toggleScreenShare())
-      }
-      await this.publish(tracks, lk.Track.Source.ScreenShare)
-      this.set({ ...this.state!, sharing: true })
-    }
-    this.refresh()
+    })
   }
 
   async setSpeaker(deviceId: string) {
@@ -230,18 +266,23 @@ export class GroupCallController {
   }
 
   private onStarted(s: IncomingCallSignal) {
-    if (this.busy || this.otherBusy() || s.elsewhere) return
+    if (this.disposed || this.busy || this.otherBusy() || s.elsewhere) return
     this.show({ conversationId: s.conversationId, callId: s.callId, title: s.title, video: !!s.video, phase: 'incoming' })
     clearTimeout(this.timer)
     this.timer = setTimeout(() => this.state?.phase === 'incoming' && this.set(undefined), PROMPT_MS)
   }
 
-  private async connect(video: boolean) {
+  private async connect(video: boolean, generation: number) {
+    if (!this.live(generation)) return
     const s = this.state!
     const started = Date.now()
     const { url, token } = await this.core.groupCallJoin(s.conversationId, s.callId)
-    this.names = await this.core.deviceNames(s.conversationId)
+    if (!this.live(generation)) return
+    const names = await this.core.deviceNames(s.conversationId)
+    if (!this.live(generation)) return
     const lk = (this.lk ??= await import('livekit-client'))
+    if (!this.live(generation)) return
+    this.names = names
     const { RoomEvent, Track } = lk
     const room = new lk.Room({
       adaptiveStream: true,
@@ -251,9 +292,10 @@ export class GroupCallController {
       publishDefaults: { videoCodec: 'vp8', red: false, simulcast: true },
     })
     this.room = room
-    const update = () => this.refresh()
+    const update = () => this.live(generation, room) && this.refresh()
     room
       .on(RoomEvent.TrackSubscribed, (track: RemoteTrack) => {
+        if (!this.live(generation, room)) return
         if (track.receiver) this.protect(track.receiver, 'receive', track.kind === Track.Kind.Video ? 'video' : 'audio')
         update()
       })
@@ -264,20 +306,22 @@ export class GroupCallController {
       .on(RoomEvent.ParticipantDisconnected, update)
       .on(RoomEvent.ActiveSpeakersChanged, update)
       .on(RoomEvent.ConnectionQualityChanged, (quality, participant) => {
-        if (participant !== room.localParticipant || !this.state) return
+        if (participant !== room.localParticipant || !this.live(generation, room)) return
         const poor = quality === lk.ConnectionQuality.Poor || quality === lk.ConnectionQuality.Lost
-        this.set({ ...this.state, quality: poor ? 'poor' : 'good' })
+        this.set({ ...this.state!, quality: poor ? 'poor' : 'good' })
       })
-      .on(RoomEvent.Reconnecting, () => this.state && this.set({ ...this.state, quality: 'poor' }))
-      .on(RoomEvent.Disconnected, () => this.state?.phase === 'active' && this.finish('Call ended'))
+      .on(RoomEvent.Reconnecting, () => this.live(generation, room) && this.set({ ...this.state!, quality: 'poor' }))
+      .on(RoomEvent.Disconnected, () => this.live(generation, room) && this.finish('Call ended'))
     // Chromium: no frame moves until our encoded streams are taken.
     const rtcConfig = useEncodedStreams()
       ? ({ encodedInsertableStreams: true } as RTCConfiguration)
       : undefined
     await room.connect(url, token, { autoSubscribe: true, rtcConfig })
-    if (this.room !== room) return void room.disconnect()
+    if (!this.live(generation, room)) return void room.disconnect()
+    const tracks = await lk.createLocalTracks({ audio: true, video })
+    if (!await this.publish(tracks, room, generation)) return
+    if (!this.live(generation, room)) return
     this.set({ ...this.state!, phase: 'active', cameraOff: !video })
-    await this.publish(await lk.createLocalTracks({ audio: true, video }))
     this.core.recordCall('group', true, Date.now() - started)
     this.refresh()
   }
@@ -288,15 +332,81 @@ export class GroupCallController {
    * silence and black (RTCRtpScriptTransform can only be set on a sender
    * that exists).
    */
-  private async publish(tracks: LocalTrack[], source?: import('livekit-client').Track.Source) {
-    const room = this.room!
-    for (const track of tracks) {
-      await track.mute()
-      const pub = await room.localParticipant.publishTrack(track, source ? { source } : undefined)
-      const sender = pub.track?.sender
-      if (!sender) throw new Error("The call can't be encrypted")
-      this.protect(sender, 'send', track.kind === 'video' ? 'video' : 'audio')
-      await track.unmute()
+  private async publish(tracks: LocalTrack[], room: Room, generation: number, source?: import('livekit-client').Track.Source): Promise<boolean> {
+    if (!this.live(generation, room)) {
+      for (const track of tracks) track.stop()
+      return false
+    }
+    for (const track of tracks) this.tracks.add(track)
+    let complete = false
+    try {
+      for (const track of tracks) {
+        await track.mute()
+        if (!this.live(generation, room)) return false
+        const pub = await room.localParticipant.publishTrack(track, source ? { source } : undefined)
+        if (!this.live(generation, room)) return false
+        const sender = pub.track?.sender
+        if (!sender) throw new Error("The call can't be encrypted")
+        this.protect(sender, 'send', track.kind === 'video' ? 'video' : 'audio')
+        await track.unmute()
+        if (!this.live(generation, room)) return false
+      }
+      complete = true
+      return true
+    } finally {
+      if (!complete) for (const track of tracks) {
+        track.stop()
+        this.tracks.delete(track)
+      }
+    }
+  }
+
+  /** One pending action per device type; stale actions cannot change another call. */
+  private async action(key: string, run: (room: Room, lk: LiveKit, generation: number) => Promise<void>) {
+    const room = this.room
+    const lk = this.lk
+    const generation = this.generation
+    if (!room || !lk || this.state?.phase !== 'active' || this.actions.has(key)) return
+    const ticket = {}
+    // The SDK can clear publications before an in-flight restart returns.
+    const tracks = new Set([...this.tracks, ...[...room.localParticipant.trackPublications.values()]
+      .flatMap((publication) => publication.track ? [publication.track] : [])])
+    this.actions.set(key, ticket)
+    try {
+      await run(room, lk, generation)
+      if (this.live(generation, room)) this.refresh()
+    } catch (error) {
+      // An unprotected or partially published track must not remain active.
+      if (this.live(generation, room)) this.finish(mediaAccessError(error, key === 'microphone' ? 'microphone' : 'camera'))
+    } finally {
+      if (!this.live(generation, room)) {
+        for (const track of tracks) track.stop()
+        this.stopRoomTracks(room)
+      }
+      if (this.actions.get(key) === ticket) this.actions.delete(key)
+    }
+  }
+
+  private live(generation: number, room?: Room): boolean {
+    return !this.disposed && this.generation === generation && !!this.state
+      && this.state.phase !== 'ended' && (!room || this.room === room)
+  }
+
+  private stopRoomTracks(room: Room) {
+    for (const publication of room.localParticipant.trackPublications.values()) publication.track?.stop()
+  }
+
+  private cleanUp() {
+    this.generation++
+    clearTimeout(this.timer)
+    this.actions.clear()
+    const room = this.room
+    this.room = undefined
+    for (const track of this.tracks) track.stop()
+    this.tracks.clear()
+    if (room) {
+      this.stopRoomTracks(room)
+      void room.disconnect().catch((error) => console.warn('leaving group call failed', error))
     }
   }
 
@@ -346,14 +456,11 @@ export class GroupCallController {
   }
 
   private finish(reason: string) {
-    clearTimeout(this.timer)
-    const room = this.room
-    this.room = undefined
-    void room?.disconnect()
+    this.cleanUp()
     if (!this.state) return
-    const callId = this.state.callId
+    const generation = this.generation
     this.set({ ...this.state, phase: 'ended', ended: reason, tiles: [] })
-    setTimeout(() => this.state?.callId === callId && this.state.phase === 'ended' && this.set(undefined), 2_500)
+    setTimeout(() => this.generation === generation && this.state?.phase === 'ended' && this.set(undefined), 2_500)
   }
 
   private set(state: GroupCallState | undefined) {

@@ -32,7 +32,7 @@ for (const width of [390, 1280]) {
     await page.setViewportSize({ width, height: 844 })
     await openFixture(page)
     const original = await readHistory(page)
-    const chevron = page.getByRole('button', { name: 'Scroll to bottom', exact: true })
+    const chevron = page.locator('.issue132-scroll-bottom')
     const box = await chevron.boundingBox()
     const area = await viewport(page).boundingBox()
     expect(box).not.toBeNull()
@@ -49,6 +49,7 @@ for (const width of [390, 1280]) {
     await expect(page.getByTestId('message')).toHaveCount(61)
     await expect.poll(() => position(page)).toBeCloseTo(original, 0)
     await expect(chevron).toBeVisible()
+    await expect(chevron).toHaveAccessibleName('↓ New messages')
 
     await chevron.click()
     await expect.poll(() => gap(page)).toBeLessThanOrEqual(1)

@@ -132,20 +132,18 @@ export function Chat({
   useEffect(() => {
     void refreshSubscription(core)
   }, [core])
-  const [calls] = useState(() => new CallController(core))
-  const [groupCalls] = useState(() => {
-    const g = new GroupCallController(core)
-    g.otherBusy = () => calls.busy
-    calls.otherBusy = () => g.busy
-    return g
-  })
-  useEffect(
-    () => () => {
+  const [calls] = useState(() => new CallController(core, { deferActivation: true }))
+  const [groupCalls] = useState(() => new GroupCallController(core, { deferActivation: true }))
+  useEffect(() => {
+    groupCalls.otherBusy = () => calls.busy
+    calls.otherBusy = () => groupCalls.busy
+    calls.activate()
+    groupCalls.activate()
+    return () => {
       calls.dispose()
       groupCalls.dispose()
-    },
-    [calls, groupCalls],
-  )
+    }
+  }, [calls, groupCalls])
   calls.relayOnly = view.relayCalls
   const conversation = view.conversations.find((c) => c.id === selected)
   const select = (id: string) => {

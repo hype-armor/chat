@@ -1,4 +1,5 @@
 // Browser-only UI fixture. No worker, encryption, storage, or server transport.
+import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Chat } from '../ui/Chat'
 import { canEncryptCalls, type CoreClient } from '../core/client'
@@ -194,6 +195,7 @@ Object.assign(window, {
     liveStarts,
     liveActivity,
     callActions,
+    subscriberCount: () => subscribers.size,
     storageRequests() { return storageRequests },
     storagePending() { return !!pendingStorage },
     resolveStorage(usage: StorageUsage) {
@@ -209,6 +211,13 @@ Object.assign(window, {
     attachmentCaptions,
     canEncryptCalls,
     qualityActivity,
+    peerLocality(mode = 1) {
+      view.conversations[0].locality = mode === 0 ? undefined : {
+        city: mode === 2 ? 'Paris' : 'Austin', region: mode === 2 ? '' : 'TX', country: mode === 2 ? 'FR' : 'US',
+        updatedAt: Date.now(), expiresAt: Date.now() + 3600_000,
+      }
+      renderFixture()
+    },
     failMessages(value: number) { failMessages = value === 1 },
     holdMessages() { holdMessages = true },
     historyPending() { return !!releaseMessages },
@@ -300,6 +309,7 @@ window.addEventListener('error', (event) => {
 })
 const fixtureRoot = createRoot(document.getElementById('root')!)
 function renderFixture() {
-  fixtureRoot.render(<Chat key={fixtureSession} core={core} view={{ ...view }} showDiagnostics={false} onDiagnostics={() => {}} />)
+  const chat = <Chat key={fixtureSession} core={core} view={{ ...view }} showDiagnostics={false} onDiagnostics={() => {}} />
+  fixtureRoot.render(params.get('strict') === '1' ? <StrictMode>{chat}</StrictMode> : chat)
 }
 renderFixture()

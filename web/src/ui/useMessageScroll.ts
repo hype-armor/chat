@@ -4,7 +4,7 @@ import type { ChatMessage } from '../core/protocol'
 export const nearMessageBottom = (height: number, top: number, viewport: number) => height - top - viewport <= 80
 export const messageBottomGap = (height: number, top: number, viewport: number) => Math.max(0, height - top - viewport)
 
-export type MessageScrollPosition = { top: number; bottom: boolean; key?: string; offset?: number; newMessages: boolean }
+export type MessageScrollPosition = { top: number; bottom: boolean; key?: string; offset?: number; newMessages: boolean; latestIncomingId?: string }
 export type MessageScrollMemory = { positions: Map<string, MessageScrollPosition>; id: string; ready: boolean }
 
 /** Message children have ordered bottom edges. Search without copying the live collection. */
@@ -17,6 +17,17 @@ export function firstVisibleMessage(children: ArrayLike<Element>, viewportTop: n
     else low = middle + 1
   }
   return low < children.length ? children[low] : undefined
+}
+
+export function latestIncomingMessageId(messages: readonly ChatMessage[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].from !== 'me' && messages[i].kind !== 'notice') return messages[i].id
+  }
+  return undefined
+}
+
+export function restoredHasNewMessages(saved: MessageScrollPosition, messages: readonly ChatMessage[]): boolean {
+  return saved.newMessages || latestIncomingMessageId(messages) !== saved.latestIncomingId
 }
 
 function scrollKey(element: Element): string | undefined {
@@ -60,6 +71,7 @@ export function useMessageScroll(messages: ChatMessage[], panelOpen: boolean, me
       key: saved ? scrollKey(saved.element) : undefined,
       offset: saved?.offset,
       newMessages: unread.current,
+      latestIncomingId: latestIncomingMessageId(previousMessages.current),
     })
   }, [positions, id])
 
@@ -139,8 +151,8 @@ export function useMessageScroll(messages: ChatMessage[], panelOpen: boolean, me
     previousMessages.current = messages
     if (initial && saved && !saved.bottom && viewport.current) {
       atBottom.current = false
-      unread.current = saved.newMessages
-      setNewMessages(saved.newMessages)
+      unread.current = restoredHasNewMessages(saved, messages)
+      setNewMessages(unread.current)
       restoreMessagePosition(viewport.current, content.current?.children ?? [], saved)
       lastScrollTop.current = viewport.current.scrollTop
     } else if (initial || atBottom.current || added.some((m) => m.from === 'me')) scrollToBottom()

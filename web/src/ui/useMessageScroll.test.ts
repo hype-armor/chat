@@ -1,9 +1,27 @@
 import { describe, expect, it, vi } from 'vitest'
-import { firstVisibleMessage, messageBottomGap, nearMessageBottom, restoreMessagePosition, type MessageScrollPosition } from './useMessageScroll'
+import { firstVisibleMessage, latestIncomingMessageId, messageBottomGap, nearMessageBottom, restoredHasNewMessages, restoreMessagePosition, type MessageScrollPosition } from './useMessageScroll'
 
 function child(bottom: number) {
   return { getBoundingClientRect: vi.fn(() => ({ bottom }) as DOMRect) } as unknown as Element
 }
+
+describe('incoming messages while a conversation is unmounted', () => {
+  const message = (id: string, from: string, kind?: 'notice') => ({ id, from, kind, text: id, sentAt: 1, status: 'received' as const })
+  const saved: MessageScrollPosition = { top: 100, bottom: false, newMessages: false, latestIncomingId: 'last' }
+
+  it('detects new incoming messages without counting local sends or notices', () => {
+    const history = [message('last', 'peer'), message('own', 'me'), message('notice', '', 'notice')]
+    expect(latestIncomingMessageId(history)).toBe('last')
+    expect(restoredHasNewMessages(saved, history)).toBe(false)
+    expect(restoredHasNewMessages(saved, [...history, message('new', 'peer')])).toBe(true)
+  })
+
+  it('keeps an existing indicator and detects a first incoming message', () => {
+    expect(restoredHasNewMessages({ ...saved, newMessages: true }, [message('last', 'peer')])).toBe(true)
+    expect(restoredHasNewMessages({ ...saved, latestIncomingId: undefined }, [message('first', 'peer')])).toBe(true)
+    expect(latestIncomingMessageId([])).toBeUndefined()
+  })
+})
 
 describe('message bottom state', () => {
   it('shows the chevron even inside the auto-follow threshold', () => {
