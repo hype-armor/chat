@@ -292,6 +292,7 @@ for (const width of [1280, 390]) {
     await scrollUp()
     await send(bob, 'Unread before switching')
     await expect(pill).toBeVisible()
+    const savedHistoryTop = await viewport.evaluate((list) => list.scrollTop)
     if (width <= 640) await alice.getByRole('button', { name: 'Back to conversations' }).click()
     await createGroup(alice, 'Scroll reset', [bobUsername])
     await expect(alice.getByRole('heading', { name: 'Scroll reset' })).toBeVisible()
@@ -299,8 +300,15 @@ for (const width of [1280, 390]) {
     if (width <= 640) await alice.getByRole('button', { name: 'Back to conversations' }).click()
     await openChat(alice, /Bob/)
     await expect(messages(alice).last()).toContainText('Unread before switching')
+    // Returning preserves the reader's saved history position, not the bottom.
+    await expect.poll(() => viewport.evaluate((list) => list.scrollTop)).toBeCloseTo(savedHistoryTop, 0)
+    await expect(messages(alice).first()).toBeInViewport()
+    await expect(messages(alice).last()).not.toBeInViewport()
+    await expect(pill).toBeVisible()
+    await pill.click()
     await expectBottom()
 
+    // Scroll memory is account-scoped transient UI state, not browser storage.
     await alice.reload()
     await expect(alice.getByRole('status')).toHaveText('Connected')
     await openChat(alice, /Bob/)
