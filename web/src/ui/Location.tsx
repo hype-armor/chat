@@ -134,7 +134,6 @@ export function ShareLocation({
           <p className="small">
             {formatCoordinates(state)} · ±{state.accuracyM} m. Only the people in this conversation will see it.
           </p>
-          <p className="small muted">{permissionGuidance('location')}</p>
           <div className="actions">
             <button type="button" onClick={() => void send(state)}>
               Send location

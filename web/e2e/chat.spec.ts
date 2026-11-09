@@ -260,10 +260,11 @@ for (const width of [1280, 390]) {
     await scrollUp()
     await send(bob, 'Growth during a pending scroll')
     await expect(pill).toBeVisible()
-    await alice.evaluate(`(() => {
-      document.querySelector('.new-messages button').click()
-      document.querySelector('.messages li:last-child').style.paddingBottom = '320px'
-    })()`)
+    await pill.evaluate((button) => {
+      if (!(button instanceof HTMLButtonElement)) throw new Error('Expected the scroll-to-bottom button')
+      button.click()
+      document.querySelector<HTMLElement>('.messages li:last-child')!.style.paddingBottom = '320px'
+    })
     await expectBottom()
 
     await scrollUp()

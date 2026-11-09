@@ -22,6 +22,8 @@ export default defineConfig({
     'gif-fixture.spec.ts',
     'image-viewer.fixture.spec.ts',
     'permissions.fixture.spec.ts',
+    'location-preview.fixture.spec.ts',
+    'location-preview.fixture.spec.ts',
     'call-lifecycle.fixture.spec.ts',
     'maps.fixture.spec.ts',
   ],
