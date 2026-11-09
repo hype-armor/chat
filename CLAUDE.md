@@ -39,6 +39,8 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   permit inline rendering. Run `gif-fixture.spec.ts` with the isolated fixture config.
 - Chat drafts use encrypted device-local worker storage (ADR-0039), not UI browser storage.
   Keep drafts outside backups and sync. Clear only the accepted draft revision, never by text equality.
+- Persist upload retry work before publishing `sending`. History recovery must not classify an active
+  retry as an unaccepted send. Keep retries in the core worker and retain sealed bytes for resumption.
 - Quoted replies resolve originals only within their conversation in the worker
   and verify the encrypted content hash; outer envelope IDs are not authenticated.
   Typing indicators use encrypted, expiring events, not history or persistent retries

@@ -2828,8 +2828,14 @@ export class Engine {
     if (conv.status) throw new Error("You're no longer in this conversation")
     const failed = (await this.stored(conversationId)).find((m) => m.id === messageId && m.status === 'failed')
     if (failed?.file && !failed.file.blobId) {
-      // The upload failed: start over from the sealed copy kept here.
-      await this.exclusive(() => this.setStatus(conversationId, messageId, 'sending'))
+      // Reserve durable work and publish sending under one lock. Reconnect
+      // cleanup must not observe the reservation with the old failed status.
+      await this.exclusive(async () => {
+        this.state.transfers = this.state.transfers.filter((transfer) => transfer.messageId !== messageId)
+        this.state.transfers.push({ conversationId, messageId, kind: 'upload' })
+        await this.persist()
+        await this.setStatus(conversationId, messageId, 'sending')
+      })
       void this.uploadAndSend(conversationId, messageId)
       return
     }
