@@ -1,4 +1,4 @@
-import { test, expect, type Page, type Locator } from '@playwright/test'
+import { test, expect, type Page, type Locator } from './fixtures'
 
 test.skip(!process.env.E2E_UI_FIXTURES, 'runs only in the isolated UI fixture project')
 
@@ -16,7 +16,9 @@ async function open(page: Page, width = 390) {
 }
 async function menu(page: Page, row: Locator, scope: 'me' | 'everyone') {
   await row.focus()
+  await expect(row).toBeFocused()
   await row.press('Shift+F10')
+  await expect(row).toHaveAttribute('aria-expanded', 'true')
   await page.getByRole('menuitem', { name: `Delete for ${scope}`, exact: true }).click()
   return page.getByRole('dialog', { name: `Delete for ${scope}?`, exact: true })
 }
@@ -255,9 +257,23 @@ test('an open menu and confirmation expire at the inclusive deadline plus 1ms', 
   await page.clock.runFor(1)
   await expect(page.getByRole('menuitem', { name: 'Delete for everyone', exact: true })).toHaveCount(0)
   await page.keyboard.press('Escape')
+  // Appending fixture data does not mean its asynchronous history read has rendered.
+  await action(page, 'holdMessages')
   await action(page, 'ownDeletionMessage', { deadline: start + 2000 })
-  const dialog = await menu(page, page.getByTestId('message').last(), 'everyone')
-  await page.clock.runFor(1000)
+  await expect.poll(() => page.evaluate(() => (window as unknown as { interactionFixture: { historyPending(): boolean } }).interactionFixture.historyPending())).toBe(true)
+  await expect(page.getByTestId('message')).toHaveCount(1)
+  // Negative control: until history arrives, last() still selects the expired row.
+  await row.focus(); await row.press('Shift+F10')
+  await expect(row).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.getByRole('menuitem', { name: 'Delete for everyone', exact: true })).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await action(page, 'releaseMessages')
+  await expect(page.getByTestId('message')).toHaveCount(2)
+  const secondRow = page.getByTestId('message').nth(1)
+  const dialog = await menu(page, secondRow, 'everyone')
+  await page.clock.runFor(999)
+  await expect(dialog.getByRole('button', { name: 'Delete for everyone', exact: true })).toBeEnabled()
+  await page.clock.runFor(1)
   await expect(dialog.getByRole('button', { name: 'Delete for everyone', exact: true })).toBeDisabled()
   await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
 })

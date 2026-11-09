@@ -85,7 +85,9 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   Reply actions require worker-confirmed eligibility. Own sends reach the
   bottom; incoming messages must not displace a reader who scrolled up.
   Map error fallbacks must preserve map dimensions so dialog controls do not move
-  during activation.
+  during activation. Fixture data mutations do not guarantee rendered rows. Await
+  the intended row identity/count before focusing it or opening its action menu;
+  a live `last()` locator can still resolve an older row during history refresh.
 - Live sharing has no app-wide banner or layout offset. Keep the conversation-list
   sharing icon, live message card and Stop sharing control. The Conversation menu
   must offer Stop sharing location for active shares, even with an expired or
