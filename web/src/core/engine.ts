@@ -125,7 +125,7 @@ import {
   updateDue,
 } from './live'
 import { type MediaTransformOptions, frameTransform } from './media'
-import { CALL_KINDS, type CallEnd, type CallRecord, GIVE_UP_MS, STALE_OFFER_MS, callNotice, safeSignalText } from './calls'
+import { CALL_KINDS, type CallEnd, type CallRecord, GIVE_UP_MS, STALE_OFFER_MS, callNotice, isMissedCallNotice, safeSignalText } from './calls'
 import { acceptsGroupInfo, designatedCommitter, isGroupView, parseAdmins } from './roles'
 import { SecureStore } from './storage'
 import { TypingClock, TypingLeases, TYPING_REFRESH_MS, TYPING_TTL_MS } from './typing'
@@ -2042,7 +2042,9 @@ export class Engine {
   private refreshDeletionPreview(conversationId: string, list: StoredMessage[]) {
     const conv = this.conv(conversationId)
     if (!conv) return
-    const last = list.filter((m) => !m.hidden && !m.reactionEvent && m.kind !== 'notice').reduce<StoredMessage | undefined>((latest, m) => !latest || m.sentAt >= latest.sentAt ? m : latest, undefined)
+    // History reads must preserve missed-call summaries, including pre-deletion records.
+    // Other notices and reaction controls never become sidebar previews.
+    const last = list.filter((m) => !m.hidden && !m.reactionEvent && (m.kind !== 'notice' || isMissedCallNotice(m.text))).reduce<StoredMessage | undefined>((latest, m) => !latest || m.sentAt >= latest.sentAt ? m : latest, undefined)
     conv.lastText = !last ? undefined : last.deleted ? 'Message deleted' : last.live ? 'Live location' : last.location ? 'Location' : last.file ? [attachmentLabel(last.file.mime, last.file.name, last.file.voiceNote), last.text].filter(Boolean).join(': ') : last.text
     this.deletionPreviewsReady.add(conversationId)
   }

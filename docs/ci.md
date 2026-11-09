@@ -59,8 +59,8 @@ scripts/ci/wasm-types/chat_core.d.ts
 
 This is a type contract, not a JavaScript implementation or a cryptographic mock.
 The early focused unit set does not import the generated runtime. It includes
-pure deletion-binding rules, own-device synchronization parsing, and cached UI
-redaction tests. The workflow graph tests require these focused deletion checks.
+pure deletion-binding rules, own-device synchronization parsing, missed-call
+preview rules, and cached UI redaction tests. The workflow graph tests require these focused deletion checks.
 Later CI builds
 the real WASM package, compares its declaration byte-for-byte with this contract,
 and runs the full unit suite without exclusions. Do not replace those later

@@ -53,6 +53,48 @@ beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(at + 100) })
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 describe('worker message deletion', () => {
+  for (const video of [false, true]) for (const scope of ['none', 'me', 'everyone'] as const) {
+    it(`preserves a missed ${video ? 'video' : 'voice'} call preview through history, markRead, restart, and ${scope} deletion`, async () => {
+      const s = setup()
+      const notice = video ? '🎥 Missed video call' : '📞 Missed voice call'
+      s.values.set(historyKey, [{ ...original, text: 'hi' }])
+      s.engine['state'].conversations[conversation].lastText = 'hi'
+      s.engine['calls'].set('call', { conversationId: conversation, outgoing: false, video, startedAt: at })
+      await s.engine['endCall']('call', 'hangup', false)
+      const preview = (engine: Engine) => {
+        const view = engine.view()
+        expect(view.phase).toBe('ready')
+        return view.phase === 'ready' ? view.conversations.find((c) => c.id === conversation)?.lastText : undefined
+      }
+      expect(preview(s.engine)).toBe(notice)
+      expect(s.values.get(historyKey)).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'notice', text: notice })]))
+      await s.rows()
+      expect(preview(s.engine)).toBe(notice)
+      await s.engine.markRead(conversation)
+      expect(preview(s.engine)).toBe(notice)
+      if (scope !== 'none') {
+        await s.engine.deleteMessage(conversation, target, scope)
+        expect(preview(s.engine)).toBe(notice)
+        expect(JSON.stringify(await s.rows())).not.toContain('hi')
+      }
+      await s.engine['persist']()
+      const restarted = setup()
+      restarted.values.clear()
+      for (const [key, value] of s.values) restarted.values.set(key, structuredClone(value))
+      restarted.engine['state'] = structuredClone(s.values.get('app')) as Engine['state']
+      await restarted.rows()
+      await restarted.engine.markRead(conversation)
+      expect(preview(restarted.engine)).toBe(notice)
+      // Other call notices do not replace the established missed-call preview.
+      await restarted.engine['appendMessage'](conversation, { id: 'bb'.repeat(16), from: '', kind: 'notice', text: '📞 Declined voice call', sentAt: at + 101, status: 'received' })
+      expect(preview(restarted.engine)).toBe(notice)
+      // A later ordinary message must still become the preview.
+      await restarted.engine['appendMessage'](conversation, { id: 'cc'.repeat(16), from: peer, text: 'newer message', sentAt: at + 102, status: 'received' })
+      await restarted.rows()
+      expect(preview(restarted.engine)).toBe('newer message')
+    })
+  }
+
   it('hides legacy Me history offline without reply permission, membership, or a network send', async () => {
     const s = setup()
     s.values.set(historyKey, [{ ...original, contentHash: undefined, from: peer }])

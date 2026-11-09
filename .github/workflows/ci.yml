@@ -75,7 +75,7 @@ jobs:
           src/core/typing.test.ts src/core/commits.test.ts src/core/receipts.test.ts
           src/core/roles.test.ts src/core/live.test.ts src/core/mp4.test.ts
           src/core/deletions.test.ts src/core/me-deletion-sync.test.ts
-          src/core/devices.test.ts src/ui/deletion.test.ts
+          src/core/devices.test.ts src/core/calls.test.ts src/ui/deletion.test.ts
 
   # Stage 2: Clippy needs compilation, so every cheap check gates it.
   rust-checks:

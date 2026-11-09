@@ -47,7 +47,9 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   and immutable retry intent before erasing content. Never reconstruct legacy
   hashes, expose tombstone internals to UI, or let replay/media/draft callbacks
   restore deleted content. Transport capsules are encrypted, minimal, and excluded
-  from history, UI, search, downloads, and backup.
+  from history, UI, search, downloads, and backup. Rebuilt sidebar previews must
+  preserve missed-call notices, exclude other notices/reaction controls, and honor
+  deletion tombstones.
 - Storage writes must reserve ciphertext bytes in the shared quota ledger before object-store I/O
   (ADR-0040). Release charges only after confirmed deletion and fenced writers. Account send
   limits must remain inside the authorized send transaction. Operator policy changes must use
