@@ -7,7 +7,22 @@ if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Inv
 const origin = `http://127.0.0.1:${port}`
 export default defineConfig({
   testDir: 'e2e',
-  testMatch: ['composer-spacing.spec.ts', 'message-interactions.spec.ts', 'link-actions.spec.ts', 'draft-storage.spec.ts', 'fixture-scroll.spec.ts', 'issue132-chat.fixture.spec.ts', 'responsive-details.spec.ts', 'details-priority.spec.ts', 'storage-usage.fixture.spec.ts', 'image-viewer.fixture.spec.ts', 'permissions.fixture.spec.ts', 'maps.fixture.spec.ts'],
+  testMatch: [
+    'quality-of-life.spec.ts',
+    'composer-spacing.spec.ts',
+    'message-interactions.spec.ts',
+    'link-actions.spec.ts',
+    'draft-storage.spec.ts',
+    'fixture-scroll.spec.ts',
+    'issue132-chat.fixture.spec.ts',
+    'responsive-details.spec.ts',
+    'details-priority.spec.ts',
+    'storage-usage.fixture.spec.ts',
+    'gif-fixture.spec.ts',
+    'image-viewer.fixture.spec.ts',
+    'permissions.fixture.spec.ts',
+    'maps.fixture.spec.ts',
+  ],
   workers: 1,
   use: { baseURL: origin },
   projects: [

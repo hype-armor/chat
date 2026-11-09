@@ -1,4 +1,4 @@
-import { type KeyboardEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react'
+import { type KeyboardEvent, type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 
 export type MenuItem = {
   label: string
@@ -31,10 +31,53 @@ export function Menu({
     trigger.current?.focus()
   }
 
+  useLayoutEffect(() => {
+    if (!open) return
+    const place = () => {
+      const element = menu.current
+      const anchor = trigger.current
+      if (!element || !anchor) return
+      element.style.maxHeight = ''
+      const bounds = element.getBoundingClientRect()
+      const button = anchor.getBoundingClientRect()
+      const cssMaximum = parseFloat(getComputedStyle(element).maxHeight)
+      const viewport = window.visualViewport
+      const top = viewport?.offsetTop ?? 0
+      const bottom = top + (viewport?.height ?? window.innerHeight)
+      // Preserve upward-opening attachment/call menus. Bound either placement
+      // to the visible viewport instead of clipping the final keyboard actions.
+      const available = bounds.bottom <= button.top
+        ? bounds.bottom - top - 8
+        : bottom - bounds.top - 8
+      const maximum = Number.isFinite(cssMaximum) ? Math.min(available, cssMaximum) : available
+      element.style.maxHeight = `${Math.max(0, maximum)}px`
+      if (document.activeElement instanceof HTMLElement && element.contains(document.activeElement)) {
+        document.activeElement.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+      }
+    }
+    place()
+    let frame: number | undefined
+    const schedule = () => {
+      if (frame !== undefined) return
+      frame = requestAnimationFrame(() => { frame = undefined; place() })
+    }
+    window.addEventListener('resize', schedule)
+    window.visualViewport?.addEventListener('resize', schedule)
+    window.visualViewport?.addEventListener('scroll', schedule)
+    return () => {
+      if (frame !== undefined) cancelAnimationFrame(frame)
+      window.removeEventListener('resize', schedule)
+      window.visualViewport?.removeEventListener('resize', schedule)
+      window.visualViewport?.removeEventListener('scroll', schedule)
+    }
+  }, [open, items.length])
+
   useEffect(() => {
     if (!open) return
     const buttons = menu.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"], [role="menuitemcheckbox"]')
-    buttons?.[initialFocus.current === -1 ? buttons.length - 1 : 0]?.focus()
+    const first = buttons?.[initialFocus.current === -1 ? buttons.length - 1 : 0]
+    first?.focus({ preventScroll: true })
+    first?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
     const outside = (event: Event) => {
       // An outside gesture can open another menu. Do not steal its focus.
       if (event.target instanceof Node && !root.current?.contains(event.target)) setOpen(false)
@@ -80,7 +123,8 @@ export function Menu({
         return
     }
     event.preventDefault()
-    buttons[next]?.focus()
+    buttons[next]?.focus({ preventScroll: true })
+    buttons[next]?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
   }
 
   return (
