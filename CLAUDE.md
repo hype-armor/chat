@@ -73,7 +73,8 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   clear the current source on live stop/expiry, but do not let an old-session stop clear a newer unrelated share.
   Retain source-device provenance; authorize stops by canonical peer account/session, including another current authenticated peer device.
   Same-member rekeys/device addition preserve live consent. Prune removed/ineligible sources without permanent session stops;
-  retain explicit stop/block tombstones. Run lazy lookup outside the receive lock; re-enter `exclusive()` only to validate and publish.
+  retain explicit stop/block tombstones. Ordering and tombstone lookups must reject inherited records, including after JSON restore.
+  Run lazy lookup outside the receive lock; re-enter `exclusive()` only to validate and publish.
   Never restore older labels as fallback or reconstruct headers on history load, request acceptance, unblock, or restore.
   Clear old global consent/caches without migration broadcasts. Retain queued MLS ciphertext to avoid ratchet gaps.
   Keep derived caches account/conversation-scoped and outside backup/sync; preserve approximate wording and GeoNames attribution.

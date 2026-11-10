@@ -516,14 +516,32 @@ export class Engine {
   }
 
   private localityOrder(conversationId: string) {
-    this.state.localityOrder ??= {}
-    return this.state.localityOrder[conversationId] ??= { at: 0, closed: {} }
+    // JSON/structured-clone restores ordinary objects. Copy own entries into
+    // a dictionary, and never return a restored or inherited record directly.
+    const saved = Object.hasOwn(this.state, 'localityOrder') ? this.state.localityOrder : undefined
+    const records: NonNullable<State['localityOrder']> = Object.assign(Object.create(null), saved)
+    const candidate = Object.hasOwn(records, conversationId) ? records[conversationId] : undefined
+    const previous = candidate && typeof candidate === 'object' ? candidate : undefined
+    const at = previous && Object.hasOwn(previous, 'at') && Number.isSafeInteger(previous.at) && previous.at >= 0 ? previous.at : 0
+    const savedClosed = previous && Object.hasOwn(previous, 'closed') && previous.closed && typeof previous.closed === 'object' ? previous.closed : undefined
+    const closed: Record<string, number> = Object.assign(Object.create(null), savedClosed)
+    const order = { at, closed }
+    Object.defineProperty(records, conversationId, { value: order, enumerable: true, configurable: true, writable: true })
+    this.state.localityOrder = records
+    return order
+  }
+
+  private closeLocalitySource(order: { closed: Record<string, number> }, source: string, sentAt: number) {
+    const previous = Object.hasOwn(order.closed, source) ? order.closed[source] : 0
+    Object.defineProperty(order.closed, source, {
+      value: Math.max(previous, sentAt), enumerable: true, configurable: true, writable: true,
+    })
   }
 
   private forgetLocality(conversationId: string, closeSession = false) {
     const order = this.localityOrder(conversationId)
     const current = this.headerLocalities.get(conversationId)
-    if (closeSession && current?.sessionId) order.closed[this.localitySession(current.from, current.sessionId)] = current.sentAt
+    if (closeSession && current?.sessionId) this.closeLocalitySource(order, this.localitySession(current.from, current.sessionId), current.sentAt)
     order.at = Math.max(order.at, Math.floor(this.localityClock.now()))
     this.headerLocalities.delete(conversationId)
   }
@@ -610,7 +628,7 @@ export class Engine {
     if (live.stopped) {
       // applyLive authorizes stops by peer account and session, not point device.
       const closedSource = this.localitySession(from, sessionId)
-      order.closed[closedSource] = Math.max(order.closed[closedSource] ?? 0, sentAt)
+      this.closeLocalitySource(order, closedSource, sentAt)
       order.at = Math.max(order.at, sentAt)
       const current = this.headerLocalities.get(conversationId)
       if (current?.from === from && current.sessionId === sessionId) {

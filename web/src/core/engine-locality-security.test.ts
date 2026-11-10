@@ -303,6 +303,97 @@ describe('explicit location source security', () => {
     expect(locality()).toBeUndefined()
   })
 
+  it.each(['__proto__', 'constructor', 'prototype'])('isolates the %s ordering key from built-in prototypes', (key) => {
+    const { engine } = setup()
+    const prototypeAt = Object.getOwnPropertyDescriptor(Object.prototype, 'at')
+    const constructorAt = Object.getOwnPropertyDescriptor(Object, 'at')
+    const prototypeBefore = Object.getOwnPropertyDescriptors(Object.prototype)
+    const constructorBefore = Object.getOwnPropertyDescriptors(Object)
+    try {
+      engine['state'].localityOrder = {}
+      engine['forgetLocality'](key)
+      const records = engine['state'].localityOrder!
+      expect(Object.getPrototypeOf(records)).toBeNull()
+      expect(Object.hasOwn(records, key)).toBe(true)
+      expect(records[key].at).toBe(NOW)
+      expect(Object.getPrototypeOf(records[key].closed)).toBeNull()
+      expect(Object.getOwnPropertyDescriptors(Object.prototype)).toEqual(prototypeBefore)
+      expect(Object.getOwnPropertyDescriptors(Object)).toEqual(constructorBefore)
+    } finally {
+      // A failing regression must not leave the test process polluted.
+      if (prototypeAt) Object.defineProperty(Object.prototype, 'at', prototypeAt)
+      else Reflect.deleteProperty(Object.prototype, 'at')
+      if (constructorAt) Object.defineProperty(Object, 'at', constructorAt)
+      else Reflect.deleteProperty(Object, 'at')
+    }
+  })
+
+  it.each(['state', 'outer', 'record'] as const)('ignores inherited %s ordering state without mutating its owner', (layer) => {
+    const { engine } = setup()
+    const inherited = Object.freeze({ at: NOW - 1000, closed: Object.freeze({ old: NOW - 2000 }) })
+    if (layer === 'state') Object.setPrototypeOf(engine['state'], { localityOrder: { [conversationId]: inherited } })
+    else engine['state'].localityOrder = layer === 'outer'
+      ? Object.create({ [conversationId]: inherited })
+      : { [conversationId]: Object.create(inherited) }
+    const order = engine['localityOrder'](conversationId)
+    expect(order.at).toBe(0)
+    expect(Object.keys(order.closed)).toEqual([])
+    engine['forgetLocality'](conversationId)
+    expect(inherited).toEqual({ at: NOW - 1000, closed: { old: NOW - 2000 } })
+    expect(engine['state'].localityOrder![conversationId].at).toBe(NOW)
+  })
+
+  it('ignores inherited closed records while retaining own persisted tombstones', () => {
+    const { engine } = setup()
+    const closed = Object.assign(Object.create({ constructor: NOW - 1, prototype: NOW - 2, ['__proto__']: NOW - 3 }), {
+      [peer + ':live:' + sessionId]: NOW - 4,
+    })
+    engine['state'].localityOrder = { [conversationId]: { at: NOW - 1, closed } }
+    const order = engine['localityOrder'](conversationId)
+    expect(Object.getPrototypeOf(order.closed)).toBeNull()
+    expect(order.closed.constructor).toBeUndefined()
+    expect(order.closed.prototype).toBeUndefined()
+    expect(order.closed.__proto__).toBeUndefined()
+    expect(order.closed[peer + ':live:' + sessionId]).toBe(NOW - 4)
+  })
+
+  it('roundtrips ordinary persisted ordering and prototype-named tombstones without prototype changes', async () => {
+    const { engine, values } = setup()
+    const prototypeBefore = Object.getOwnPropertyDescriptors(Object.prototype)
+    const saved = JSON.parse(JSON.stringify({
+      [conversationId]: { at: NOW - 10, closed: { [peer + ':live:' + sessionId]: NOW - 20 } },
+      ['__proto__']: { at: NOW - 30, closed: {} },
+      constructor: { at: NOW - 40, closed: {} },
+      prototype: { at: NOW - 50, closed: {} },
+    })) as NonNullable<Engine['state']['localityOrder']>
+    // JSON.parse creates ordinary own properties, including these special keys.
+    const special = JSON.parse('{"__proto__":1,"constructor":2,"prototype":3}') as Record<string, number>
+    saved[conversationId].closed = { ...saved[conversationId].closed, ...special }
+    engine['state'].localityOrder = saved
+    const order = engine['localityOrder'](conversationId)
+    expect(order.at).toBe(NOW - 10)
+    expect(order.closed[peer + ':live:' + sessionId]).toBe(NOW - 20)
+    expect(Object.keys(order.closed)).toEqual([peer + ':live:' + sessionId, '__proto__', 'constructor', 'prototype'])
+    engine['closeLocalitySource'](order, '__proto__', NOW)
+    engine['closeLocalitySource'](order, 'constructor', NOW + 1)
+    engine['closeLocalitySource'](order, 'prototype', NOW + 2)
+    await engine['persist']()
+    const stored = values.get('app') as Engine['state']
+    engine['state'].localityOrder = structuredClone(stored.localityOrder)
+    const restored = engine['localityOrder'](conversationId)
+    expect(restored.at).toBe(NOW - 10)
+    expect(restored.closed[peer + ':live:' + sessionId]).toBe(NOW - 20)
+    expect(restored.closed.__proto__).toBe(NOW)
+    expect(restored.closed.constructor).toBe(NOW + 1)
+    expect(restored.closed.prototype).toBe(NOW + 2)
+    expect(Object.getPrototypeOf(engine['state'].localityOrder)).toBeNull()
+    expect(Object.getPrototypeOf(restored.closed)).toBeNull()
+    expect(engine['localityOrder']('__proto__').at).toBe(NOW - 30)
+    expect(engine['localityOrder']('constructor').at).toBe(NOW - 40)
+    expect(engine['localityOrder']('prototype').at).toBe(NOW - 50)
+    expect(Object.getOwnPropertyDescriptors(Object.prototype)).toEqual(prototypeBefore)
+  })
+
   it('resets obsolete and extra locality fields in the real restore preparation path', async () => {
     const { engine, receive, locality } = setup()
     vi.spyOn(lookup, 'lookupLocality').mockResolvedValue(place)

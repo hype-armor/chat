@@ -125,6 +125,8 @@ Migration cannot retract information that a recipient already received.
 
 Keep derived header caches and their ordering state account-scoped and conversation-scoped.
 If persisted, use encrypted device-local worker storage.
+Restored ordering and tombstone dictionaries must accept only own entries and must not return inherited records.
+Rebuild records without prototype-backed dynamic writes, including after JSON or structured-clone restores.
 Exclude these derived values from backup and device sync, including restore paths with obsolete or extra fields.
 Do not reconstruct derived headers when loading retained history, accepting a request, unblocking a contact, or restoring a backup.
 A fresh eligible authenticated location message or live update can establish a new header after those transitions.
