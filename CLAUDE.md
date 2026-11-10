@@ -56,6 +56,7 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   origins. Accuracy areas must use the reported radius in metres and update with live fixes.
   Preserve account-scoped conversation reading positions across navigation. Keep the
   scroll-to-bottom chevron available whenever the viewport is not at the bottom.
+  Put derived locality below the contact name, not inline; each line must use the available header width independently.
   Image viewers must use worker-opened attachments, make background regions inert,
   release object URLs, and yield focus to incoming call dialogs.
 - Live sharing has no app-wide banner or layout offset. Keep the conversation-list

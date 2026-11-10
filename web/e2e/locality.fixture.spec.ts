@@ -5,6 +5,7 @@ import { messages } from './support'
 test.skip(!process.env.E2E_UI_FIXTURES, 'use playwright.fixtures.config.ts; per-contact UI contracts only, not lookup or encrypted delivery')
 
 type GeoState = { watches: number; gets: number; clears: number[]; fix(): void; visible(value: boolean): void; restore(): void }
+type HeaderViewportWindow = Window & { localityViewport?: { resize(height: number, offsetTop: number): void; restore(): void } }
 type Activity = {
   locationSends: { conversationId: string; location: { latitude: number; longitude: number; accuracyM: number } }[]
   liveStarts: { conversationId: string; durationMs: number | null }[]
@@ -195,7 +196,117 @@ for (const width of [390, 1024]) {
   })
 }
 
-for (const width of [320, 390, 1280]) {
+for (const width of [320, 390, 393, 1280]) {
+  test(`locality stays below the contact name with usable header actions (${width}px)`, async ({ page }) => {
+    const title = width === 393 ? 'Echo (test bot)' : 'Bob Montgomery with a very long contact name'
+    await page.setViewportSize({ width, height: 844 })
+    await page.addInitScript(({ width }) => {
+      const descriptor = Object.getOwnPropertyDescriptor(window, 'visualViewport')
+      const viewport = Object.assign(new EventTarget(), { width, height: 844, offsetTop: 0, scale: 1 })
+      Object.defineProperty(window, 'visualViewport', { configurable: true, value: viewport })
+      ;(window as HeaderViewportWindow).localityViewport = {
+        resize(height, offsetTop) {
+          Object.assign(viewport, { height, offsetTop })
+          viewport.dispatchEvent(new Event('resize'))
+          viewport.dispatchEvent(new Event('scroll'))
+        },
+        restore() {
+          if (descriptor) Object.defineProperty(window, 'visualViewport', descriptor)
+          else Reflect.deleteProperty(window, 'visualViewport')
+          delete (window as HeaderViewportWindow).localityViewport
+        },
+      }
+    }, { width })
+    try {
+      await installGeo(page)
+      await page.route('**/v1/**', (route) => route.abort('blockedbyclient'))
+      await page.goto(`/e2e/interactions-fixture.html?${new URLSearchParams({ title })}`)
+      await page.getByRole('navigation', { name: 'Conversations', exact: true }).getByRole('button', { name: width === 393 ? /Echo \(test bot\)/ : /Bob Montgomery/ }).click()
+      await setLocality(page, 1)
+      const header = page.locator('.conversation-bar')
+      const name = header.getByRole('button', { name: 'Contact details', exact: true })
+      const trigger = header.getByRole('button', { name: 'Conversation menu', exact: true })
+      for (const { height, offsetTop } of [{ height: 844, offsetTop: 0 }, { height: 320, offsetTop: 0 }, { height: 240, offsetTop: 140 }]) {
+        await page.evaluate(({ height, offsetTop }) => (window as HeaderViewportWindow).localityViewport!.resize(height, offsetTop), { height, offsetTop })
+        await expect(page.locator('html')).toHaveCSS('--app-height', `${height}px`)
+        await expect(page.locator('html')).toHaveCSS('--app-top', `${offsetTop}px`)
+        await expect(name).toHaveAccessibleDescription(`${title} Near Austin, TX`)
+        await expect(trigger).toHaveAccessibleDescription(`${title} Near Austin, TX`)
+        await expect.poll(() => header.evaluate((header) => {
+          const heading = header.querySelector<HTMLElement>('.conversation-name')!
+          const locality = header.querySelector<HTMLElement>('.issue132-recipient-locality')!
+          const title = header.querySelector('.issue132-recipient-details')!.getBoundingClientRect()
+          const actions = header.querySelector('.header-actions')!.getBoundingClientRect()
+          const bounds = header.getBoundingClientRect()
+          const nameBox = heading.getBoundingClientRect()
+          const localityBox = locality.getBoundingClientRect()
+          return {
+            stacked: localityBox.top >= nameBox.bottom - 0.5,
+            aligned: Math.abs(localityBox.left - nameBox.left) <= 1,
+            independentRows: Math.abs(localityBox.width - nameBox.width) <= 1,
+            localityReadable: locality.scrollWidth <= locality.clientWidth,
+            nameHasWidth: nameBox.width > 0,
+            separateActions: title.right <= actions.left + 0.5,
+            actionsInside: actions.left >= bounds.left && actions.right <= bounds.right + 0.5 && actions.top >= bounds.top && actions.bottom <= bounds.bottom + 0.5,
+            noHorizontalOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+          }
+        })).toEqual({ stacked: true, aligned: true, independentRows: true, localityReadable: true, nameHasWidth: true, separateActions: true, actionsInside: true, noHorizontalOverflow: true })
+        if (width === 393 && height === 844 && test.info().project.name === 'chromium') await page.screenshot({ path: test.info().outputPath('stacked-locality-393.png') })
+        if (width === 393) {
+          await expect.poll(() => name.locator('.conversation-name').evaluate((el) => el.scrollWidth - el.clientWidth), {
+            message: 'Echo (test bot) must fit without ellipsis at the screenshot width',
+          }).toBeLessThanOrEqual(0)
+          // Integer scroll widths can hide fractional overflow that still draws an ellipsis.
+          await expect.poll(() => name.locator('.conversation-name').evaluate((el) => {
+            const range = document.createRange()
+            range.selectNodeContents(el)
+            return range.getBoundingClientRect().width - el.getBoundingClientRect().width
+          }), { message: 'The complete Echo name must fit its fractional layout box' }).toBeLessThanOrEqual(0)
+        }
+        await trigger.focus()
+        await trigger.press('ArrowDown')
+        const menu = page.getByRole('menu', { name: 'Conversation menu', exact: true })
+        for (const label of ['Voice call', 'Video call']) {
+          const inline = header.getByRole('button', { name: label, exact: true })
+          const action = menu.getByRole('menuitem', { name: label, exact: true })
+          await expect.poll(async () => (await inline.count()) + (await action.count())).toBe(1)
+          if (await inline.count()) await expect(inline).toBeVisible()
+          else await expect(action).toBeVisible()
+          if (width === 320) await expect(action).toHaveCount(1)
+          if (width === 1280) await expect(inline).toHaveCount(1)
+        }
+        await menu.getByRole('menuitemcheckbox', { name: 'Typing indicators', exact: true }).press('End')
+        const last = menu.getByRole('menuitem', { name: 'Block', exact: true })
+        await expect(last).toBeFocused()
+        await expect.poll(async () => {
+          const popup = (await menu.boundingBox())!
+          const focused = (await last.boundingBox())!
+          return popup.y >= offsetTop && popup.y + popup.height <= offsetTop + height && focused.y >= popup.y && focused.y + focused.height <= popup.y + popup.height
+        }).toBe(true)
+        await page.keyboard.press('Escape')
+        await expect(menu).toHaveCount(0)
+        await expect(trigger).toBeFocused()
+      }
+      await page.evaluate(() => (window as HeaderViewportWindow).localityViewport!.resize(844, 0))
+      await expect(page.locator('html')).toHaveCSS('--app-top', '0px')
+      for (const target of ['.conversation-name', '.avatar']) {
+        await name.locator(target).click()
+        const details = page.getByRole('dialog', { name: 'Conversation details', exact: true })
+          .or(page.getByRole('complementary', { name: 'Conversation details', exact: true }))
+        await expect(details).toBeVisible()
+        await expect(page.getByRole('menu', { name: 'Conversation menu', exact: true })).toHaveCount(0)
+        await page.keyboard.press('Escape')
+        await expect(details).toBeHidden()
+        await expect(name).toBeFocused()
+        await expect(trigger).toHaveAccessibleDescription(`${title} Near Austin, TX`)
+      }
+      expect(await geoCounts(page)).toEqual({ watches: 0, gets: 0, clears: [] })
+      await expect(page.getByTestId('fixture-error')).toHaveCount(0)
+    } finally {
+      await page.evaluate(() => (window as HeaderViewportWindow).localityViewport?.restore())
+    }
+  })
+
   test(`worker-supplied approximate locality stays in its direct conversation (${width}px)`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 })
     await installGeo(page)
