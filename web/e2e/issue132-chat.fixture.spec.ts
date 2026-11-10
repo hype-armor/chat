@@ -76,14 +76,45 @@ for (const width of [390, 1280]) {
   })
 }
 
+test('direct details and menu retain recipient context as locality changes', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await openFixture(page)
+  const header = page.locator('.conversation-bar')
+  const name = header.getByRole('button', { name: 'Contact details', exact: true })
+  const trigger = header.getByRole('button', { name: 'Conversation menu', exact: true })
+  await expect(name).toHaveAccessibleName('Contact details')
+  await expect(trigger).toHaveAccessibleName('Conversation menu')
+  await expect(name).toHaveAccessibleDescription('Bob')
+  await expect(trigger).toHaveAccessibleDescription('Bob')
+  for (const [mode, description] of [[1, 'Bob Near Austin, TX'], [2, 'Bob Near Paris, FR'], [0, 'Bob']] as const) {
+    await page.evaluate((mode) => (window as unknown as {
+      interactionFixture: { peerLocality(mode: number): void }
+    }).interactionFixture.peerLocality(mode), mode)
+    await expect(name).toHaveAccessibleDescription(description)
+    await expect(trigger).toHaveAccessibleDescription(description)
+  }
+  await name.click()
+  const details = page.getByRole('dialog', { name: 'Conversation details', exact: true })
+  await expect(details).toBeVisible()
+  await expect(page.getByRole('menu', { name: 'Conversation menu', exact: true })).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await expect(details).toBeHidden()
+  await expect(name).toBeFocused()
+})
+
 test('recipient name opens details while the separate menu keeps keyboard actions', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.route('**/v1/**', (route) => route.abort('blockedbyclient'))
   await page.goto('/e2e/interactions-fixture.html?group=1')
   await page.getByRole('navigation', { name: 'Conversations', exact: true }).getByRole('button', { name: /Bob/ }).click()
+  await page.evaluate(() => (window as unknown as {
+    interactionFixture: { peerLocality(mode: number): void }
+  }).interactionFixture.peerLocality(1))
+  await expect(page.locator('.conversation-bar .issue132-recipient-locality')).toHaveCount(0)
   const name = page.getByRole('button', { name: 'Group info', exact: true })
   await expect(name).toContainText('Bob')
-  await expect(name).toHaveAccessibleDescription(/Bob.*2 people/)
+  await expect(name).toHaveAccessibleName('Group info')
+  await expect(name).toHaveAccessibleDescription('Bob 2 people')
   await name.click()
   const details = page.getByRole('dialog', { name: 'Conversation details', exact: true })
   await expect(details).toBeVisible()
@@ -92,6 +123,8 @@ test('recipient name opens details while the separate menu keeps keyboard action
   await expect(name).toBeFocused()
   const trigger = page.getByRole('button', { name: 'Conversation menu', exact: true })
   await expect(trigger).not.toContainText('Bob')
+  await expect(trigger).toHaveAccessibleName('Conversation menu')
+  await expect(trigger).toHaveAccessibleDescription('Bob 2 people')
   await expect(trigger).toHaveAttribute('aria-haspopup', 'menu')
   await trigger.focus()
   await trigger.press('ArrowDown')

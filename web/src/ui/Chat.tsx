@@ -1487,7 +1487,7 @@ function Conversation({
               </button>
             </>
           )}
-          <Menu key={id} triggerLabel="Conversation menu" triggerContent="⋮" items={menuItems} />
+          <Menu key={id} triggerLabel="Conversation menu" triggerDescriptionId={recipientDescriptionId} triggerContent="⋮" items={menuItems} />
         </div>
       </header>
       {isGroup && active && !request && <OngoingCall core={core} groupCalls={groupCalls} id={id} title={title} />}

@@ -99,7 +99,8 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   preserve stricter CSS height caps. Selected conversations must expose offline/connecting feedback even
   when the phone sidebar is hidden.
 - Contact-name/avatar clicks open the existing contact-details modal for authorized shared-location cards.
-  Keep the conversation menu separate; opening details must not request a position or reconstruct the locality header.
+  Keep the conversation menu separate and retain its accessible recipient/status description.
+  Opening details must not request a position or reconstruct the locality header.
 - Details modals must make background app regions inert, including the sidebar
   and notices outside Chat. Call dialogs take priority and must receive keyboard
   focus without interference from details focus restoration.
