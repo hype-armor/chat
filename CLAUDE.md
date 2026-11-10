@@ -66,9 +66,17 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
 - Browser and OS permission grants belong to the browser. Do not cache fake grants or keep
   idle camera/microphone streams to avoid prompts. Prevent duplicate capture requests and
   stop active or late-granted tracks when the requesting operation ends.
-- Automatic city/state sharing must require device-local opt-in. Resolve coordinates only
-  in the worker with bundled offline data. Send only authenticated encrypted coarse locality,
-  expire it, exclude it from backup/sync, and label nearest-city results as approximate.
+- Derive `Near city, region` only in the worker, with bundled offline data, from the peer's
+  authenticated location/live messages explicitly shared in that conversation (ADR-0042).
+  Existing Send location and live-share controls supply consent; no global watcher or coarse-only broadcast.
+  No own/group/request sources or legacy standalone locality bodies. Cap headers at 1 hour from source time;
+  clear the current source on live stop/expiry, but do not let an old-session stop clear a newer unrelated share.
+  Retain source-device provenance; authorize stops by canonical peer account/session, including another current authenticated peer device.
+  Same-member rekeys/device addition preserve live consent. Prune removed/ineligible sources without permanent session stops;
+  retain explicit stop/block tombstones. Run lazy lookup outside the receive lock; re-enter `exclusive()` only to validate and publish.
+  Never restore older labels as fallback or reconstruct headers on history load, request acceptance, unblock, or restore.
+  Clear old global consent/caches without migration broadcasts. Retain queued MLS ciphertext to avoid ratchet gaps.
+  Keep derived caches account/conversation-scoped and outside backup/sync; preserve approximate wording and GeoNames attribution.
 - Rust Docker build stages must retain the shared BuildKit Cargo lock and CPU-sized
   job budget. Use `scripts/compose-build.sh` for sequential image builds and run
   `scripts/test-compose-build.sh` after changes to build controls.
@@ -89,6 +97,8 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   panned visual viewports. Bound upward menus from their actual popup edge and
   preserve stricter CSS height caps. Selected conversations must expose offline/connecting feedback even
   when the phone sidebar is hidden.
+- Contact-name/avatar clicks open the existing contact-details modal for authorized shared-location cards.
+  Keep the conversation menu separate; opening details must not request a position or reconstruct the locality header.
 - Details modals must make background app regions inert, including the sidebar
   and notices outside Chat. Call dialogs take priority and must receive keyboard
   focus without interference from details focus restoration.

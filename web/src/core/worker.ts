@@ -61,15 +61,6 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
     case 'setTypingIndicators':
       await engine.setTypingIndicators(request.on)
       return { type: 'ok' }
-    case 'setLocalitySharing':
-      await engine.setLocalitySharing(request.account, request.on)
-      return { type: 'ok' }
-    case 'updateLocality':
-      await engine.updateLocality(request.account, request.location)
-      return { type: 'ok' }
-    case 'localityUnavailable':
-      await engine.localityUnavailable(request.account)
-      return { type: 'ok' }
     case 'sendLocation':
       await engine.sendLocation(request.conversationId, request.location)
       return { type: 'ok' }
