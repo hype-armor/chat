@@ -35,7 +35,6 @@ import { useVisualViewport } from './useVisualViewport'
 import { MessageText } from './MessageText'
 import { useMessageScroll, type MessageScrollPosition } from './useMessageScroll'
 import './issue132-chat.css'
-import { AutomaticLocality, AutomaticLocalitySetting } from './AutomaticLocality'
 import { localityLabel } from '../core/locality'
 import type { LocalityInfo } from '../core/protocol'
 import { ConversationDrafts, useConversationDraft } from './useConversationDrafts'
@@ -157,7 +156,6 @@ export function Chat({
   return (
     <>
       <LiveSharing core={core} sharing={view.liveSharing} />
-      <AutomaticLocality core={core} account={view.me.account} enabled={view.localitySharing === true} />
       <CallScreen calls={calls} />
       <GroupCallScreen calls={groupCalls} />
       <div
@@ -230,13 +228,6 @@ export function Chat({
                   relayCalls={view.relayCalls}
                   callStats={view.callStats}
                 />
-                <AutomaticLocalitySetting
-                  core={core}
-                  account={view.me.account}
-                  enabled={view.localitySharing === true}
-                  status={view.localityStatus}
-                  locality={view.myLocality}
-                />
                 <BlockedList core={core} />
               </section>
               <section className="settings-group" aria-labelledby="settings-data">
@@ -249,6 +240,13 @@ export function Chat({
               </section>
               <section className="settings-group" aria-labelledby="settings-about">
                 <h3 id="settings-about">About</h3>
+                <details>
+                  <summary>Location data</summary>
+                  <p className="small muted">
+                    Approximate city names use <a href="https://www.geonames.org/" target="_blank" rel="noopener noreferrer">GeoNames</a> data,
+                    licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a>.
+                  </p>
+                </details>
                 <button type="button" className="setting-row" aria-label="Diagnostics" onClick={onDiagnostics}>
                   <span>Diagnostics</span>
                   <span className="setting-status">Version &amp; self-test</span>
@@ -1207,8 +1205,8 @@ function Conversation({
   const [compactHeader, setCompactHeader] = useState(false)
   const [reported, setReported] = useState(false)
   const active = status === 'active'
-  const openPanel = (p: 'add' | 'info' | 'verify' | 'report') => {
-    if (!panel) detailsTrigger.current = document.activeElement as HTMLElement | null
+  const openPanel = (p: 'add' | 'info' | 'verify' | 'report', trigger?: HTMLElement) => {
+    if (!panel) detailsTrigger.current = trigger ?? document.activeElement as HTMLElement | null
     setDetailsVersion((version) => version + 1)
     setPanel(p)
   }
@@ -1443,32 +1441,30 @@ function Conversation({
           <button type="button" className="link back" onClick={onBack} aria-label="Back to conversations">
             ←
           </button>
-          <div className="issue132-recipient-menu conversation-title">
-            <Menu
-              key={id}
-              triggerLabel="Conversation menu"
-              triggerDescriptionId={recipientDescriptionId}
-              triggerContent={<>
-                <Avatar name={title} id={peer ?? id} account={peer} />
-                <span className="who" id={recipientDescriptionId}>
-                  <span className="issue132-recipient-heading">
-                    <span className="conversation-name" role="heading" aria-level={2}>{title}</span>
-                    {!isGroup && locality && <span
-                      className="issue132-recipient-locality muted small"
-                      title={`${localityLabel(locality)} · Approximate nearby city, not a verified boundary`}
-                    >{localityLabel(locality)}</span>}
-                  </span>
-                  {isGroup && <span className="muted small">{memberCount} people</span>}
-                  <span className="conversation-connection muted" role="status" aria-label="Conversation connection" hidden={connection === 'online'}>
-                    {connection === 'connecting' ? 'Connecting…' : connection === 'offline' ? 'Offline' : ''}
-                  </span>
-                  <VerificationBadge status={verification} />
-                </span>
-                <span className="issue132-name-chevron" aria-hidden="true">⌄</span>
-              </>}
-              items={menuItems}
-            />
-          </div>
+          <button
+            type="button"
+            className="conversation-title issue132-recipient-details"
+            aria-label={isGroup ? 'Group info' : 'Contact details'}
+            aria-describedby={recipientDescriptionId}
+            aria-expanded={panelOpen}
+            onClick={(event) => openPanel(isGroup ? 'info' : 'verify', event.currentTarget)}
+          >
+            <Avatar name={title} id={peer ?? id} account={peer} />
+            <span className="who" id={recipientDescriptionId}>
+              <span className="issue132-recipient-heading">
+                <span className="conversation-name" role="heading" aria-level={2}>{title}</span>
+                {!isGroup && locality && <span
+                  className="issue132-recipient-locality muted small"
+                  title={`${localityLabel(locality)} · Approximate nearby city, not a verified boundary`}
+                >{localityLabel(locality)}</span>}
+              </span>
+              {isGroup && <span className="muted small">{memberCount} people</span>}
+              <span className="conversation-connection muted" role="status" aria-label="Conversation connection" hidden={connection === 'online'}>
+                {connection === 'connecting' ? 'Connecting…' : connection === 'offline' ? 'Offline' : ''}
+              </span>
+              <VerificationBadge status={verification} />
+            </span>
+          </button>
         </div>
         <div className="header-actions">
           {canCall && !compactHeader && (
@@ -1491,6 +1487,7 @@ function Conversation({
               </button>
             </>
           )}
+          <Menu key={id} triggerLabel="Conversation menu" triggerDescriptionId={recipientDescriptionId} triggerContent="⋮" items={menuItems} />
         </div>
       </header>
       {isGroup && active && !request && <OngoingCall core={core} groupCalls={groupCalls} id={id} title={title} />}

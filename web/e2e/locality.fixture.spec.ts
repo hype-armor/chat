@@ -1,152 +1,234 @@
 import { expect, test, type Page } from './fixtures'
-import { openFixture } from './interaction-fixture-support'
+import { fixtureAction, openFixture } from './interaction-fixture-support'
+import { messages } from './support'
 
-test.skip(!process.env.E2E_UI_FIXTURES, 'use playwright.fixtures.config.ts; consent and header fixtures only, no delivery claim')
+test.skip(!process.env.E2E_UI_FIXTURES, 'use playwright.fixtures.config.ts; per-contact UI contracts only, not lookup or encrypted delivery')
 
-type GeoState = { watches: number; gets: number; clears: number[]; fix(id?: number, old?: boolean): void; fail(id?: number): void; visible(value: boolean): void }
-type Activity = { updates: number; unavailable: number; settings: boolean[] }
+type GeoState = { watches: number; gets: number; clears: number[]; fix(): void; visible(value: boolean): void; restore(): void }
+type Activity = {
+  locationSends: { conversationId: string; location: { latitude: number; longitude: number; accuracyM: number } }[]
+  liveStarts: { conversationId: string; durationMs: number | null }[]
+  liveActivity: { updates: number; stops: string[] }
+}
 
 async function installGeo(page: Page) {
   await page.addInitScript(() => {
+    const originalGeo = Object.getOwnPropertyDescriptor(navigator, 'geolocation')
+    const originalVisibility = Object.getOwnPropertyDescriptor(document, 'visibilityState')
     let visible = true
     let watches = 0
     let gets = 0
     const clears: number[] = []
-    const callbacks = new Map<number, { success: PositionCallback; failure: PositionErrorCallback | null | undefined }>()
-    const position = (old = false) => ({ timestamp: Date.now() - (old ? 10 * 60_000 : 0), coords: { latitude: 30.2672, longitude: -97.7431, accuracy: 12 } }) as GeolocationPosition
+    const callbacks = new Map<number, PositionCallback>()
+    const position = () => ({ timestamp: Date.now(), coords: { latitude: 30.2672, longitude: -97.7431, accuracy: 12 } }) as GeolocationPosition
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visible ? 'visible' : 'hidden' })
     Object.defineProperty(navigator, 'geolocation', { configurable: true, value: {
-      watchPosition(success: PositionCallback, failure?: PositionErrorCallback | null) {
-        callbacks.set(++watches, { success, failure })
-        return watches
-      },
+      watchPosition(success: PositionCallback) { callbacks.set(++watches, success); return watches },
       getCurrentPosition(success: PositionCallback) { gets++; success(position()) },
-      clearWatch(id: number) { clears.push(id) },
+      clearWatch(id: number) { clears.push(id); callbacks.delete(id) },
     } })
     Object.assign(window, { localityGeo: {
       get watches() { return watches }, get gets() { return gets }, clears,
-      fix(id = watches, old = false) { callbacks.get(id)?.success(position(old)) },
-      fail(id = watches) { callbacks.get(id)?.failure?.({ code: 1, message: 'Synthetic permission denial' } as GeolocationPositionError) },
+      fix() { callbacks.get(watches)?.(position()) },
       visible(value: boolean) { visible = value; document.dispatchEvent(new Event('visibilitychange')) },
+      restore() {
+        if (originalGeo) Object.defineProperty(navigator, 'geolocation', originalGeo)
+        else Reflect.deleteProperty(navigator, 'geolocation')
+        if (originalVisibility) Object.defineProperty(document, 'visibilityState', originalVisibility)
+        else Reflect.deleteProperty(document, 'visibilityState')
+      },
     } })
   })
 }
-const activity = (page: Page) => page.evaluate(() => (window as unknown as { localityFixture: { activity: Activity } }).localityFixture.activity)
+const activity = (page: Page) => page.evaluate(() => {
+  const fixture = (window as unknown as { interactionFixture: Activity }).interactionFixture
+  return { locationSends: fixture.locationSends, liveStarts: fixture.liveStarts, liveActivity: fixture.liveActivity }
+})
 const geoCounts = (page: Page) => page.evaluate(() => {
   const geo = (window as unknown as { localityGeo: GeoState }).localityGeo
   return { watches: geo.watches, gets: geo.gets, clears: [...geo.clears] }
 })
-async function geoAction(page: Page, action: 'fix' | 'fail' | 'visible', value?: boolean | number, old?: boolean) {
-  await page.evaluate(({ action, value, old }) => {
-    const geo = (window as unknown as { localityGeo: GeoState }).localityGeo
-    if (action === 'visible') geo.visible(value as boolean)
-    else if (action === 'fix') geo.fix(value as number | undefined, old)
-    else geo.fail(value as number | undefined)
-  }, { action, value, old })
+async function visibility(page: Page, visible: boolean) {
+  await page.evaluate((value) => (window as unknown as { localityGeo: GeoState }).localityGeo.visible(value), visible)
 }
-async function openConsent(page: Page) {
-  await installGeo(page)
-  await page.route('**/v1/**', (route) => route.abort('blockedbyclient'))
-  await page.goto('/e2e/locality-fixture.html')
-  await expect(page.getByRole('checkbox', { name: 'Automatic current location', exact: true })).not.toBeChecked()
+async function previewLocation(page: Page) {
+  await page.getByRole('button', { name: 'Add attachment', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Location', exact: true }).click()
+  const preview = page.getByRole('dialog', { name: 'Share this location?', exact: true })
+  await expect(preview).toBeVisible()
+  return preview
+}
+async function setLocality(page: Page, mode: number, conversationId = 'chat') {
+  await page.evaluate(({ mode, conversationId }) => (window as unknown as {
+    interactionFixture: { peerLocality(mode: number, conversationId: string): void }
+  }).interactionFixture.peerLocality(mode, conversationId), { mode, conversationId })
 }
 
-test('automatic locality needs explicit consent and StrictMode does not duplicate the watch', async ({ page }) => {
-  await openConsent(page)
-  expect(await geoCounts(page)).toEqual({ watches: 0, gets: 0, clears: [] })
-  await expect(page.getByText(/Off by default/)).toBeVisible()
-  await expect(page.getByRole('link', { name: 'GeoNames', exact: true })).toHaveAttribute('href', 'https://www.geonames.org/')
-  await expect(page.getByRole('link', { name: 'CC BY 4.0', exact: true })).toHaveAttribute('href', 'https://creativecommons.org/licenses/by/4.0/')
-  const toggle = page.getByRole('checkbox', { name: 'Automatic current location', exact: true })
-  await toggle.check()
-  await expect.poll(async () => (await geoCounts(page)).watches).toBe(1)
-  await geoAction(page, 'fix')
-  await expect(page.getByRole('status')).toHaveText('Sharing: Near Austin, TX')
-  expect((await activity(page)).updates).toBe(1)
-  await toggle.uncheck()
-  await expect.poll(async () => (await geoCounts(page)).clears).toEqual([1])
-  await geoAction(page, 'fix', 1)
-  expect((await activity(page)).updates).toBe(1)
-  expect((await activity(page)).settings).toEqual([true, false])
+test.afterEach(async ({ page }) => {
+  await page.evaluate(() => (window as unknown as { localityGeo?: GeoState }).localityGeo?.restore())
 })
 
-test('foreground watches pause, ignore late fixes, and refresh stationary positions', async ({ page }) => {
+test('navigation, settings and foreground changes never start automatic location sharing', async ({ page }) => {
   await page.clock.install()
-  await openConsent(page)
-  await page.getByRole('checkbox', { name: 'Automatic current location', exact: true }).check()
-  await expect.poll(async () => (await geoCounts(page)).watches).toBe(1)
-  await geoAction(page, 'visible', false)
-  expect((await geoCounts(page)).clears).toEqual([1])
-  await geoAction(page, 'fix', 1)
-  expect((await activity(page)).updates).toBe(0)
-  await page.clock.fastForward(15 * 60_000)
-  expect((await geoCounts(page)).gets).toBe(0)
-  await geoAction(page, 'visible', true)
-  await expect.poll(async () => (await geoCounts(page)).watches).toBe(2)
-  await geoAction(page, 'fix', 1)
-  expect((await activity(page)).updates).toBe(0)
-  await geoAction(page, 'fix', 2)
-  expect((await activity(page)).updates).toBe(1)
-  await page.clock.fastForward(15 * 60_000)
-  expect((await geoCounts(page)).gets).toBe(1)
-  expect((await activity(page)).updates).toBe(2)
+  await installGeo(page)
+  await openFixture(page)
+  await fixtureAction(page, 'addChat')
+  await page.getByRole('button', { name: /Other chat/ }).click()
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  const settings = page.getByRole('navigation', { name: 'Settings', exact: true })
+  await expect(settings.getByText('Automatic current location', { exact: true })).toHaveCount(0)
+  await expect(settings.getByRole('checkbox', { name: /automatic.*location|city.*state/i })).toHaveCount(0)
+  await expect(settings.getByText(/Off by default|Updates expire within 1 hour/)).toHaveCount(0)
+  const attribution = settings.getByRole('link', { name: 'GeoNames', exact: true })
+  await expect(attribution).toBeHidden()
+  await settings.locator('summary').filter({ hasText: 'Location data' }).click()
+  await expect(attribution).toHaveAttribute('href', 'https://www.geonames.org/')
+  await expect(settings.getByRole('link', { name: 'CC BY 4.0', exact: true })).toHaveAttribute('href', 'https://creativecommons.org/licenses/by/4.0/')
+  await visibility(page, false)
+  await page.clock.fastForward(30 * 60_000)
+  await visibility(page, true)
+  expect(await geoCounts(page)).toEqual({ watches: 0, gets: 0, clears: [] })
+  expect(await activity(page)).toMatchObject({ locationSends: [], liveStarts: [] })
+  await expect(page.getByTestId('fixture-error')).toHaveCount(0)
 })
 
-test('permission failure stays latched through hide/show until explicit retry', async ({ page }) => {
-  await openConsent(page)
-  const toggle = page.getByRole('checkbox', { name: 'Automatic current location', exact: true })
-  await toggle.check()
-  await expect.poll(async () => (await geoCounts(page)).watches).toBe(1)
-  await geoAction(page, 'fail')
-  await expect(page.getByRole('status')).toContainText('Current city unavailable')
-  await geoAction(page, 'visible', false)
-  await geoAction(page, 'visible', true)
-  expect((await geoCounts(page)).watches).toBe(1)
-  await geoAction(page, 'fix', 1)
-  expect((await activity(page)).updates).toBe(0)
-  expect((await activity(page)).unavailable).toBe(1)
-  await toggle.uncheck()
-  await toggle.check()
-  await expect.poll(async () => (await geoCounts(page)).watches).toBe(2)
-  await geoAction(page, 'fix', 2)
-  await expect(page.getByRole('status')).toHaveText('Sharing: Near Austin, TX')
+test('preview and one-shot send require the contact action and do not start a watcher', async ({ page }) => {
+  await installGeo(page)
+  await openFixture(page)
+  await fixtureAction(page, 'addChat')
+  expect(await geoCounts(page)).toEqual({ watches: 0, gets: 0, clears: [] })
+  const first = await previewLocation(page)
+  await expect(first).toContainText('Shared only in this conversation.')
+  await expect(first).toContainText('The last point expires after 8 hours without an update.')
+  await expect(first.getByRole('link', { name: 'GeoNames', exact: true })).toHaveCount(0)
+  expect(await activity(page)).toMatchObject({ locationSends: [], liveStarts: [] })
+  await first.getByRole('button', { name: 'Cancel', exact: true }).click()
+  expect(await geoCounts(page)).toEqual({ watches: 0, gets: 1, clears: [] })
+  await page.getByRole('button', { name: /Other chat/ }).click()
+  const second = await previewLocation(page)
+  await second.getByRole('button', { name: 'Send location', exact: true }).click()
+  await expect(second).toBeHidden()
+  expect((await activity(page)).locationSends).toEqual([{
+    conversationId: 'other', location: { latitude: 30.2672, longitude: -97.7431, accuracyM: 12 },
+  }])
+  expect((await activity(page)).liveStarts).toEqual([])
+  expect(await geoCounts(page)).toEqual({ watches: 0, gets: 2, clears: [] })
+  await expect(page.locator('.issue132-recipient-locality')).toHaveCount(0)
 })
 
-test('an old geolocation fix is not forwarded for locality publication', async ({ page }) => {
-  await openConsent(page)
-  await page.getByRole('checkbox', { name: 'Automatic current location', exact: true }).check()
+test('live sharing watches only an explicitly started contact share and retains its stop controls', async ({ page }) => {
+  await installGeo(page)
+  await openFixture(page)
+  await fixtureAction(page, 'addChat')
+  const preview = await previewLocation(page)
+  expect((await geoCounts(page)).watches).toBe(0)
+  expect((await activity(page)).liveStarts).toEqual([])
+  await preview.getByRole('button', { name: '15 min', exact: true }).click()
+  expect((await activity(page)).liveStarts).toEqual([{
+    conversationId: 'chat', durationMs: 15 * 60_000,
+    location: { latitude: 30.2672, longitude: -97.7431, accuracyM: 12 },
+  }])
+  // Only the fake worker's active-share view can authorize the existing watcher.
+  await fixtureAction(page, 'activeLiveShare')
   await expect.poll(async () => (await geoCounts(page)).watches).toBe(1)
-  await geoAction(page, 'fix', 1, true)
-  await expect(page.getByRole('status')).toContainText('Current city unavailable')
-  expect((await activity(page)).updates).toBe(0)
+  await page.evaluate(() => (window as unknown as { localityGeo: GeoState }).localityGeo.fix())
+  await expect.poll(async () => (await activity(page)).liveActivity.updates).toBe(1)
+  const card = page.getByTestId('live-location')
+  await expect(card.getByRole('button', { name: 'Stop sharing', exact: true })).toBeVisible()
+  await expect(card).not.toContainText('temporary grants')
+  await expect(page.locator('.sidebar .live-dot')).toHaveCount(1)
+  await expect(page.locator('.live-banner, .live-sharing-indicators')).toHaveCount(0)
+  await page.getByRole('button', { name: /Other chat/ }).click()
+  await expect(page.getByTestId('live-location')).toHaveCount(0)
+  await expect(page.locator('.issue132-recipient-locality')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Conversation menu', exact: true }).click()
+  await expect(page.getByRole('menuitem', { name: 'Stop sharing location', exact: true })).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: /Bob/ }).click()
+  await page.getByRole('button', { name: 'Conversation menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Stop sharing location', exact: true }).click()
+  await expect.poll(async () => (await geoCounts(page)).clears).toEqual([1])
+  expect((await activity(page)).liveActivity.stops).toEqual(['chat'])
+  await expect(page.locator('.sidebar .live-dot')).toHaveCount(0)
 })
+
+for (const width of [390, 1024]) {
+  test(`contact name/avatar opens only authorized live-location details (${width}px)`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 })
+    await installGeo(page)
+    await openFixture(page)
+    await fixtureAction(page, 'addChat')
+    await page.evaluate(() => (window as unknown as { interactionFixture: { contactLocationMessages(): void } }).interactionFixture.contactLocationMessages())
+    await expect(messages(page)).toHaveCount(6)
+    const name = page.getByRole('button', { name: 'Contact details', exact: true })
+    await name.locator(width === 390 ? '.conversation-name' : '.avatar').click()
+    const details = page.getByRole('dialog', { name: 'Conversation details', exact: true })
+    await expect(details).toHaveAttribute('aria-modal', 'true')
+    await expect(page.locator('.sidebar')).toHaveAttribute('inert', '')
+    await expect(page.locator('.conversation')).toHaveAttribute('inert', '')
+    await expect(page.getByRole('menu', { name: 'Conversation menu', exact: true })).toHaveCount(0)
+    const location = details.getByRole('region', { name: 'Contact live location', exact: true })
+    await expect(location.getByTestId('live-location')).toHaveCount(1)
+    await expect(location).toContainText('30.26720, -97.74310')
+    await expect(location.getByRole('button', { name: 'Stop sharing', exact: true })).toHaveCount(0)
+    // Prior details show live shares only. Do not add a static-location fallback.
+    await expect(details).not.toContainText('40.00000, -75.00000')
+    const map = location.getByTestId('map')
+    const before = (await map.boundingBox())!
+    expect(before.height).toBeCloseTo(224, 2)
+    await page.evaluate(() => (window as unknown as { interactionFixture: { failMap(): void } }).interactionFixture.failMap())
+    await expect(map).toContainText("The map can't be shown in this browser.")
+    const after = (await map.boundingBox())!
+    for (const dimension of ['x', 'y', 'width', 'height'] as const) expect(after[dimension]).toBeCloseTo(before[dimension], 2)
+    await page.keyboard.press('Escape')
+    await expect(details).toBeHidden()
+    await expect(name).toBeFocused()
+    await expect(page.locator('.sidebar')).not.toHaveAttribute('inert')
+    await expect(page.locator('.issue132-recipient-locality')).toHaveCount(0)
+    expect(await geoCounts(page)).toEqual({ watches: 0, gets: 0, clears: [] })
+    if (width <= 640) await page.getByRole('button', { name: 'Back to conversations', exact: true }).click()
+    await page.getByRole('button', { name: /Other chat/ }).click()
+    await page.getByRole('button', { name: 'Contact details', exact: true }).click()
+    await expect(details.getByRole('region', { name: 'Contact live location', exact: true })).toHaveCount(0)
+    await page.keyboard.press('Escape')
+    expect(await geoCounts(page)).toEqual({ watches: 0, gets: 0, clears: [] })
+  })
+}
 
 for (const width of [320, 390, 1280]) {
-  test(`coarse locality appears only beside a direct recipient name (${width}px)`, async ({ page }) => {
+  test(`worker-supplied approximate locality stays in its direct conversation (${width}px)`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 })
+    await installGeo(page)
     await openFixture(page)
-    const setLocality = (mode: number) => page.evaluate((mode) => (window as unknown as {
-      interactionFixture: { peerLocality(mode: number): void }
-    }).interactionFixture.peerLocality(mode), mode)
-    await setLocality(1)
+    await setLocality(page, 1)
+    await fixtureAction(page, 'addChat')
     const header = page.locator('.conversation-bar')
     await expect(header.getByText('Near Austin, TX', { exact: true })).toBeVisible()
     await expect(header.getByText('Near Austin, TX', { exact: true })).toHaveAttribute('title', /Approximate nearby city/)
     await expect(page.getByRole('navigation', { name: 'Conversations', exact: true, includeHidden: true })).not.toContainText('Austin')
     await expect(header.getByRole('heading', { name: 'Bob', exact: true })).toBeVisible()
     expect(await page.locator('html').evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true)
-    await setLocality(2)
-    await expect(header.getByText('Near Paris, FR', { exact: true })).toBeVisible()
-    await setLocality(0)
+    if (width <= 640) await page.getByRole('button', { name: 'Back to conversations', exact: true }).click()
+    await page.getByRole('button', { name: /Other chat/ }).click()
     await expect(header.locator('.issue132-recipient-locality')).toHaveCount(0)
+    await setLocality(page, 2, 'other')
+    await expect(header.getByText('Near Paris, FR', { exact: true })).toBeVisible()
+    if (width <= 640) await page.getByRole('button', { name: 'Back to conversations', exact: true }).click()
+    await page.getByRole('button', { name: /Bob/ }).click()
+    await expect(header.getByText('Near Austin, TX', { exact: true })).toBeVisible()
+    await setLocality(page, 0)
+    await expect(header.locator('.issue132-recipient-locality')).toHaveCount(0)
+    expect(await geoCounts(page)).toEqual({ watches: 0, gets: 0, clears: [] })
   })
 }
 
 test('group headers do not show a locality supplied by a view fixture', async ({ page }) => {
+  await installGeo(page)
   await page.route('**/v1/**', (route) => route.abort('blockedbyclient'))
   await page.goto('/e2e/interactions-fixture.html?group=1')
   await page.getByRole('navigation', { name: 'Conversations', exact: true }).getByRole('button', { name: /Bob/ }).click()
-  await page.evaluate(() => (window as unknown as { interactionFixture: { peerLocality(): void } }).interactionFixture.peerLocality())
+  await setLocality(page, 1)
   await expect(page.locator('.conversation-bar .issue132-recipient-locality')).toHaveCount(0)
+  expect(await geoCounts(page)).toEqual({ watches: 0, gets: 0, clears: [] })
   await expect(page.getByTestId('fixture-error')).toHaveCount(0)
 })

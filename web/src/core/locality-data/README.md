@@ -30,8 +30,15 @@ one line each, sorted by country, region, name and coordinates for stable diffs.
 
 Run `generate.py` with local copies of both source files to update the extract.
 The generator does not download anything. The current JSON uses 1,487,477 bytes,
-or about 467 KB with gzip. The worker loads it only when a person requests an
-automatic locality lookup. The app can precache its generated JavaScript chunk.
+or about 467 KB with gzip. The worker loads it lazily to derive a nearby-city
+header from a peer's authenticated location or live update deliberately shared
+in that conversation. This needs no global setting or additional location fix.
+The app can precache the generated JavaScript chunk.
+Lazy loading and lookup run outside the exclusive receive-processing lock.
+Block, stop, sign-out, and membership processing must not wait for the dataset.
+After lookup, re-enter `exclusive()` only to validate the current source and publish.
+Recheck account, conversation eligibility, source identity, membership, ordering,
+expiry, and stop or block tombstones. Discard stale results.
 
 ## Meaning and privacy
 
@@ -51,8 +58,37 @@ must fit inside that limit. Fixes worse than 5 km produce no result.
 The lookup runs in the core worker. It does not request map tiles or send
 coordinates to this server, GeoNames, or a geocoder. The bundled chunk URL has
 no coordinate-dependent path or parameters. The lookup does not store a trail.
-Sharing a derived label needs separate, explicit encrypted-profile consent.
+[ADR-0042](../../../../docs/adr/0042-conversation-scoped-derived-locality.md)
+limits this lookup to coordinates the peer deliberately shared through the
+existing **Send location** or live-share controls in that conversation.
+Those actions supply consent; there is no global automatic-location service,
+standalone coarse broadcast, or encrypted-profile locality publication.
+Own messages, groups, requests, and other conversations cannot supply a direct
+recipient header. Legacy standalone locality bodies must not supply it either.
+
+The derived header expires within 1 hour of the source's validated original
+timestamp, or sooner when its live session expires. Points retain authenticated
+source-device and session provenance. Within the conversation, stop tombstones
+use the canonical peer account and session, not the source device. Another current
+authenticated device of that account can stop the accepted share. That authorized
+stop clears only a header derived from that account and session. An old-session
+stop must not clear a newer unrelated share. Clearing the current source must not restore an older
+label. History load, request acceptance, unblock, and restore must not reconstruct
+headers from retained messages. Account-scoped and conversation-scoped derived
+caches and ordering state stay outside backup and device sync.
+
+Same-member rekeys and device addition preserve live consent. Removed-device or
+otherwise ineligible point sources are pruned without a permanent session stop.
+Only a fresh eligible authenticated point can establish another header after
+pruning. Explicit stops and block retain tombstones that reject replayed points
+and delayed lookups. Unblock must not remove that protection or reconstruct a header.
+
+Migration clears the former global consent and coarse caches. It creates no
+broadcast. Already queued MLS ciphertext remains ordered to avoid ratchet gaps;
+upgraded recipients consume and ignore legacy locality bodies. Older clients
+can retain previously queued or received locality until its existing expiry.
 
 An app that displays derived labels must also display GeoNames attribution and
-the CC BY 4.0 license link, such as in its location-sharing settings. The UI must
-preserve the approximate meaning and must not imply exact municipal membership.
+the CC BY 4.0 license link in its existing location-sharing interface. This does
+not require a global setting or extra header text. The UI must preserve the
+approximate meaning and must not imply exact municipal membership.

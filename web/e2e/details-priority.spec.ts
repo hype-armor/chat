@@ -6,7 +6,7 @@ test.skip(!process.env.E2E_UI_FIXTURES, 'use playwright.fixtures.config.ts; UI f
 const title = 'Weekend trip with the climbing club'
 const noFrameEncryption = "This browser can't encrypt call media end to end, so calls are off. Use an up-to-date Chrome, Firefox or Safari."
 
-async function openDetails(page: Page, disableEncryption = false) {
+async function openDetails(page: Page, disableEncryption = false, direct = false) {
   if (disableEncryption) {
     // Remove capabilities only. Never polyfill encryption support in a UI test.
     await page.addInitScript(() => {
@@ -16,9 +16,10 @@ async function openDetails(page: Page, disableEncryption = false) {
   }
   await page.setViewportSize({ width: 1024, height: 800 })
   await page.route('**/v1/**', (route) => route.abort('blockedbyclient'))
-  await page.goto(`/e2e/interactions-fixture.html?${new URLSearchParams({ title, group: '1' })}`)
+  await page.goto(`/e2e/interactions-fixture.html?${new URLSearchParams({ title, group: direct ? '0' : '1' })}`)
   await page.getByRole('button', { name: new RegExp(title) }).click()
-  await conversationAction(page, 'Group info')
+  if (direct) await page.getByRole('button', { name: 'Contact details', exact: true }).click()
+  else await conversationAction(page, 'Group info')
   await expect(conversationDetails(page)).toHaveAttribute('aria-modal', 'true')
   const supported = await page.evaluate(() => (window as unknown as {
     interactionFixture: { canEncryptCalls(): boolean }
@@ -43,7 +44,7 @@ for (const { action, disableEncryption } of [
   { action: 'Answer', disableEncryption: true },
 ]) {
   test(`an incoming direct call takes focus from details for keyboard ${action}${disableEncryption ? ' without frame encryption' : ''}`, async ({ page }) => {
-    const supported = await openDetails(page, disableEncryption)
+    const supported = await openDetails(page, disableEncryption, true)
     await incoming(page, false)
     const call = page.getByRole('dialog', { name: `Incoming voice call from ${title}`, exact: true })
     await expect(call).toBeVisible()

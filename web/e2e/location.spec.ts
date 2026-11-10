@@ -200,8 +200,8 @@ test('until-stopped location sharing continues until the sender stops it (FR-LOC
   await alice.getByRole('button', { name: 'Add attachment' }).click()
   await alice.getByRole('menuitem', { name: 'Location', exact: true }).click()
   const preview = alice.getByRole('dialog', { name: 'Share this location?' })
-  await expect(preview).toContainText('Live sharing pauses when this app is closed or in the background.')
-  await expect(preview).toContainText('Recipients remove the last point after 8 hours without an update.')
+  await expect(preview).toContainText('Live updates pause in the background.')
+  await expect(preview).toContainText('The last point expires after 8 hours without an update.')
   await preview.getByRole('button', { name: 'Until stopped' }).click()
 
   const ownCard = messages(alice).getByTestId('live-location')
@@ -216,8 +216,8 @@ test('until-stopped location sharing continues until the sender stops it (FR-LOC
   await expect(card).toContainText('48.85840, 2.29450')
   await expect(card).toHaveCount(1)
 
-  // The recipient menu provides the contact details and shared location.
-  await conversationAction(bob, 'Verify safety number')
+  // The contact name/avatar opens the existing authorized shared-location view.
+  await bob.getByRole('button', { name: 'Contact details', exact: true }).click()
   const details = bob.getByRole('complementary', { name: 'Conversation details' })
   const contactLocation = details.getByRole('region', { name: 'Contact live location' })
   await expect(contactLocation).toBeVisible()

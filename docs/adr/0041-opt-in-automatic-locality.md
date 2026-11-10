@@ -1,10 +1,13 @@
 # ADR-0041: Opt-in automatic approximate locality
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0042](0042-conversation-scoped-derived-locality.md)
 - **Date:** 2026-11-09
 - **Deciders:** Project owner, implementation agents
 - **Related requirements:** FR-LOC-4, issue #132
 - **Builds on:** ADR-0002, ADR-0019, ADR-0026, ADR-0034
+
+> This document records the earlier decision. ADR-0042 replaces its global consent,
+> watcher, and standalone locality publications with derivation from explicit conversation shares.
 
 ## Context
 

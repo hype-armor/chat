@@ -132,7 +132,7 @@ export function ShareLocation({
         <dialog className="share-location" ref={dialog} aria-label="Share this location?" onCancel={close}>
           <MapView core={core} latitude={state.latitude} longitude={state.longitude} accuracyM={state.accuracyM} />
           <p className="small">
-            {formatCoordinates(state)} · ±{state.accuracyM} m. Only the people in this conversation will see it.
+            {formatCoordinates(state)} · ±{state.accuracyM} m. Shared only in this conversation.
           </p>
           <div className="actions">
             <button type="button" onClick={() => void send(state)}>
@@ -147,8 +147,7 @@ export function ShareLocation({
               ))}
             </div>
             <p className="small muted">
-              Live sharing pauses when this app is closed or in the background.
-              Recipients remove the last point after 8 hours without an update.
+              Live updates pause in the background. The last point expires after 8 hours without an update.
             </p>
             <button type="button" className="link" onClick={close}>
               Cancel

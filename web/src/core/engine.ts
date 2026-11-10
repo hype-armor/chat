@@ -108,7 +108,7 @@ import type {
 } from './protocol'
 import { type MediaInfo, isPhoto, isPlayable } from './protocol'
 import { parseStorageUsage } from './storageUsage'
-import { LOCALITY_TTL_MS, LOCALITY_REFRESH_MS, localityLease, visibleLocality, safeLocality, type LocalityLease } from './locality'
+import { LOCALITY_TTL_MS, LOCALITY_CLOCK_TOLERANCE_MS, safeLocality } from './locality'
 import { lookupLocality } from './localityLookup'
 import { isMp4, scrubMp4 } from './mp4'
 import { DEFAULT_MEDIA, autoDownloads, onMobileData } from './policy'
@@ -250,6 +250,8 @@ type PendingCommit = {
 /** An envelope that arrived before the welcome to its conversation. */
 type Early = { conversationId: string; messageId: string; envelope: string }
 
+type HeaderLocality = { source: string; from: string; device: string; sentAt: number; expiresAt: number; sessionId?: string; place?: LocalityPlace }
+
 type State = {
   conversations: Record<string, Conversation>
   /** Account id (hex) → display name from their profile message. */
@@ -283,14 +285,9 @@ type State = {
   /** Whether to send read receipts (FR-MSG-5); delivery receipts always go. */
   readReceipts: boolean
   typingIndicators?: boolean
-  /** Explicit device-local consent. Locality state never enters backup or device sync. */
-  localitySharing?: boolean
-  localityOwn?: LocalityInfo
-  localityStatus?: 'off' | 'locating' | 'ready' | 'unavailable'
-  localitySentAt?: number
+  /** Device-local replay fences only. Derived header places never enter storage. */
   localityTimeFloor?: number
-  localityRemovalPending?: boolean
-  localities?: Record<string, Record<string, LocalityLease>>
+  localityOrder?: Record<string, { at: number; closed: Record<string, number> }>
   /** Calls only through the TURN relay, hiding this device's IP address (FR-CALL-9). */
   relayCalls?: boolean
   /** Opt-in call statistics (ADR-0032): today's tallies, sent once a day. */
@@ -367,8 +364,7 @@ export class Engine {
   private localityTimer?: ReturnType<typeof setTimeout>
   private localityEpoch = 0
   private localityClock = new TypingClock()
-  private localityLookupPending?: { account: string; epoch: number }
-  private localityLastAttempt?: number
+  private headerLocalities = new Map<string, HeaderLocality>()
   /** The page's latest position while this device shares. */
   private liveFix?: LocationInfo
   /** Calls ringing or running, by call id (ADR-0028); not kept across restarts. */
@@ -448,17 +444,9 @@ export class Engine {
       this.state = { ...emptyState(), ...(await this.store.getJson<State>('app')) }
       this.recent = new RecentIds(this.state.seen)
       this.localityClock.now(Math.max(Date.now(), this.state.localityTimeFloor ?? 0))
-      // A restart needs a fresh fix. Never revive a cached place after clock rollback.
-      this.state.localityOwn = undefined
-      this.state.localityStatus = this.state.localitySharing ? 'locating' : 'off'
-      for (const leases of Object.values(this.state.localities ?? {})) {
-        for (const lease of Object.values(leases)) lease.place = undefined
-      }
-      this.scheduleLocalitySweep()
-      if (this.state.localityRemovalPending && !this.state.pendingCommit) {
-        this.queuePendingLocalityRemoval()
-        await this.persist()
-      }
+      // Keep replay fences, but never reconstruct a cached place from history.
+      this.migrateLocality()
+      await this.persist()
       if (this.state.live.length > 0 || this.state.liveSeen.length > 0) this.scheduleLiveSweep()
       this.connect()
     }
@@ -499,9 +487,6 @@ export class Engine {
       alerts: this.state.alerts,
       readReceipts: this.state.readReceipts,
       typingIndicators: this.state.typingIndicators !== false,
-      localitySharing: this.state.localitySharing === true,
-      localityStatus: this.state.localitySharing ? this.state.localityStatus ?? 'locating' : 'off',
-      myLocality: this.state.localitySharing && this.state.localityOwn && this.state.localityOwn.expiresAt > this.localityClock.now() ? this.state.localityOwn : undefined,
       relayCalls: this.state.relayCalls ?? false,
       callStats: !!this.state.callStats,
       backup: this.state.backup ? { lastAt: this.state.backup.lastAt } : undefined,
@@ -517,146 +502,160 @@ export class Engine {
     }
   }
 
-  // ---- opt-in coarse locality (ADR-0041) ----------------------------------
+  // ---- locality from explicitly received location shares -------------------
 
   private localityEligible(conv: Conversation): boolean {
     return !conv.self && !conv.status && !conv.request && !isGroupView(conv) && conv.peers.length === 1 && !this.state.blocked.includes(conv.peers[0])
   }
 
-  private peerLocality(conv: Conversation): LocalityInfo | undefined {
-    const records = this.state.localities?.[conv.id]
-    if (!records || !this.localityEligible(conv)) return undefined
-    const current = new Set(this.memberDevices(conv.id))
-    return visibleLocality(Object.values(records).filter((l) => current.has(l.device)), conv.peers[0], this.localityClock.now())
+  /** Remove obsolete consent and coarse caches, not already encrypted MLS work. */
+  private migrateLocality() {
+    const legacy = this.state as State & Record<string, unknown>
+    for (const key of ['localitySharing', 'localityOwn', 'localityStatus', 'localitySentAt', 'localityRemovalPending', 'localities']) delete legacy[key]
+    this.headerLocalities.clear()
   }
 
-  private localityTime(): number {
-    const now = Math.max(Math.floor(this.localityClock.now()), (this.state.localitySentAt ?? 0) + 1)
-    this.state.localitySentAt = now
-    return now
+  private localityOrder(conversationId: string) {
+    // JSON/structured-clone restores ordinary objects. Copy own entries into
+    // a dictionary, and never return a restored or inherited record directly.
+    const saved = Object.hasOwn(this.state, 'localityOrder') ? this.state.localityOrder : undefined
+    const records: NonNullable<State['localityOrder']> = Object.assign(Object.create(null), saved)
+    const candidate = Object.hasOwn(records, conversationId) ? records[conversationId] : undefined
+    const previous = candidate && typeof candidate === 'object' ? candidate : undefined
+    const at = previous && Object.hasOwn(previous, 'at') && Number.isSafeInteger(previous.at) && previous.at >= 0 ? previous.at : 0
+    const savedClosed = previous && Object.hasOwn(previous, 'closed') && previous.closed && typeof previous.closed === 'object' ? previous.closed : undefined
+    const closed: Record<string, number> = Object.assign(Object.create(null), savedClosed)
+    const order = { at, closed }
+    Object.defineProperty(records, conversationId, { value: order, enumerable: true, configurable: true, writable: true })
+    this.state.localityOrder = records
+    return order
   }
 
-  private queueLocality(conversationId: string, place: LocalityPlace | undefined, sentAt: number, expiresAt = sentAt + LOCALITY_TTL_MS) {
-    const conv = this.state.conversations[conversationId]
-    if (!conv || !this.localityEligible(conv)) return
-    // A cached fix can expire between its initial check and timestamp allocation.
-    if (!Number.isSafeInteger(sentAt) || !Number.isSafeInteger(expiresAt) || expiresAt <= sentAt || expiresAt - sentAt > LOCALITY_TTL_MS) return
-    const messageId = randomId()
-    const envelope = this.core!.sendLocality(fromHex(conversationId), place?.city ?? '', place?.region ?? '', place?.country ?? '', expiresAt, sentAt, messageId)
-    this.state.outbox.push({ messageId: toHex(messageId), conversationId, envelope: toBase64(envelope), recipients: this.recipients(conversationId), silent: true })
-  }
-
-  private broadcastLocality(place: LocalityPlace | undefined, sentAt: number) {
-    for (const conv of Object.values(this.state.conversations)) this.queueLocality(conv.id, place, sentAt)
-  }
-
-  private queuePendingLocalityRemoval() {
-    if (!this.state.localityRemovalPending || this.state.pendingCommit) return
-    this.broadcastLocality(undefined, this.localityTime())
-    this.state.localityRemovalPending = false
-  }
-
-  async setLocalitySharing(account: string, on: boolean) {
-    this.ready()
-    await this.exclusive(async () => {
-      if (account !== this.myAccount()) throw new Error('The account session changed.')
-      if (on && this.state.pendingCommit) throw new Error('Still finishing an earlier group change; try again shortly')
-      this.localityEpoch++
-      this.localityLastAttempt = undefined
-      this.state.localitySharing = on
-      this.state.localityOwn = undefined
-      this.state.localityStatus = on ? 'locating' : 'off'
-      // Keep queued MLS envelopes: dropping them can leave receive-ratchet gaps.
-      // A newer revocation follows any earlier update through the same outbox.
-      if (!on) this.state.localityRemovalPending = true
-      // Persist consent before any encryption attempt. Pending commits must not keep GPS enabled.
-      await this.persist()
-      this.emitView()
-      this.queuePendingLocalityRemoval()
-      await this.persist()
+  private closeLocalitySource(order: { closed: Record<string, number> }, source: string, sentAt: number) {
+    const previous = Object.hasOwn(order.closed, source) ? order.closed[source] : 0
+    Object.defineProperty(order.closed, source, {
+      value: Math.max(previous, sentAt), enumerable: true, configurable: true, writable: true,
     })
-    this.emitView()
-    void this.flushOutbox()
   }
 
-  async updateLocality(account: string, location: LocationInfo) {
-    this.ready()
-    if (account !== this.myAccount() || !this.state.localitySharing) return
-    if (this.localityLookupPending?.account === account && this.localityLookupPending.epoch === this.localityEpoch) return
-    const now = this.localityClock.now()
-    if (this.localityLastAttempt !== undefined && now - this.localityLastAttempt < LOCALITY_REFRESH_MS) return
-    const point = safeLocation(location.latitude, location.longitude, location.accuracyM, '')
-    if (!point) throw new Error('Invalid location fix')
-    const epoch = this.localityEpoch
-    this.localityLastAttempt = now
-    const lookupToken = { account, epoch }
-    this.localityLookupPending = lookupToken
+  private forgetLocality(conversationId: string, closeSession = false) {
+    const order = this.localityOrder(conversationId)
+    const current = this.headerLocalities.get(conversationId)
+    if (closeSession && current?.sessionId) this.closeLocalitySource(order, this.localitySession(current.from, current.sessionId), current.sentAt)
+    order.at = Math.max(order.at, Math.floor(this.localityClock.now()))
+    this.headerLocalities.delete(conversationId)
+  }
+
+  private pruneLocality(conversationId: string) {
+    const current = this.headerLocalities.get(conversationId)
+    if (!current) return
+    const conv = this.state.conversations[conversationId]
+    if (!conv || !this.localityEligible(conv) || conv.peers[0] !== current.from || !this.localityMember(conversationId, current.from, current.device)) {
+      this.forgetLocality(conversationId)
+    }
+  }
+
+  private localityMember(conversationId: string, from: string, device: string): boolean {
+    const core = this.core
+    if (!core) return false
+    return (core.members(fromHex(conversationId)) as Uint8Array[]).some((member) => {
+      const identity = splitIdentity(member)
+      return identity.account === from && toHex(identity.device) === device
+    })
+  }
+
+  private peerLocality(conv: Conversation): LocalityInfo | undefined {
+    const current = this.headerLocalities.get(conv.id)
+    if (!current?.place || !this.localityEligible(conv) || conv.peers[0] !== current.from || !this.localityMember(conv.id, current.from, current.device)) return undefined
+    if (current.expiresAt <= this.localityClock.now()) return undefined
+    return { ...current.place, updatedAt: current.sentAt, expiresAt: current.expiresAt }
+  }
+
+  private validLocalityTime(sentAt: number): boolean {
+    return Number.isSafeInteger(sentAt) && sentAt > 0 && sentAt <= this.localityClock.now() + LOCALITY_CLOCK_TOLERANCE_MS
+  }
+
+  private localitySession(from: string, sessionId: string): string {
+    return from + ':live:' + sessionId
+  }
+
+  /** Reserve under the receive lock, but never wait for dataset loading there. */
+  private deriveLocality(conversationId: string, from: string, device: string, source: string, sentAt: number, point: LocationInfo, sessionExpiry = Infinity, sessionId?: string) {
+    const conv = this.state.conversations[conversationId]
+    if (!conv || !this.account || !this.localityEligible(conv) || conv.peers[0] !== from || !this.validLocalityTime(sentAt) || !this.localityMember(conversationId, from, device)) return
+    const order = this.localityOrder(conversationId)
+    const closedSource = sessionId ? this.localitySession(from, sessionId) : source
+    if (sentAt <= order.at || order.closed[closedSource] !== undefined) return
+    order.at = sentAt
+    const expiresAt = Math.min(sentAt + LOCALITY_TTL_MS, sessionExpiry)
+    const current: HeaderLocality = { source, from, device, sentAt, expiresAt, sessionId }
+    this.headerLocalities.set(conversationId, current)
+    this.scheduleLocalitySweep()
+    // Hide the previous source before an asynchronous lookup can stall.
+    this.emitView()
+    if (expiresAt <= this.localityClock.now()) return
+    void this.resolveHeaderLocality(conversationId, conv, current, point, this.account, this.localityEpoch).catch(() => {})
+  }
+
+  private async resolveHeaderLocality(conversationId: string, conv: Conversation, current: HeaderLocality, point: LocationInfo, account: Account, epoch: number) {
     let place: LocalityPlace | undefined
     try {
-      // The resolver runs here, never on the UI thread. No coordinate is persisted.
       const found = await lookupLocality(point.latitude, point.longitude, point.accuracyM)
       place = found && safeLocality(found.city, found.region ?? '', found.countryCode)
-    } catch {
-      place = undefined
-    } finally {
-      if (this.localityLookupPending === lookupToken) this.localityLookupPending = undefined
-    }
+    } catch { /* A lookup failure must not affect MLS consumption or history. */ }
+    // Receive, Stop, block and sign-out can all finish while lookup is pending.
     await this.exclusive(async () => {
-      if (account !== this.myAccount() || epoch !== this.localityEpoch || !this.state.localitySharing) return
-      if (this.state.pendingCommit) return
-      const sentAt = this.localityTime()
-      this.state.localityOwn = place ? { ...place, updatedAt: sentAt, expiresAt: sentAt + LOCALITY_TTL_MS } : undefined
-      this.state.localityStatus = place ? 'ready' : 'unavailable'
-      this.broadcastLocality(place, sentAt)
-      await this.persist()
-      this.scheduleLocalitySweep()
+      if (this.account !== account || epoch !== this.localityEpoch || this.headerLocalities.get(conversationId) !== current) return
+      const { from, device, source, sessionId, expiresAt } = current
+      const closedSource = sessionId ? this.localitySession(from, sessionId) : source
+      if (this.state.conversations[conversationId] !== conv || !this.localityEligible(conv) || conv.peers[0] !== from || !this.localityMember(conversationId, from, device)) return
+      if (this.localityOrder(conversationId).closed[closedSource] !== undefined || expiresAt <= this.localityClock.now()) return
+      current.place = place
       this.emitView()
     })
-    void this.flushOutbox()
   }
 
-  async localityUnavailable(account: string) {
-    this.ready()
-    await this.exclusive(async () => {
-      if (account !== this.myAccount() || !this.state.localitySharing) return
-      this.localityEpoch++
-      this.state.localityOwn = undefined
-      this.state.localityStatus = 'unavailable'
-      this.state.localityRemovalPending = true
-      await this.persist()
-      this.emitView()
-      this.queuePendingLocalityRemoval()
-      await this.persist()
-    })
-    void this.flushOutbox()
+  private async deriveLiveLocality(conversationId: string, from: string, device: string, sentAt: number, live: LiveLocationView) {
+    const conv = this.state.conversations[conversationId]
+    if (!conv || !this.localityEligible(conv) || conv.peers[0] !== from || live.sessionId.length !== 16 ||
+        !this.validLocalityTime(sentAt) || !plausibleExpiry(live.expiresAtMs, sentAt) || !this.localityMember(conversationId, from, device)) return
+    const sessionId = toHex(live.sessionId)
+    const message = (await this.stored(conversationId)).find((m) => m.from === from && m.live?.sessionId === sessionId)
+    const accepted = message?.live
+    if (this.state.conversations[conversationId] !== conv || !this.localityEligible(conv) || !this.localityMember(conversationId, from, device)) return
+    if (accepted && (accepted.untilStopped === true) !== live.untilStopped) return
+    const order = this.localityOrder(conversationId)
+    if (live.stopped) {
+      // applyLive authorizes stops by peer account and session, not point device.
+      const closedSource = this.localitySession(from, sessionId)
+      this.closeLocalitySource(order, closedSource, sentAt)
+      order.at = Math.max(order.at, sentAt)
+      const current = this.headerLocalities.get(conversationId)
+      if (current?.from === from && current.sessionId === sessionId) {
+        this.headerLocalities.delete(conversationId)
+        this.emitView()
+      }
+      return
+    }
+    if (!accepted || accepted.ended || accepted.stopped || accepted.latest?.at !== sentAt) return
+    this.deriveLocality(conversationId, from, device, device + ':live:' + sessionId, sentAt, accepted.latest, accepted.expiresAt, sessionId)
   }
 
   private scheduleLocalitySweep() {
     clearTimeout(this.localityTimer)
-    const session = this.account
-    const records = Object.values(this.state.localities ?? {}).flatMap(Object.values)
-    const deadlines = records.map((l) => l.expiresAt > this.localityClock.now() ? l.expiresAt : l.sentAt + LOCALITY_TTL_MS + 1)
-    if (this.state.localityOwn) deadlines.push(this.state.localityOwn.expiresAt)
+    const account = this.account
+    const now = this.localityClock.now()
+    for (const [id, current] of this.headerLocalities) if (current.expiresAt <= now) this.headerLocalities.delete(id)
+    const deadlines = [...this.headerLocalities.values()].map((current) => current.expiresAt)
     if (!deadlines.length) return
     this.localityTimer = setTimeout(() => {
       void this.exclusive(async () => {
-        if (this.account !== session) return
-        const now = this.localityClock.now()
-        for (const [conversationId, leases] of Object.entries(this.state.localities ?? {})) {
-          for (const [device, lease] of Object.entries(leases)) {
-            if (lease.expiresAt <= now && lease.sentAt + LOCALITY_TTL_MS < now) delete leases[device]
-          }
-          if (!Object.keys(leases).length) delete this.state.localities![conversationId]
-        }
-        if (this.state.localityOwn && this.state.localityOwn.expiresAt <= now) {
-          this.state.localityOwn = undefined
-          this.state.localityStatus = this.state.localitySharing ? 'unavailable' : 'off'
-        }
+        if (this.account !== account) return
+        this.scheduleLocalitySweep()
         await this.persist()
         this.emitView()
-        this.scheduleLocalitySweep()
       }).catch(() => {})
-    }, Math.max(1, Math.min(...deadlines) - this.localityClock.now()))
+    }, Math.max(1, Math.min(...deadlines) - now))
   }
 
   // ---- profile pictures ----------------------------------------------------
@@ -829,16 +828,12 @@ export class Engine {
       // This device is the account's own: its key must not raise an alert.
       Object.assign(this.state, restored, {
         draftClears: {},
-        localitySharing: false,
-        localityOwn: undefined,
-        localityStatus: 'off',
-        localitySentAt: undefined,
         localityTimeFloor: undefined,
-        localityRemovalPending: false,
-        localities: {},
+        localityOrder: {},
         backup: { lastAt: backup.createdAt },
         expectedOwn: [deviceHex(reg.device_id)],
       })
+      this.migrateLocality()
       await this.store.putKey('backup', keys.encryption)
       await this.persist()
     })
@@ -978,8 +973,7 @@ export class Engine {
     clearTimeout(this.localityTimer)
     await this.exclusive(async () => {
       this.localityClock = new TypingClock()
-      this.localityLastAttempt = undefined
-      this.localityLookupPending = undefined
+      this.headerLocalities.clear()
       this.account = undefined
       this.core = undefined
       this.state = emptyState()
@@ -1250,13 +1244,20 @@ export class Engine {
         this.emit({ type: 'avatar', account })
       }
     }
-    if (sync.blocked) this.state.blocked = sync.blocked
+    if (sync.blocked) {
+      const affected = new Set([...this.state.blocked, ...sync.blocked])
+      for (const conv of Object.values(this.state.conversations)) {
+        if (conv.peers.some((peer) => affected.has(peer))) this.forgetLocality(conv.id, true)
+      }
+      this.state.blocked = sync.blocked
+    }
     this.state.names = { ...sync.names, ...this.state.names }
     this.state.usernames = { ...sync.usernames, ...this.state.usernames }
     for (const [id, meta] of Object.entries(sync.conversations)) {
       const target = this.state.conversations[id]
       if (target) {
         this.applyMeta(target, meta)
+        if (target.request) this.forgetLocality(id)
         target.request = undefined
       } else this.state.syncedMeta[id] = meta
     }
@@ -1484,6 +1485,10 @@ export class Engine {
 
   private async setBlocked(blocked: string[]) {
     await this.exclusive(async () => {
+      const changed = new Set([...this.state.blocked, ...blocked])
+      for (const conv of Object.values(this.state.conversations)) {
+        if (conv.peers.some((peer) => changed.has(peer))) this.forgetLocality(conv.id, true)
+      }
       this.state.blocked = blocked
       const self = Object.values(this.state.conversations).find((c) => c.self && !c.status)
       if (self) this.queueDeviceSync(self.id)
@@ -1507,8 +1512,7 @@ export class Engine {
     const conv = this.group(conversationId)
     await this.exclusive(async () => {
       conv.request = undefined
-      const own = this.state.localityOwn
-      if (this.state.localitySharing && own && own.expiresAt > this.localityClock.now()) this.queueLocality(conversationId, own, this.localityTime(), own.expiresAt)
+      this.forgetLocality(conversationId)
       await this.persist()
     })
     // Receipts were held while it was a request.
@@ -3316,6 +3320,7 @@ export class Engine {
       if (!conv) return
       const peers = this.peersOf(conversationId)
       if (!this.core!.isActive(event.conversationId)) {
+        this.forgetLocality(conversationId)
         // A commit removed us (or committed our own departure). End local live points.
         conv.status ??= 'removed'
         await this.invalidateDraft(conversationId)
@@ -3334,6 +3339,7 @@ export class Engine {
       // Introduce ourselves to anyone new.
       if (peers.some((p) => !conv.peers.includes(p))) this.queueProfile(conversationId)
       conv.peers = peers
+      this.pruneLocality(conversationId)
       this.emitView()
     } else if (event.kind === 'proposal') {
       // A member asked to leave; the designated member commits it once this
@@ -3352,6 +3358,7 @@ export class Engine {
           recipients: this.recipients(conversationId),
         })
         conv.status = 'left'
+        this.forgetLocality(conversationId)
         await this.invalidateDraft(conversationId)
         this.emitView()
       }
@@ -3371,20 +3378,8 @@ export class Engine {
       const mine = from === this.myAccount()
       const locality = event.locality
       if (locality) {
-        try {
-          if (!mine && conv && this.localityEligible(conv)) {
-            const device = toHex(splitIdentity(event.sender).device)
-            const previous = this.state.localities?.[conversationId]?.[device]
-            const lease = localityLease(from, device, event.sentAtMs, locality.expiresAtMs, locality.city, locality.region, locality.country, this.localityClock.now(), previous)
-            if (lease) {
-              this.state.localities ??= {}
-              this.state.localities[conversationId] ??= {}
-              this.state.localities[conversationId][device] = lease
-              this.scheduleLocalitySweep()
-              this.emitView()
-            }
-          }
-        } finally { locality.free() }
+        // Consume legacy coarse-only content without publishing or deriving it.
+        locality.free()
         return
       }
       if (event.typingActive !== undefined) {
@@ -3465,6 +3460,7 @@ export class Engine {
             replyTo: reference && validReplyId(reference) ? reference : undefined,
             replyToHash: hashHex(event.replyToHash),
           })
+          if (!mine) await this.deriveLiveLocality(conversationId, from, toHex(splitIdentity(event.sender).device), event.sentAtMs, live)
           // Only a new visible card ends composition. Background session updates do not.
           if (added) this.stopTypingForMessage(conversationId, from, toHex(splitIdentity(event.sender).device), event.sentAtMs)
         }
@@ -3512,6 +3508,11 @@ export class Engine {
           file: attachment,
           location,
         })
+        const locationHash = hashHex(event.contentHash)
+        if (!mine && location && locationHash) {
+          const device = toHex(splitIdentity(event.sender).device)
+          this.deriveLocality(conversationId, from, device, device + ':static:' + locationHash, event.sentAtMs, location)
+        }
         if (attachment && autoDownloads(this.state.media, attachment.mime, onMobileData())) {
           // After this delivery is stored: the download takes the lock to record itself.
           void this.fetchAttachment(conversationId, messageId).catch((e) => console.warn('download failed', e))
@@ -3648,6 +3649,7 @@ export class Engine {
       const peers = this.peersOf(p.conversationId)
       await this.endRemovedPeerLiveLocations(p.conversationId, conv.peers, peers)
       conv.peers = peers
+      this.pruneLocality(p.conversationId)
     }
     if (conv) await this.observeKeysIn(p.conversationId)
     if (!this.core!.hasPendingProposals(fromHex(p.conversationId))) delete this.state.leaving[p.conversationId]
@@ -3661,13 +3663,13 @@ export class Engine {
       this.queueProfile(p.conversationId)
     }
     this.state.pendingCommit = undefined
-    this.queuePendingLocalityRemoval()
     await this.persist()
     this.emitView()
   }
 
   /** Clears all other members' live points in a conversation we left. Under the lock (issue #114). */
   private async endGroupLiveLocations(conversationId: string) {
+    this.forgetLocality(conversationId)
     const seen = this.state.liveSeen.filter((l) => l.conversationId === conversationId)
     this.state.liveSeen = this.state.liveSeen.filter((l) => l.conversationId !== conversationId)
     const ids = new Set(seen.map((l) => l.messageId))
@@ -3676,6 +3678,10 @@ export class Engine {
   }
 
   private async endRemovedPeerLiveLocations(conversationId: string, previousPeers: string[], peers: string[]) {
+    const current = this.headerLocalities.get(conversationId)
+    if (current && (!peers.includes(current.from) || !this.localityMember(conversationId, current.from, current.device))) {
+      this.forgetLocality(conversationId)
+    }
     const removedAccounts = previousPeers.filter((p) => !peers.includes(p))
     if (removedAccounts.length === 0) return
     const list = await this.stored(conversationId)
@@ -3703,7 +3709,6 @@ export class Engine {
     } else {
       this.core!.discardCommit(fromHex(p.conversationId))
       this.state.pendingCommit = undefined
-      this.queuePendingLocalityRemoval()
       await this.persist()
     }
   }
@@ -3762,10 +3767,6 @@ export class Engine {
       this.state.blocked.includes(conversation.peers[0])
     ) {
       return
-    }
-    const ownLocality = this.state.localityOwn
-    if (this.state.localitySharing && ownLocality && ownLocality.expiresAt > this.localityClock.now()) {
-      this.queueLocality(conversationId, ownLocality, this.localityTime(), ownLocality.expiresAt)
     }
     const messageId = randomId()
     const avatar = this.account!.avatar ? fromBase64(this.account!.avatar) : new Uint8Array()

@@ -6,7 +6,6 @@ import type { CoreClient } from '../core/client'
 import type { ChatMessage, LiveInfo } from '../core/protocol'
 import { formatCoordinates } from './Location'
 import { MapView } from './MapView'
-import { permissionGuidance } from './permissions'
 
 /** The time now, re-rendering every `everyMs` so countdowns move. */
 function useNow(everyMs: number): number {
@@ -158,7 +157,6 @@ export function LiveCard({
           </>
         )}
       </span>
-      {message.from === 'me' && <span className="small muted">{permissionGuidance('location')}</span>}
     </div>
   )
 }
