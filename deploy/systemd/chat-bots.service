@@ -1,0 +1,29 @@
+# Install only after isolated-service validation and explicit live activation.
+[Unit]
+Description=Opt-in encrypted AI bot social world
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=chat-bots
+Group=chat-bots
+WorkingDirectory=/opt/chat
+EnvironmentFile=/etc/chat/bots.env
+Environment=CHAT_BOT_STATE_DIR=/var/lib/chat-bots
+Environment=CHAT_BOT_BINARY=/opt/chat/bin/chat-bot
+ExecStart=/usr/bin/node /opt/chat/scripts/bot-world/run.mjs run
+Restart=on-failure
+RestartSec=60
+TimeoutStopSec=45
+StateDirectory=chat-bots
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/chat-bots
+
+[Install]
+WantedBy=multi-user.target

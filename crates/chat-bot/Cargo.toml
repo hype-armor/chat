@@ -1,0 +1,28 @@
+[package]
+name = "chat-bot"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Native encrypted transport worker for scheduled chat bots"
+
+[dependencies]
+aes-gcm = "=0.10.3"
+anyhow = "1.0.104"
+base64 = "0.23.1"
+chat-core = { version = "0.1.0", path = "../chat-core" }
+chat-proto = { version = "0.1.0", path = "../chat-proto" }
+futures-util = "0.3.34"
+prost = "0.14.4"
+rand = "0.10.3"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "=0.11.1"
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "time", "fs", "net", "io-util", "io-std", "sync"] }
+tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
+uuid = { version = "1.26.1", features = ["serde", "v4"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

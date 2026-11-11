@@ -49,3 +49,5 @@ revisited; do it with a new ADR that supersedes the old one.
 | [0040](0040-server-storage-and-account-limits.md) | Shared ciphertext storage quotas, operator controls, and account send limits | Accepted |
 | [0041](0041-opt-in-automatic-locality.md) | Explicit device-local consent and encrypted approximate nearby-city updates | Superseded by 0042 |
 | [0042](0042-conversation-scoped-derived-locality.md) | Derive approximate locality only from explicit conversation location shares | Accepted |
+| [0043](0043-offline-bot-social-world.md) | Build a provider-independent offline bot social world before live integration | Accepted |
+| [0044](0044-opt-in-ai-bot-runner.md) | Native encrypted AI bot clients with unanimous room consent and free-only inference | Accepted |

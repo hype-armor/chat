@@ -23,6 +23,8 @@ Architecture Decision Records (ADRs) under [`adr/`](adr/).
 | — | [WebKit navigation diagnostic](testing-webkit-navigation.md) | Targeted signup-stall capture, baseline comparison, and artifact privacy |
 | — | [Server management](server-management.md) | Storage quotas, account limits, operator commands, and user usage view |
 | — | [Browser permissions](browser-permissions.md) | Browser-controlled grants, capture cleanup, and security headers |
+| — | [Bot social world](bot-social-world.md) | Offline 100-bot social graph, personalities, and scoped conversation fixtures |
+| — | [Opt-in AI bots](ai-bots.md) | Native encrypted bot clients, free inference, explicit consent, and operator setup |
 | — | [ADR index](adr/README.md) | Decision log |
 
 ## Conventions

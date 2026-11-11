@@ -63,6 +63,13 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   sharing icon, live message card and Stop sharing control. The Conversation menu
   must offer Stop sharing location for active shares, even with an expired or
   off-screen card. Removing the banner must not stop the watcher or change expiry.
+- The synthetic bot world is offline configuration (`docs/bot-social-world.md`, ADR-0043).
+  The separate opt-in runner follows ADR-0044 (`docs/ai-bots.md`). Keep friendship separate
+  from MLS membership. Require unanimous authenticated human consent before external inference;
+  reset consent/context on membership/device or disclosure changes. Observe revocation before queued I/O,
+  fence sends against unacknowledged room events, and never replay stale AI outbox work autonomously.
+  Keep keys/state encrypted, inference free-only, and quota reservations durable before requests.
+  Run `pnpm bots:world:test` and `cargo test -p chat-bot`; never activate bots against a live deployment for tests.
 - Run browser tests against isolated test services, never a live deployment.
 - Browser and OS permission grants belong to the browser. Do not cache fake grants or keep
   idle camera/microphone streams to avoid prompts. Prevent duplicate capture requests and
