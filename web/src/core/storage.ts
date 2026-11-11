@@ -34,10 +34,63 @@ function openDb(): Promise<IDBDatabase> {
 }
 
 export class SecureStore {
+  private reconnecting?: Promise<IDBDatabase>
+
   private constructor(
-    private readonly db: IDBDatabase,
+    private db: IDBDatabase,
     private readonly key: CryptoKey,
-  ) {}
+  ) {
+    this.watchConnection(db)
+  }
+
+  private watchConnection(db: IDBDatabase): void {
+    db.onversionchange = () => db.close()
+  }
+
+  private reconnect(): Promise<IDBDatabase> {
+    if (this.reconnecting) return this.reconnecting
+    this.reconnecting = (async () => {
+      const db = await openDb()
+      this.watchConnection(db)
+      try {
+        const tx = db.transaction('keys', 'readonly')
+        const key = await request(tx.objectStore('keys').get('storage')) as CryptoKey | undefined
+        if (!key) throw new Error('Local storage key is missing. Reopen the app to recover storage.')
+        // Do not write cached ciphertext into a cleared or replaced database.
+        // CryptoKey objects cannot be compared by identity after an IDB read.
+        const iv = crypto.getRandomValues(new Uint8Array(12))
+        const probe = crypto.getRandomValues(new Uint8Array(32))
+        const sealed = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, this.key, probe)
+        let opened: Uint8Array
+        try {
+          opened = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, sealed))
+        } catch {
+          throw new Error('Local storage key changed. Reopen the app to recover storage.')
+        }
+        if (opened.length !== probe.length || !opened.every((value, i) => value === probe[i])) {
+          throw new Error('Local storage key changed. Reopen the app to recover storage.')
+        }
+        this.db = db
+        return db
+      } catch (error) {
+        db.close()
+        throw error
+      }
+    })().finally(() => { this.reconnecting = undefined })
+    return this.reconnecting
+  }
+
+  private async transaction(stores: string | string[], mode: IDBTransactionMode): Promise<IDBTransaction> {
+    const db = this.db
+    try {
+      return db.transaction(stores, mode)
+    } catch (error) {
+      if (!(error instanceof DOMException) || error.name !== 'InvalidStateError') throw error
+      // Retry creation once. Never replay a transaction that already started.
+      const current = this.db === db ? await this.reconnect() : this.db
+      return current.transaction(stores, mode)
+    }
+  }
 
   static async open(): Promise<SecureStore> {
     const db = await openDb()
@@ -53,7 +106,7 @@ export class SecureStore {
   }
 
   async getBytes(name: string): Promise<Uint8Array | undefined> {
-    const sealed = (await request(this.db.transaction('kv', 'readonly').objectStore('kv').get(name))) as
+    const sealed = (await request((await this.transaction('kv', 'readonly')).objectStore('kv').get(name))) as
       | Uint8Array
       | undefined
     if (!sealed) return undefined
@@ -67,7 +120,7 @@ export class SecureStore {
     const sealed = new Uint8Array(12 + ct.length)
     sealed.set(iv)
     sealed.set(ct, 12)
-    const tx = this.db.transaction('kv', 'readwrite')
+    const tx = await this.transaction('kv', 'readwrite')
     const done = committed(tx)
     // Request success is not acceptance: the transaction can still abort.
     await Promise.all([request(tx.objectStore('kv').put(sealed, name)), done])
@@ -75,7 +128,7 @@ export class SecureStore {
 
   /** Deletes a local encrypted record; resolves only after transaction completion. */
   async deleteBytes(name: string): Promise<void> {
-    const tx = this.db.transaction('kv', 'readwrite')
+    const tx = await this.transaction('kv', 'readwrite')
     const done = committed(tx)
     await Promise.all([request(tx.objectStore('kv').delete(name)), done])
   }
@@ -87,13 +140,13 @@ export class SecureStore {
 
   /** A non-extractable CryptoKey kept beside the storage key (e.g. the backup key). */
   async getKey(name: string): Promise<CryptoKey | undefined> {
-    return (await request(this.db.transaction('keys', 'readonly').objectStore('keys').get(name))) as
+    return (await request((await this.transaction('keys', 'readonly')).objectStore('keys').get(name))) as
       | CryptoKey
       | undefined
   }
 
   async putKey(name: string, key: CryptoKey | undefined): Promise<void> {
-    const tx = this.db.transaction('keys', 'readwrite')
+    const tx = await this.transaction('keys', 'readwrite')
     const done = committed(tx)
     const store = tx.objectStore('keys')
     const operation = key ? request(store.put(key, name)) : request(store.delete(name))
@@ -102,7 +155,7 @@ export class SecureStore {
 
   /** A sealed attachment, by message id. */
   async getFile(id: string): Promise<Blob | undefined> {
-    const value = (await request(this.db.transaction('files', 'readonly').objectStore('files').get(id))) as
+    const value = (await request((await this.transaction('files', 'readonly')).objectStore('files').get(id))) as
       | Blob
       | ArrayBuffer
       | undefined
@@ -111,7 +164,7 @@ export class SecureStore {
 
   async putFile(id: string, sealed: Blob | undefined): Promise<void> {
     const write = async (value?: Blob | ArrayBuffer) => {
-      const tx = this.db.transaction('files', 'readwrite')
+      const tx = await this.transaction('files', 'readwrite')
       const done = committed(tx)
       const store = tx.objectStore('files')
       const operation = value === undefined ? request(store.delete(id)) : request(store.put(value, id))
@@ -130,7 +183,7 @@ export class SecureStore {
 
   /** Deletes everything except the storage key (signing out). */
   async clear(): Promise<void> {
-    const tx = this.db.transaction(['kv', 'files'], 'readwrite')
+    const tx = await this.transaction(['kv', 'files'], 'readwrite')
     const done = committed(tx)
     await Promise.all([
       request(tx.objectStore('kv').clear()), request(tx.objectStore('files').clear()), done,
