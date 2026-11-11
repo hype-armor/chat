@@ -168,6 +168,11 @@ impl Client {
         self.conversations.keys().cloned().collect()
     }
 
+    /// The authenticated local MLS epoch, including after joining an existing group.
+    pub fn epoch(&self, conversation_id: &[u8]) -> Result<u64> {
+        Ok(self.conversation(conversation_id)?.epoch())
+    }
+
     /// Creates a conversation with the devices whose key packages are given.
     pub fn start_conversation(
         &mut self,
@@ -455,6 +460,9 @@ mod tests {
         let mut bob = Client::restore(&bob.snapshot().unwrap()).unwrap();
         assert_eq!(bob.conversation_ids(), vec![id.clone()]);
         assert_eq!(bob.members(&id).unwrap().len(), 2);
+        assert_eq!(alice.epoch(&id).unwrap(), 1);
+        assert_eq!(bob.epoch(&id).unwrap(), 1);
+        assert!(alice.epoch(b"unknown-conversation").is_err());
 
         let env = alice.send(&id, &text("hi bob"), vec![2]).unwrap();
         assert_eq!(
@@ -709,6 +717,12 @@ mod tests {
                 conversation_id: id.clone()
             }
         );
+
+        assert_eq!(alice.epoch(&id).unwrap(), 2);
+        assert_eq!(bob.epoch(&id).unwrap(), 2);
+        assert_eq!(carol.epoch(&id).unwrap(), 2);
+        let restored_carol = Client::restore(&carol.snapshot().unwrap()).unwrap();
+        assert_eq!(restored_carol.epoch(&id).unwrap(), 2);
 
         let env = carol.send(&id, &text("hello both"), vec![6]).unwrap();
         for client in [&mut alice, &mut bob] {

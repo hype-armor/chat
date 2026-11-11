@@ -12,6 +12,18 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  bot-tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Offline world, provider, consent, and encrypted-state checks
+        run: node --test scripts/bot-world/*.test.mjs
+      - name: Verify default bot command has no activation
+        run: node scripts/bot-world/run.mjs plan
+
   build-controls:
     runs-on: ubuntu-latest
     steps:
@@ -26,12 +38,14 @@ jobs:
           done
 
   rust:
+    needs: bot-tools
     runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:18
         env:
           POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: chat_bots_test
         ports: ["5432:5432"]
         options: >-
           --health-cmd pg_isready --health-interval 2s --health-timeout 5s --health-retries 30
@@ -46,8 +60,18 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo clippy -p chat-core --target wasm32-unknown-unknown --features wasm -- -D warnings
       - run: cargo test --workspace
+      - name: Build clients for isolated AI bot transport checks
+        run: cargo build -p chat-server -p chat-bot
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Real-server AI bot consent and delivery (mock inference only)
+        run: node scripts/bot-world/integration.mjs
+        env:
+          BOT_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/chat_bots_test
 
   web:
+    needs: bot-tools
     runs-on: ubuntu-latest
     services:
       postgres:

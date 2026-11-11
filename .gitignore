@@ -2,4 +2,12 @@
 node_modules
 .DS_Store
 /echo-state
+/bot-state
+/chat-bot-state
+/bot-invites.json
+/bots.env
+/.bot-state-test-*/
+/.bot-ipc-test-*/
+/.bot-integration-*/
+/.bot-world-integration-*/
 /web/navigation-diagnostic/

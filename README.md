@@ -19,6 +19,8 @@ messenger yet. Design docs: [`docs/`](docs/README.md).
 | `web/` | Web client / PWA (TypeScript, React, Vite): sign-up, 1:1 chats; keys, storage and networking live in a Web Worker |
 | `deploy/docker` | Container images (server; web served by nginx with a strict CSP) |
 | `crates/chat-echo` | Echo test bot (development only) |
+| `crates/chat-bot` | Native encrypted transport for opt-in AI bots |
+| `scripts/bot-world` | Synthetic 100-bot social world, free-model adapter, consent, and scheduling ([guide](docs/ai-bots.md)) |
 | `deploy/compose` | Local development stack |
 | `deploy/helm/chat` | Helm chart for Kubernetes |
 | `deploy/k8s` | Cluster prerequisites (PostgreSQL, TLS, LiveKit) |
@@ -55,6 +57,11 @@ Firefox and WebKit, and `E2E_SERVER=1` with `DATABASE_URL` to run the
 two-user messaging tests against a real server). The preview server applies the production security
 headers from `deploy/docker/security-headers.inc.template`, so e2e tests
 catch CSP regressions.
+
+For the optional AI bot world, run `pnpm bots:plan` to inspect the network without
+activation, and `pnpm bots:world:test` for offline checks. Live operation requires
+separate credentials, explicit room consent, and isolated-service validation. See
+the [AI bot setup guide](docs/ai-bots.md); free inference quotas are shared by all bots.
 
 For isolated UI interaction tests without a database or chat server:
 

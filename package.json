@@ -8,6 +8,11 @@
     "dev": "pnpm --filter web dev",
     "build": "pnpm --filter web build",
     "test": "pnpm --filter web test",
-    "typecheck": "pnpm --filter web typecheck"
+    "typecheck": "pnpm --filter web typecheck",
+    "bots:world:generate": "node scripts/bot-world/generate.mjs",
+    "bots:world:test": "node --test scripts/bot-world/*.test.mjs",
+    "bots:plan": "node scripts/bot-world/run.mjs plan",
+    "bots:bootstrap": "node scripts/bot-world/run.mjs bootstrap",
+    "bots:run": "node scripts/bot-world/run.mjs run"
   }
 }
