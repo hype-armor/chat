@@ -20,7 +20,7 @@ messenger yet. Design docs: [`docs/`](docs/README.md).
 | `deploy/docker` | Container images (server; web served by nginx with a strict CSP) |
 | `crates/chat-echo` | Echo test bot (development only) |
 | `crates/chat-bot` | Native encrypted transport for opt-in AI bots |
-| `scripts/bot-world` | Synthetic 100-bot social world, free-model adapter, consent, and scheduling ([guide](docs/ai-bots.md)) |
+| `scripts/bot-world` | Synthetic 100-bot social world, local random-text traffic, optional free AI, consent, and scheduling ([guide](docs/ai-bots.md)) |
 | `deploy/compose` | Local development stack |
 | `deploy/helm/chat` | Helm chart for Kubernetes |
 | `deploy/k8s` | Cluster prerequisites (PostgreSQL, TLS, LiveKit) |
@@ -59,9 +59,11 @@ headers from `deploy/docker/security-headers.inc.template`, so e2e tests
 catch CSP regressions.
 
 For the optional AI bot world, run `pnpm bots:plan` to inspect the network without
-activation, and `pnpm bots:world:test` for offline checks. Live operation requires
-separate credentials, explicit room consent, and isolated-service validation. See
-the [AI bot setup guide](docs/ai-bots.md); free inference quotas are shared by all bots.
+activation, and `pnpm bots:world:test` for offline checks. The default local
+synthetic-text mode needs no AI key. Live operation still requires bot state
+credentials, explicit room consent, and isolated-service validation. See the
+[bot setup guide](docs/ai-bots.md) for watching a conversation in a group you own.
+Optional AI mode must be enabled explicitly; free inference quotas are shared.
 
 For isolated UI interaction tests without a database or chat server:
 

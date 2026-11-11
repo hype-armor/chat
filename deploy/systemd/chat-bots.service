@@ -1,6 +1,6 @@
 # Install only after isolated-service validation and explicit live activation.
 [Unit]
-Description=Opt-in encrypted AI bot social world
+Description=Opt-in encrypted synthetic bot social world (optional AI)
 After=network-online.target
 Wants=network-online.target
 

@@ -1,4 +1,10 @@
-# Opt-in AI bots
+# Synthetic and opt-in AI bots
+
+**Default: local synthetic text, not AI.** `CHAT_BOT_MODE=synthetic` generates
+short random sentences without an API key or external inference. Explicit
+`CHAT_BOT_MODE=ai` retains the optional free-model integration described below.
+Both modes use real encrypted clients, require room opt-in when humans join,
+and obey server limits. Neither mode starts networking without activation.
 
 The bot system combines the [synthetic social world](bot-social-world.md), a
 native MLS client worker (`crates/chat-bot`), and a Node.js coordinator
@@ -8,9 +14,53 @@ native MLS client worker (`crates/chat-bot`), and a Node.js coordinator
 accounts or messages are created by the default `plan` command. No provider API
 key or state key is included in this repository.
 
-## Free model selection
+## Observe a first synthetic conversation
 
-Default: **OpenRouter `openrouter/free`**, which routes only to free models.
+After an operator installs and bootstraps the runner against the intended service:
+
+1. Use exact-username lookup in the normal app to find `ai_bot.0001` and
+   `ai_bot.0002` (or the configured prefix). Create a group and add them.
+2. Wait for the local-test disclosure. Every human account sends the exact
+   `/bots consent <nonce>` command shown in that room.
+3. Send an ordinary message to start the exchange. Its content is discarded by
+   the synthetic coordinator; it only triggers a conversation burst.
+4. Watch `[Synthetic]` messages in the normal app. `/bots stop` pauses the room;
+   `/bots start` begins a new opt-in round. `/ai` commands remain aliases.
+
+Bots retain their activity schedules and room-specific speaker weights. During
+active bursts, replies have random 5–30-second gaps. Bursts contain 3–6 messages,
+then pause for 5–60 minutes. Network delays, the global cap, and inactive members
+can make gaps longer. The default cap is **12 generated messages/minute across
+all bots**, adjustable with `CHAT_BOT_MESSAGES_PER_MINUTE` from 1 through 120.
+Retry/status-poll attempts share this budget and spacing, so actual message
+throughput can be lower. There is no synthetic 50-message daily AI limit. Server limits and the native
+journal's finite capacity still apply; this first pass is for bounded test runs,
+not unlimited traffic without journal maintenance.
+
+Synthetic generation has no persona, history, or human-content inputs. It receives
+only a cancellation signal. The coordinator retains scheduling metadata, not text
+history, in this mode. The native encrypted unacknowledged-event journal can
+transiently hold received messages until they are processed and acknowledged.
+The operator still controls the bot clients and can read messages they receive.
+Switching modes renews room consent and clears pending work/context. Synthetic
+traffic has a separate persisted rate budget and does not erase AI quota usage.
+
+To configure the first pass, use the operator setup below with:
+
+```ini
+CHAT_BOT_MODE=synthetic
+CHAT_BOT_MESSAGES_PER_MINUTE=12
+```
+
+Omit `CHAT_BOT_AI_API_KEY`; it is not needed. Keep the server, explicit activation,
+private state directory, and encryption key settings. Existing bot profiles retain
+the `(AI bot)` label; disclosure and every generated message identify synthetic mode.
+Bot-only fixture rooms are still private: there is no hidden observer dashboard.
+Use a group you own to observe this first pass.
+
+## Optional AI model selection
+
+In explicit AI mode, the default is **OpenRouter `openrouter/free`**, which routes only to free models.
 Optionally set `CHAT_BOT_AI_MODEL` to a catalog model ID ending in `:free`.
 Availability can change; select an actual free catalog entry, not a paid model
 with an invented suffix. Different bots share one model but have distinct
@@ -42,7 +92,7 @@ the oldest eligible room. The 190 direct chats cannot consume the initial budget
 before groups speak. Personality weights, activity hours, turn caps, and quiet
 periods still apply; it does not make every group member respond.
 
-## Human opt-in
+## Human opt-in for AI mode
 
 Use the app's existing exact-username contact lookup to start a conversation
 with a bot or explicitly add it to a group. Default usernames are `ai_bot.0001`
@@ -111,10 +161,13 @@ CARGO_BUILD_JOBS=1 cargo build --release -p chat-bot
 Create a **separate** provider API key. Never reuse agent, application-user, or
 other service credentials. Generate a random state key without printing it in
 public logs or chat. Keep secrets in a private environment file, mode `0600`,
-owned by the service operator. A sample with placeholders follows:
+owned by the service operator. The following sample is for optional AI mode;
+for the default synthetic first pass, use the two settings above and omit the
+provider key/model and AI quota settings:
 
 ```ini
 CHAT_BOTS_ENABLED=true
+CHAT_BOT_MODE=ai
 CHAT_BOT_SERVER=https://chat.example.com
 CHAT_BOT_BINARY=/opt/chat/bin/chat-bot
 CHAT_BOT_STATE_DIR=/var/lib/chat-bots

@@ -64,8 +64,11 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   must offer Stop sharing location for active shares, even with an expired or
   off-screen card. Removing the banner must not stop the watcher or change expiry.
 - The synthetic bot world is offline configuration (`docs/bot-social-world.md`, ADR-0043).
-  The separate opt-in runner follows ADR-0044 (`docs/ai-bots.md`). Keep friendship separate
-  from MLS membership. Require unanimous authenticated human consent before external inference;
+  The separate opt-in runner follows ADR-0044 (`docs/ai-bots.md`); its CLI defaults to local
+  synthetic text (ADR-0045). Synthetic generation must receive only a cancellation signal,
+  never prompts or human text. Preserve AI quota on mode switches and apply the synthetic
+  traffic budget to retries. Keep friendship separate from MLS membership.
+  Require unanimous authenticated human consent before external inference;
   reset consent/context on membership/device or disclosure changes. Observe revocation before queued I/O,
   fence sends against unacknowledged room events, and never replay stale AI outbox work autonomously.
   Keep keys/state encrypted, inference free-only, and quota reservations durable before requests.
