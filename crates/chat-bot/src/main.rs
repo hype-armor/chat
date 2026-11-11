@@ -6,7 +6,7 @@ use std::{
 
 use aes_gcm::{
     Aes256Gcm, Key, Nonce,
-    aead::{Aead, KeyInit},
+    aead::{Aead, AeadCore, KeyInit, OsRng},
 };
 use anyhow::{Context, Result, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -1413,10 +1413,9 @@ fn members_json(members: &[Vec<u8>]) -> Value {
 }
 fn encrypt(key: &[u8; 32], clear: &[u8]) -> Result<Vec<u8>> {
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
-    let mut nonce = [0; 12];
-    rand::rng().fill_bytes(&mut nonce);
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
     let cipher_text = cipher
-        .encrypt(Nonce::from_slice(&nonce), clear)
+        .encrypt(&nonce, clear)
         .map_err(|_| anyhow::anyhow!("encrypt error"))?;
     let mut out = b"CBOT\x01".to_vec();
     out.extend_from_slice(&nonce);
@@ -1498,8 +1497,11 @@ mod tests {
     use super::*;
     #[test]
     fn encrypted_state_round_trip_and_authentication() {
-        let key = [7; 32];
+        let key: [u8; 32] = Aes256Gcm::generate_key(&mut OsRng).into();
         let mut sealed = encrypt(&key, b"state").unwrap();
+        let independently_sealed = encrypt(&key, b"state").unwrap();
+        assert_ne!(&sealed[5..17], &independently_sealed[5..17]);
+        assert_eq!(decrypt(&key, &independently_sealed).unwrap(), b"state");
         assert_eq!(decrypt(&key, &sealed).unwrap(), b"state");
         *sealed.last_mut().unwrap() ^= 1;
         assert!(decrypt(&key, &sealed).is_err());
