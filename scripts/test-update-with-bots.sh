@@ -96,7 +96,7 @@ chmod +x "$fixture/mock-bin/"*
 
 run_at() { local directory=$1; shift; (cd "$directory" && PATH="$fixture/mock-bin:$PATH" MOCK_LOG="$directory/log" MOCK_FLOCK_BIN="$flock_bin" "$@"); }
 run() { run_at "$fixture" "$@"; }
-run_trace() { run_at "$fixture" bash -x "$fixture/update-with-bots.sh" "$@"; }
+run_trace() { run_at "$fixture" bash -x "$fixture/update-with-bots.sh"; }
 run_locked_second() { MOCK_COMMON_DIR="$common_git" MOCK_REAL_FLOCK=1 run_at "$fixture_two" "$fixture_two/update-with-bots.sh"; }
 assert() { "$@" || { printf 'assertion failed: %s\n' "$*" >&2; exit 1; }; }
 assert_not() { if "$@"; then printf 'unexpected success: %s\n' "$*" >&2; exit 1; fi; }
@@ -139,7 +139,9 @@ rm -rf "$fixture_two"
 cp -a "$fixture" "$fixture_two"
 mkdir -p "$common_git"
 ready="$sandbox/common-lock-ready"
-"$flock_bin" -n "$common_git/chat-deploy.lock" sh -c 'printf locked >"$1"; exec sleep 30' sh "$ready" &
+# The child shell expands its argument only after it acquires the lock.
+# shellcheck disable=SC2016
+"$flock_bin" --no-fork -n "$common_git/chat-deploy.lock" sh -c 'printf locked >"$1"; exec sleep 30' sh "$ready" &
 lock_holder=$!
 for _ in {1..100}; do test -f "$ready" && break; sleep 0.01; done
 assert test -f "$ready"
@@ -186,7 +188,13 @@ assert_not grep -q '^build ' "$fixture/log"
 
 # Never create replacement identities when encrypted state exists without configuration.
 reset
-mkdir -p "$fixture/chat-bot-state"; printf x >"$fixture/chat-bot-state/state"
+mkdir -p -m 700 "$fixture/chat-bot-state"; printf x >"$fixture/chat-bot-state/state"
+# Check permissions independently of the caller's umask before testing missing keys.
+chmod 755 "$fixture/chat-bot-state"
+assert_not run "$fixture/update-with-bots.sh" >/dev/null 2>"$sandbox/insecure-state.err"
+assert grep -q 'with mode 0700' "$sandbox/insecure-state.err"
+assert test ! -e "$fixture/bot-config/bots.env"
+chmod 700 "$fixture/chat-bot-state"
 assert_not run "$fixture/update-with-bots.sh" >/dev/null 2>"$sandbox/missing-key.err"
 assert grep -q 'Refusing nonempty chat-bot-state' "$sandbox/missing-key.err"
 assert test ! -e "$fixture/bot-config/bots.env"

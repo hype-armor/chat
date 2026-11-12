@@ -20,10 +20,11 @@ fail() { printf '%s\n' "$*" >&2; return 1; }
 
 validate_integer() {
   local value=$1 lower=$2 upper=$3 label=$4
-  [[ $value =~ ^0*([1-9][0-9]{0,2})$ ]] && ((10#$value >= lower && 10#$value <= upper)) || {
-    printf '%s must be an integer from %s through %s.\n' "$label" "$lower" "$upper" >&2
-    return 2
-  }
+  if [[ $value =~ ^0*([1-9][0-9]{0,2})$ ]]; then
+    if ((10#$value >= lower && 10#$value <= upper)); then return 0; fi
+  fi
+  printf '%s must be an integer from %s through %s.\n' "$label" "$lower" "$upper" >&2
+  return 2
 }
 
 # Read a deliberately small env-file format without evaluating it. The result is
@@ -114,7 +115,7 @@ write_bot_config() {
 
 configure_bots() {
   local config_dir=$1 data_dir=$2 count_override=$3 rate_override=$4 dry_run=$5
-  local config="$config_dir/bots.env" existing= count=2 rate=12 key= mode owner
+  local config="$config_dir/bots.env" existing='' count=2 rate=12 key='' mode owner
   if [[ -e $data_dir ]]; then
     mode=$(stat -c %a -- "$data_dir")
     owner=$(stat -c %u -- "$data_dir")
@@ -289,7 +290,7 @@ PY
 
 main() {
   local force=false dry_run=false enable_bots=false refresh_invites=false
-  local count_override= rate_override= argument
+  local count_override='' rate_override='' argument
   while (($#)); do
     case "$1" in
       --force) force=true ;;
@@ -354,7 +355,7 @@ main() {
   local -a builds=() recreate=() base_services=(server web echo)
   plan=$(fingerprints "$enable_bots" "$dry_run")
   while IFS=$'\t' read -r service digest image bind_digest; do
-    previous= previous_image= previous_bind=
+    previous='' previous_image='' previous_bind=''
     if [[ -f $state/$service ]]; then read -r previous previous_image previous_bind <"$state/$service" || true; fi
     current=$(docker image inspect --format '{{.Id}}' "$image" 2>/dev/null) || current=
     if [[ $force == true || $digest != "$previous" || -z $current || $current != "$previous_image" ]]; then

@@ -30,7 +30,10 @@ jobs:
       - uses: actions/checkout@v4
       - run: bash -n scripts/compose-build.sh scripts/test-compose-build.sh update-with-bots.sh scripts/test-update-with-bots.sh
       - run: scripts/test-compose-build.sh
-      - run: scripts/test-update-with-bots.sh
+      - name: Test the updater with standard and private caller permissions
+        run: |
+          (umask 022; scripts/test-update-with-bots.sh)
+          (umask 077; scripts/test-update-with-bots.sh)
       - name: Validate optional bots Compose configuration without secrets
         run: docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.bots.yml --profile bots config --no-env-resolution --quiet
       - uses: docker/setup-buildx-action@v3
