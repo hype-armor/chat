@@ -188,7 +188,7 @@ assert_not grep -q '^build ' "$fixture/log"
 
 # Never create replacement identities when encrypted state exists without configuration.
 reset
-mkdir -p -m 700 "$fixture/chat-bot-state"; printf x >"$fixture/chat-bot-state/state"
+mkdir -m 700 "$fixture/chat-bot-state"; printf x >"$fixture/chat-bot-state/state"
 # Check permissions independently of the caller's umask before testing missing keys.
 chmod 755 "$fixture/chat-bot-state"
 assert_not run "$fixture/update-with-bots.sh" >/dev/null 2>"$sandbox/insecure-state.err"
