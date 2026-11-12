@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { generateWorld, summarizeWorld, validateWorld } from './world.mjs';
 import { FreeProvider, buildPrompt } from './provider.mjs';
+import { SyntheticProvider } from './synthetic.mjs';
 import { StateStore, stateKey } from './store.mjs';
 import { BotController } from './controller.mjs';
 import { NativeTransport } from './transport.mjs';
@@ -17,10 +18,16 @@ async function shutdown() {
 }
 try {
   if (!['plan', 'bootstrap', 'run'].includes(mode) || process.argv.length > 3) throw new Error('Usage: node scripts/bot-world/run.mjs [plan|bootstrap|run]');
+  const generationMode = process.env.CHAT_BOT_MODE ?? 'synthetic';
+  if (!['synthetic', 'ai'].includes(generationMode)) throw new Error('Bot generation mode must be synthetic or ai.');
+  const syntheticMessagesPerMinute = generationMode === 'synthetic' ? Number(process.env.CHAT_BOT_MESSAGES_PER_MINUTE ?? 12) : 12;
+  if (!Number.isInteger(syntheticMessagesPerMinute) || syntheticMessagesPerMinute < 1 || syntheticMessagesPerMinute > 120) throw new Error('Synthetic message rate must be 1 through 120 per minute.');
   const world = process.env.CHAT_BOT_WORLD_FILE
     ? validateWorld(JSON.parse(await readFile(process.env.CHAT_BOT_WORLD_FILE, 'utf8'))) : generateWorld();
   if (mode === 'plan') {
-    console.log(JSON.stringify({ ...summarizeWorld(world), model: process.env.CHAT_BOT_AI_MODEL ?? 'openrouter/free', activated: false, note: 'No accounts created, network requests, or model calls.' }, null, 2));
+    console.log(JSON.stringify({ ...summarizeWorld(world), generationMode, model: generationMode === 'ai' ? process.env.CHAT_BOT_AI_MODEL ?? 'openrouter/free' : null,
+      messagesPerMinute: generationMode === 'synthetic' ? syntheticMessagesPerMinute : null,
+      activated: false, note: 'No accounts created, network requests, or model calls.' }, null, 2));
   } else {
     if (process.env.CHAT_BOTS_ENABLED !== 'true') throw new Error('Set CHAT_BOTS_ENABLED=true to explicitly enable bot network operations.');
     const server = new URL(process.env.CHAT_BOT_SERVER ?? 'http://127.0.0.1:8080');
@@ -29,7 +36,8 @@ try {
     const directory = resolve(process.env.CHAT_BOT_STATE_DIR ?? 'bot-state');
     process.env.CHAT_BOT_STATE_DIR = resolve(directory, 'transport');
     process.env.CHAT_BOT_SERVER = server.href.replace(/\/$/, '');
-    const provider = new FreeProvider({ apiKey: mode === 'bootstrap' ? 'unused-bootstrap-key' : process.env.CHAT_BOT_AI_API_KEY });
+    const provider = generationMode === 'synthetic' ? new SyntheticProvider()
+      : new FreeProvider({ apiKey: mode === 'bootstrap' ? 'unused-bootstrap-key' : process.env.CHAT_BOT_AI_API_KEY });
     const binding = createHash('sha256').update(JSON.stringify({ server: server.href, world })).digest('hex');
     store = new StateStore(resolve(directory, 'controller'), stateKey(process.env.CHAT_BOT_STATE_KEY));
     await store.lock();
@@ -50,8 +58,9 @@ try {
       onFailure: () => { if (!stopping) { fatal = true; void shutdown(); } },
     });
     controller = new BotController({ world, transport, provider, store, state, binding, buildPrompt,
-      dailyLimit: Number(process.env.CHAT_BOT_DAILY_REQUESTS ?? 50),
-      requestsPerMinute: Number(process.env.CHAT_BOT_REQUESTS_PER_MINUTE ?? 10),
+      mode: generationMode, syntheticMessagesPerMinute,
+      dailyLimit: generationMode === 'ai' ? Number(process.env.CHAT_BOT_DAILY_REQUESTS ?? 50) : 50,
+      requestsPerMinute: generationMode === 'ai' ? Number(process.env.CHAT_BOT_REQUESTS_PER_MINUTE ?? 10) : 10,
     });
     await controller.save();
     process.once('SIGINT', () => { void shutdown(); });
@@ -99,7 +108,9 @@ try {
         if (stopping) break;
         await connect(botId);
       }
-      console.log('Bot runner active. Inference waits for connected members, consent, schedules, and quotas.');
+      console.log(generationMode === 'synthetic'
+        ? 'Synthetic bot runner active. Local test text waits for connected members, room opt-in, schedules, and traffic limits. No AI requests.'
+        : 'AI bot runner active. Inference waits for connected members, consent, schedules, and quotas.');
       while (!stopping) {
         await events;
         try { await controller.tick(); }
@@ -117,7 +128,7 @@ try {
   }
 } catch (error) {
   // Never print arbitrary provider/transport error objects, URLs, bodies, or credentials.
-  const safeMessages = ['Usage:', 'Set CHAT_BOTS_ENABLED', 'Use HTTPS', 'Bootstrap at least', 'Invalid bot username', 'Bootstrap limit', 'CHAT_BOT_STATE_KEY', 'Controller state', 'AI provider API key', 'AI provider model', 'Invalid inference limits'];
+  const safeMessages = ['Usage:', 'Set CHAT_BOTS_ENABLED', 'Use HTTPS', 'Bootstrap at least', 'Invalid bot username', 'Bootstrap limit', 'CHAT_BOT_STATE_KEY', 'Controller state', 'AI provider API key', 'AI provider model', 'Invalid inference limits', 'Invalid controller mode', 'Invalid synthetic', 'Bot generation mode', 'Synthetic message rate'];
   console.error(safeMessages.some((prefix) => error.message?.startsWith(prefix)) ? error.message : 'Bot runner failed safely. Check configuration, isolated-service availability, quotas, and state-directory ownership.');
   process.exitCode = 1;
 } finally {

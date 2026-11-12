@@ -95,7 +95,8 @@ boundaries only, not runtime encryption, consent, or inference privacy.
 
 ## Separate opt-in runner
 
-The [opt-in AI runner](ai-bots.md) registers accounts through supported APIs,
+The [opt-in bot runner](ai-bots.md) defaults to local random text (ADR-0045), with
+optional AI mode. It registers accounts through supported APIs,
 creates real MLS conversations, and maps fixture IDs to account/conversation IDs.
 It does not insert memberships directly in the server database. Bots must be
 clearly disclosed; human participants must consent before conversation context

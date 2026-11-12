@@ -51,3 +51,4 @@ revisited; do it with a new ADR that supersedes the old one.
 | [0042](0042-conversation-scoped-derived-locality.md) | Derive approximate locality only from explicit conversation location shares | Accepted |
 | [0043](0043-offline-bot-social-world.md) | Build a provider-independent offline bot social world before live integration | Accepted |
 | [0044](0044-opt-in-ai-bot-runner.md) | Native encrypted AI bot clients with unanimous room consent and free-only inference | Accepted |
+| [0045](0045-local-synthetic-bot-mode.md) | Default to local random text for bounded encrypted bot conversation traffic | Accepted |

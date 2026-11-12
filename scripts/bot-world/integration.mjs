@@ -132,11 +132,14 @@ async function stopChild(child) {
   }
 }
 
-export async function runIntegration({ databaseUrl = process.env.BOT_TEST_DATABASE_URL } = {}) {
+export async function runIntegration({ databaseUrl = process.env.BOT_TEST_DATABASE_URL, generationMode = 'ai' } = {}) {
   let phase = 'database-guard';
   // This validation must finish before any socket, subprocess, or HTTP activity.
   let guardedDatabaseUrl;
-  try { guardedDatabaseUrl = guardDatabaseUrl(databaseUrl); } catch { throw phaseFailure(phase); }
+  try {
+    if (!['ai', 'synthetic'].includes(generationMode)) throw new Error('Invalid generation mode.');
+    guardedDatabaseUrl = guardDatabaseUrl(databaseUrl);
+  } catch { throw phaseFailure(phase); }
   phase = 'server-ready';
   let root;
   try {
@@ -158,6 +161,8 @@ export async function runIntegration({ databaseUrl = process.env.BOT_TEST_DATABA
   const connected = new Set();
   const decryptedMessages = [];
   const providerPrompts = [];
+  const generatedReplies = [];
+  const syntheticCalls = [];
   let eventCount = 0;
   const drainEvents = async () => {
     await bounded(eventChain, LIMIT_MS, 'Native event processing timed out.');
@@ -188,18 +193,34 @@ export async function runIntegration({ databaseUrl = process.env.BOT_TEST_DATABA
     const fixture = world.conversations.find((item) => item.id === fixtureId);
     if (!fixture || fixture.memberIds.length !== 3) throw new Error('Expected the three-member test fixture.');
     const [botOne, botTwo, humanBotId] = fixture.memberIds;
-    const mockProvider = {
-      disclosure: 'Mock inference provider for isolated integration testing. No external inference is used.',
-      async generate(input) {
-        providerPrompts.push(structuredClone({ system: input.system, messages: input.messages }));
-        return GENERATED_REPLY;
-      },
-    };
+    let mockProvider;
+    if (generationMode === 'synthetic') {
+      const { SyntheticProvider } = await import('./synthetic.mjs');
+      const syntheticProvider = new SyntheticProvider();
+      mockProvider = {
+        disclosure: 'Synthetic local text provider for isolated integration testing.',
+        async generate(input) {
+          syntheticCalls.push({ keys: Object.keys(input).sort(), signal: input.signal });
+          const reply = await syntheticProvider.generate(input);
+          generatedReplies.push(reply);
+          return reply;
+        },
+      };
+    } else {
+      mockProvider = {
+        disclosure: 'Mock inference provider for isolated integration testing. No external inference is used.',
+        async generate(input) {
+          providerPrompts.push(structuredClone({ system: input.system, messages: input.messages }));
+          return GENERATED_REPLY;
+        },
+      };
+    }
     const binding = `integration-${randomUUID()}`;
     const state = loadedState ?? initialState(binding);
     controller = new BotController({
       world, transport: null, provider: mockProvider, store, state, binding,
       buildPrompt: (await import('./provider.mjs')).buildPrompt,
+      mode: generationMode,
       dailyLimit: 50, requestsPerMinute: 10,
     });
     const nativeEnv = {
@@ -302,7 +323,7 @@ export async function runIntegration({ databaseUrl = process.env.BOT_TEST_DATABA
     }, { timeoutMs: 20_000, intervalMs: 150, label: 'Coordinator disclosure was not accepted.' });
     phase = 'consent';
     const room = controller.state.rooms[conversationId];
-    const consentText = `/ai consent ${room.nonce}`;
+    const consentText = `${generationMode === 'synthetic' ? '/bots' : '/ai'} consent ${room.nonce}`;
     const beforeConsentMembership = await request(transport, 'members', humanMemberData);
     await pollAccepted(transport, 'send', {
       ...humanMemberData, operationId: `consent-${randomUUID()}`,
@@ -320,28 +341,41 @@ export async function runIntegration({ databaseUrl = process.env.BOT_TEST_DATABA
       ...humanMemberData, operationId: `post-consent-${randomUUID()}`,
       expectedMembershipKey: postConsentMembership.membershipKey, text: postConsentText,
     }, true, 'Post-consent native message was not accepted.', drainEvents);
-    await waitFor(async () => {
-      await drainEvents();
-      return room.history.some((item) => item.text === postConsentText);
-    }, { timeoutMs: 15_000, label: 'Post-consent message was not added to room context.' });
+    if (generationMode === 'synthetic') {
+      await waitFor(async () => { await drainEvents(); return room.syntheticTriggered === true; },
+        { timeoutMs: 15_000, label: 'Post-consent synthetic trigger was not observed.' });
+      if (room.history.length !== 0) throw new Error('Synthetic mode retained human text.');
+    } else {
+      await waitFor(async () => {
+        await drainEvents();
+        return room.history.some((item) => item.text === postConsentText);
+      }, { timeoutMs: 15_000, label: 'Post-consent message was not added to room context.' });
+    }
     if (room.history.some((item) => item.text.includes(preConsentText))) throw new Error('Pre-consent text was retained.');
     phase = 'inference';
     await controller.exclusive(async () => {
       room.lastAt = Date.now() - 180_000;
+      if (generationMode === 'synthetic') room.nextAt = 0;
       await controller.save();
     });
     await waitFor(async () => {
       await tickWithRetry();
-      return providerPrompts.length > 0 && decryptedMessages.some((message) => message.text === GENERATED_REPLY);
-    }, { timeoutMs: 30_000, intervalMs: 100, label: 'Mock inference reply was not decrypted from native MLS traffic.' });
-    if (providerPrompts.some((prompt) => JSON.stringify(prompt).includes(preConsentText))) throw new Error('Pre-consent text reached mock inference.');
-    if (!providerPrompts.some((prompt) => JSON.stringify(prompt).includes(postConsentText))) throw new Error('Post-consent text did not reach mock inference.');
+      const replies = generationMode === 'synthetic' ? generatedReplies : [GENERATED_REPLY];
+      return replies.length > 0 && replies.some((reply) => decryptedMessages.some((message) => message.text === reply));
+    }, { timeoutMs: 30_000, intervalMs: 100, label: 'Generated reply was not decrypted from native MLS traffic.' });
+    if (generationMode === 'synthetic') {
+      if (syntheticCalls.some((input) => input.keys.join(',') !== 'signal' || !(input.signal instanceof AbortSignal))) throw new Error('Synthetic provider received non-signal input.');
+      if (providerPrompts.length !== 0 || room.history.length !== 0) throw new Error('Synthetic mode retained or submitted human text.');
+    } else {
+      if (providerPrompts.some((prompt) => JSON.stringify(prompt).includes(preConsentText))) throw new Error('Pre-consent text reached mock inference.');
+      if (!providerPrompts.some((prompt) => JSON.stringify(prompt).includes(postConsentText))) throw new Error('Post-consent text did not reach mock inference.');
+    }
 
     phase = 'stop';
     const stopMembership = await request(transport, 'members', humanMemberData);
     await pollAccepted(transport, 'send', {
       ...humanMemberData, operationId: `stop-${randomUUID()}`,
-      expectedMembershipKey: stopMembership.membershipKey, text: '/ai stop',
+      expectedMembershipKey: stopMembership.membershipKey, text: generationMode === 'synthetic' ? '/bots stop' : '/ai stop',
     }, true, 'Native stop command was not accepted.', drainEvents);
     await waitFor(async () => {
       await drainEvents();
@@ -350,7 +384,7 @@ export async function runIntegration({ databaseUrl = process.env.BOT_TEST_DATABA
     await controller.stop();
     await drainEvents();
     if (transportFailed) throw new Error('Native transport reported a failure.');
-    return { ok: true, registeredIdentities: accounts.size, managedBots: 2, humanIdentities: 1, roomMembers: 3, providerCalls: providerPrompts.length, decryptedMessages: decryptedMessages.length, events: eventCount };
+    return { ok: true, mode: generationMode, registeredIdentities: accounts.size, managedBots: 2, humanIdentities: 1, roomMembers: 3, providerCalls: providerPrompts.length, generatedMessages: generatedReplies.length, decryptedMessages: decryptedMessages.length, events: eventCount };
   } catch {
     failurePending = true;
     throw phaseFailure(phase);
@@ -372,7 +406,8 @@ export async function runIntegration({ databaseUrl = process.env.BOT_TEST_DATABA
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
-    const result = await runIntegration();
+    const generationMode = process.env.BOT_TEST_MODE ?? 'ai';
+    const result = await runIntegration({ generationMode });
     console.log(`Isolated native integration passed: ${JSON.stringify(result)}.`);
   } catch (error) {
     const phase = PHASES.has(error?.phase) ? error.phase : 'server-ready';

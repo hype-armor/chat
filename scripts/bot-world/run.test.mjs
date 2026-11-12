@@ -14,7 +14,30 @@ test('default CLI mode only plans the world without credentials or activation', 
   const plan = JSON.parse(result.stdout);
   assert.equal(plan.activated, false);
   assert.equal(plan.bots, 100);
-  assert.equal(plan.model, 'openrouter/free');
+  assert.equal(plan.generationMode, 'synthetic');
+  assert.equal(plan.model, null);
+  assert.equal(plan.messagesPerMinute, 12);
+});
+
+test('AI mode remains explicit, and synthetic mode needs no provider key', () => {
+  const ai = run(['plan'], { CHAT_BOT_MODE: 'ai' });
+  assert.equal(ai.status, 0, ai.stderr);
+  assert.equal(JSON.parse(ai.stdout).model, 'openrouter/free');
+  const synthetic = run(['run'], { CHAT_BOTS_ENABLED: 'true', CHAT_BOT_MODE: 'synthetic', CHAT_BOT_BINARY: '/must-not-run' });
+  assert.equal(synthetic.status, 1);
+  assert.match(synthetic.stderr, /CHAT_BOT_STATE_KEY/);
+  assert.ok(!synthetic.stderr.includes('AI provider API key'));
+});
+
+test('invalid generation mode and synthetic traffic caps fail before activation', () => {
+  for (const env of [{ CHAT_BOT_MODE: 'unknown' }, ...['0', '-1', '121', 'NaN', '1.5'].map((value) => ({ CHAT_BOT_MESSAGES_PER_MINUTE: value }))]) {
+    const result = run(['plan'], env);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Bot generation mode|Synthetic message rate/);
+  }
+  const capped = run(['plan'], { CHAT_BOT_MESSAGES_PER_MINUTE: '30' });
+  assert.equal(capped.status, 0, capped.stderr);
+  assert.equal(JSON.parse(capped.stdout).messagesPerMinute, 30);
 });
 
 test('network modes require explicit activation before reading secrets or starting worker', () => {

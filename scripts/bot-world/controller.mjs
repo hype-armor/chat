@@ -17,10 +17,15 @@ export function initialState(binding) {
 }
 
 export class BotController {
-  constructor({ world, transport, provider, store, state, binding, buildPrompt, now = Date.now, random = Math.random, dailyLimit = 50, requestsPerMinute = 10 }) {
-    if (!Number.isInteger(dailyLimit) || dailyLimit < 1 || dailyLimit > 1000
-      || !Number.isInteger(requestsPerMinute) || requestsPerMinute < 1 || requestsPerMinute > 20) throw new Error('Invalid inference limits.');
+  constructor({ world, transport, provider, store, state, binding, buildPrompt, mode = 'ai', now = Date.now, random = Math.random, dailyLimit = 50, requestsPerMinute = 10, syntheticMessagesPerMinute = 12, syntheticReplyMinMs = 5000, syntheticReplyMaxMs = 30000, syntheticBurstMin = 3, syntheticBurstMax = 6, syntheticQuietMinMs = 300000, syntheticQuietMaxMs = 3600000 }) {
+    if (!['ai', 'synthetic'].includes(mode) || !Number.isInteger(dailyLimit) || dailyLimit < 1 || dailyLimit > 1000
+      || !Number.isInteger(requestsPerMinute) || requestsPerMinute < 1 || requestsPerMinute > 20
+      || !Number.isInteger(syntheticMessagesPerMinute) || syntheticMessagesPerMinute < 1 || syntheticMessagesPerMinute > 120
+      || !Number.isInteger(syntheticReplyMinMs) || !Number.isInteger(syntheticReplyMaxMs) || syntheticReplyMinMs < 1 || syntheticReplyMinMs > syntheticReplyMaxMs
+      || !Number.isInteger(syntheticBurstMin) || !Number.isInteger(syntheticBurstMax) || syntheticBurstMin < 1 || syntheticBurstMin > syntheticBurstMax
+      || !Number.isInteger(syntheticQuietMinMs) || !Number.isInteger(syntheticQuietMaxMs) || syntheticQuietMinMs < 1 || syntheticQuietMinMs > syntheticQuietMaxMs) throw new Error('Invalid controller mode or limits.');
     this.world = world; this.transport = transport; this.provider = provider; this.store = store;
+    this.mode = mode; this.synthetic = { messagesPerMinute: syntheticMessagesPerMinute, replyMinMs: syntheticReplyMinMs, replyMaxMs: syntheticReplyMaxMs, burstMin: syntheticBurstMin, burstMax: syntheticBurstMax, quietMinMs: syntheticQuietMinMs, quietMaxMs: syntheticQuietMaxMs };
     this.state = state ?? initialState(binding); this.buildPrompt = buildPrompt;
     if (this.state.version !== 1 || this.state.binding !== binding) throw new Error('Controller state belongs to another configuration.');
     // JSON restore loses null prototypes. Never interpret inherited room/account
@@ -44,6 +49,7 @@ export class BotController {
   reset(room) {
     if (this.inflight?.roomId === room.id) this.inflight.abort.abort();
     room.nonce = nonce(); room.consent = []; room.history = []; room.recentMessages = [];
+    room.syntheticLastBotId = null; room.syntheticTriggered = false; room.syntheticBurst = 0; room.syntheticBurstLimit = 0; room.nextAt = 0;
     room.disclosed = false; room.disclosureVersion = this.disclosureVersion;
     room.revision = (room.revision ?? 0) + 1; room.pendingSend = null; room.turns = 0;
   }
@@ -119,15 +125,20 @@ export class BotController {
     room.recentMessages.push(messageKey); room.recentMessages = room.recentMessages.slice(-128);
     const human = !this.botForAccount(event.senderAccountId);
     const text = event.text.trim();
-    if (human && text === '/ai stop') { this.reset(room); room.paused = true; return; }
-    if (human && text === '/ai start') { this.reset(room); room.paused = false; return; }
-    if (human && room.disclosed && text === `/ai consent ${room.nonce}`) {
+    if (human && (text === '/ai stop' || (this.mode === 'synthetic' && text === '/bots stop'))) { this.reset(room); room.paused = true; return; }
+    if (human && (text === '/ai start' || (this.mode === 'synthetic' && text === '/bots start'))) { this.reset(room); room.paused = false; return; }
+    if (human && room.disclosed && (text === `/ai consent ${room.nonce}` || (this.mode === 'synthetic' && text === `/bots consent ${room.nonce}`))) {
       if (!room.consent.includes(event.senderAccountId)) room.consent.push(event.senderAccountId);
       return;
     }
-    if (text.startsWith('/ai ')) return;
+    if (text.startsWith('/ai ') || (this.mode === 'synthetic' && text.startsWith('/bots '))) return;
     // Never retain or submit text received before unanimous consent.
     if (!this.authorized(room)) return;
+    if (this.mode === 'synthetic') {
+      if (human) { room.syntheticTriggered = true; room.syntheticLastBotId = null; }
+      room.lastAt = this.now(); room.revision++;
+      return;
+    }
     // Persist only text; attachments, location, calls, profiles, and typing never enter prompts.
     if (this.inflight?.roomId === room.id) this.inflight.abort.abort();
     room.revision++;
@@ -157,7 +168,17 @@ export class BotController {
     return true;
   }
   disclosure(room) {
+    if (this.mode === 'synthetic') return `Synthetic bots are participants in this conversation. They use local random text. No external inference requests are made. The operator controls these clients and can read received messages. Human text is not used to generate replies or retained in coordinator history. The encrypted transport journal can hold received messages until acknowledged. A membership change requires fresh consent. To agree, send exactly: /bots consent ${room.nonce}\nAny member can send /bots stop to pause, or /bots start to request a fresh consent round.`;
     return `AI bots are participants in this conversation. The bot operator controls their clients and can read messages they receive. ${this.provider.disclosure}\nOnly text received by the bots after every human member consents can enter the AI context. Attachments, calls, and locations are excluded. A membership change requires fresh consent. To agree, send exactly: /ai consent ${room.nonce}\nAny member can send /ai stop to pause and clear local AI context, or /ai start to request a fresh consent round. Stopping cannot recall text already sent to a provider.`;
+  }
+  syntheticBudget(now, reserve = false) {
+    const q = this.state.syntheticQuota ??= { windowAt: now, used: 0, nextAt: now };
+    // A backwards clock must not replenish a persisted traffic budget.
+    if (now < q.windowAt) return false;
+    if (now - q.windowAt >= 60000) { q.windowAt = now; q.used = 0; }
+    if (q.used >= this.synthetic.messagesPerMinute || now < (q.nextAt ?? 0)) return false;
+    if (reserve) { q.used++; q.nextAt = now + Math.ceil(60000 / this.synthetic.messagesPerMinute); }
+    return true;
   }
   async prepare() {
     if (this.stopped || this.inflight) return null;
@@ -180,11 +201,36 @@ export class BotController {
       }
       if (!this.authorized(room)) continue;
       if (room.pendingSend) {
+        if (this.mode === 'synthetic' && !this.syntheticBudget(now)) continue;
         if (!await this.current(room, room.pendingSend.botId) || !unchanged()) continue;
         const pending = room.pendingSend;
+        if (this.mode === 'synthetic') {
+          if (!this.syntheticBudget(this.now(), true)) continue;
+          await this.save();
+          if (!unchanged()) continue;
+        }
         const result = await this.send(room, pending.botId, pending.text, pending.operationId);
-        if (result.accepted === true) { this.sent(room, pending.botId, pending.text); await this.save(); }
+        if (!unchanged()) continue;
+        if (result.accepted === true) { this.mode === 'synthetic' ? this.sentSynthetic(room, pending.botId) : this.sent(room, pending.botId, pending.text); await this.save(); }
         continue;
+      }
+      if (this.mode === 'synthetic') {
+        const fixtureId = Object.entries(this.state.fixtures).find(([, id]) => id === room.id)?.[0];
+        if (!room.syntheticTriggered && !fixtureId) continue;
+        if (now < (room.nextAt ?? 0)) continue;
+        if (!this.syntheticBudget(now)) continue;
+        const fixture = this.world.conversations.find((c) => c.id === fixtureId);
+        const lastBotId = room.syntheticLastBotId;
+        const candidates = accountIds(room.members).map((id) => this.botForAccount(id)).filter((id) => id && id !== lastBotId && this.connected.has(id) && this.active(id, now) && (fixture?.participation.find((p) => p.botId === id)?.replyWeight ?? 0.4) > 0);
+        if (!candidates.length) continue;
+        const weights = candidates.map((id) => fixture?.participation.find((p) => p.botId === id)?.replyWeight ?? 0.4);
+        let choice = this.random() * weights.reduce((a, b) => a + b, 0), botId = candidates.at(-1);
+        for (let i = 0; i < candidates.length; i++) { choice -= weights[i]; if (choice <= 0) { botId = candidates[i]; break; } }
+        if (!await this.current(room, botId) || !unchanged()) continue;
+        this.state.classLastAt[roomClass(room)] = now; await this.save();
+        if (!unchanged()) continue;
+        const job = { roomId: room.id, botId, revision: room.revision, observed, membershipKey: room.membershipKey, abort: new AbortController() };
+        this.inflight = job; return job;
       }
       const quota = this.state.quota;
       const today = stamp(now);
@@ -234,6 +280,15 @@ export class BotController {
     room.history = room.history.slice(-MAX_HISTORY);
     room.pendingSend = null; room.lastAt = this.now(); room.turns++; room.revision++;
   }
+  sentSynthetic(room, botId) {
+    room.pendingSend = null; room.syntheticLastBotId = botId; room.lastAt = this.now(); room.turns++; room.revision++;
+    room.syntheticBurst = (room.syntheticBurst ?? 0) + 1;
+    const { burstMin, burstMax, replyMinMs, replyMaxMs, quietMinMs, quietMaxMs } = this.synthetic;
+    const pick = (min, max) => min + Math.floor(this.random() * (max - min + 1));
+    if (!room.syntheticBurstLimit) room.syntheticBurstLimit = pick(burstMin, burstMax);
+    if (room.syntheticBurst >= room.syntheticBurstLimit) { room.syntheticBurst = 0; room.syntheticBurstLimit = 0; room.nextAt = this.now() + pick(quietMinMs, quietMaxMs); }
+    else room.nextAt = this.now() + pick(replyMinMs, replyMaxMs);
+  }
   async tick() {
     const job = await this.exclusive(() => this.prepare());
     if (!job) return;
@@ -242,7 +297,9 @@ export class BotController {
     }
     let output, failure;
     try {
-      output = await this.provider.generate({ ...job.prompt, signal: job.abort.signal });
+      output = this.mode === 'synthetic'
+        ? await this.provider.generate({ signal: job.abort.signal })
+        : await this.provider.generate({ ...job.prompt, signal: job.abort.signal });
     } catch (error) { failure = error; }
     await this.exclusive(async () => {
       try {
@@ -250,6 +307,7 @@ export class BotController {
         if (job.abort.signal.aborted || this.stopped || !room || room.revision !== job.revision
           || room.membershipKey !== job.membershipKey || !this.authorized(room)) return;
         if (failure) {
+          if (this.mode === 'synthetic') { await this.save(); return; }
           const quota = this.state.quota;
           quota.failures = Math.min(quota.failures + 1, 8);
           quota.blockedUntil = this.now() + Math.max(Math.min(failure.retryAfterMs ?? 0, 21600000), Math.min(60000 * 2 ** quota.failures, 21600000));
@@ -258,14 +316,20 @@ export class BotController {
         if (typeof output !== 'string' || !output.trim() || output.length > 2000) return;
         if (!await this.current(room, job.botId) || job.abort.signal.aborted
           || job.observed !== (this.observed.get(room.id) ?? 0)) return;
+        if (this.mode === 'synthetic' && !this.syntheticBudget(this.now(), true)) return;
         room.pendingSend = { botId: job.botId, text: output, operationId: randomUUID() };
         await this.save();
         if (job.abort.signal.aborted || job.observed !== (this.observed.get(room.id) ?? 0)) {
           room.pendingSend = null; await this.save(); return;
         }
         const result = await this.send(room, job.botId, output, room.pendingSend.operationId);
-        if (result.accepted === true) this.sent(room, job.botId, output);
-        this.state.quota.failures = 0; await this.save();
+        if (job.abort.signal.aborted || this.stopped || job.observed !== (this.observed.get(room.id) ?? 0)) return;
+        if (result.accepted === true) {
+          if (this.mode === 'synthetic') this.sentSynthetic(room, job.botId);
+          else this.sent(room, job.botId, output);
+        }
+        if (this.mode === 'ai') this.state.quota.failures = 0;
+        await this.save();
       } finally { this.inflight = null; }
     });
   }
