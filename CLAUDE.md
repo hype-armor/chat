@@ -73,6 +73,10 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   fence sends against unacknowledged room events, and never replay stale AI outbox work autonomously.
   Keep keys/state encrypted, inference free-only, and quota reservations durable before requests.
   Run `pnpm bots:world:test` and `cargo test -p chat-bot`; never activate bots against a live deployment for tests.
+  `update-with-bots.sh` is a separate Compose updater (ADR-0046); preserve the operator's
+  `update.sh`. Bot registration/start requires `--enable-bots`. Never replace missing
+  keys over existing state or bypass bootstrap quotas. Run `scripts/test-update-with-bots.sh`
+  with mock services after updater changes; keep bot config outside Git and build context.
 - Run browser tests against isolated test services, never a live deployment.
 - Browser and OS permission grants belong to the browser. Do not cache fake grants or keep
   idle camera/microphone streams to avoid prompts. Prevent duplicate capture requests and

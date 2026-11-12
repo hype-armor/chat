@@ -150,6 +150,71 @@ own server on an ephemeral loopback port. To run it manually, supply
 starts with `chat_bots_test`. The script refuses other database names, remote
 hosts, and URL overrides before any network activity. It never uses an AI API key.
 
+## Compose updater: app plus optional synthetic bots
+
+`update-with-bots.sh` is a separate updater. It does not replace or edit your
+existing `update.sh`. It uses the same Compose deployment and sequential image
+builds, with an additional optional bot image. Docker/Compose, Git, Python 3,
+`flock`, and the existing sudo build permissions are required; no host Rust or
+Node installation or AI key is needed. The application stack and its dependencies
+must already be running; this updates an existing deployment, not a fresh server.
+The first run establishes its own baseline and can build all selected images.
+
+```sh
+# Inspect only: no pull, files, image builds, registrations, or deployment.
+./update-with-bots.sh --dry-run
+
+# Update the app, configure private credentials, bootstrap 2 bots, then run them.
+./update-with-bots.sh --enable-bots --bot-count 2
+```
+
+Without `--enable-bots`, the script configures the bots but does not register or
+start them. Use the activation flag on updates when you want the runner active.
+New updater runs share a repository-wide lock across Git worktrees. They also
+share the original updater's lock in the current checkout. Do not run an old
+`update.sh` from a different worktree or clone against the same deployment.
+Bot configuration lives in `bot-config/` (private mode `0700`), with `bots.env`
+mode `0600`. Encrypted state lives separately in `chat-bot-state/`. Both paths
+are excluded from Git and Docker build context. Never delete either directory
+to solve an update, authentication, or quota error. Preserve the state key;
+the updater will not generate a replacement over existing state. Run updates as
+the same host user so the private binds retain their ownership and access modes.
+
+The updater creates private registration invitations through the supported server
+CLI, then uses the real bot registration/MLS bootstrap flow. It does not change
+server limits, insert memberships, enable AI, or print keys and invite codes.
+Invitation files are reused; `--refresh-invites` creates fresh codes if unused
+ones expire after 7 days. It does not revoke older unused codes or reset identities.
+
+To request more accounts later, rerun with a larger limit:
+
+```sh
+./update-with-bots.sh --enable-bots --bot-count 100 --messages-per-minute 12
+```
+
+Registration is still limited to 10 accounts/hour by default. A partial bootstrap
+saves progress and returns a failure so the operator knows to resume later;
+registered accounts can still run. Do not keep retrying immediately or bypass
+quotas. Counts and rates are preserved unless explicitly changed. The existing
+native journal capacity makes this a bounded first-pass runner, not an unlimited
+load generator.
+
+The optional overlay is `deploy/compose/docker-compose.bots.yml`. Its bot
+container shares the server's network namespace and uses `127.0.0.1:8080`.
+The public app URL and TLS configuration stay unchanged. It exposes no ports.
+
+```sh
+docker compose -f deploy/compose/docker-compose.yml \
+  -f deploy/compose/docker-compose.bots.yml --profile bots logs --tail 50 bots
+docker compose -f deploy/compose/docker-compose.yml \
+  -f deploy/compose/docker-compose.bots.yml --profile bots stop bots
+```
+
+Logs show aggregate progress, not chat text. Observe messages through a normal
+human-owned group as described above. The CLI also offers `status`, which reads
+an encrypted coordinator snapshot and prints only registered-account and fixture
+conversation counts. It starts no worker and makes no network requests.
+
 ## Operator setup
 
 Build the native worker:

@@ -15,8 +15,8 @@ mkdir "$sandbox/bin"
 # Inspect logical Dockerfile instructions, not comments or physical lines.
 # Every Cargo RUN must own the same BuildKit mutex for its complete lifetime.
 check_cargo_dockerfile() {
-  local file=$1 service=$2
-  awk -v service="$service" '
+  local file=$1 service=$2 package=$3
+  awk -v service="$service" -v package="$package" '
     function fail(message) {
       print FILENAME ": " message > "/dev/stderr"
       failed = 1
@@ -43,7 +43,7 @@ check_cargo_dockerfile() {
       if (!budget || budget >= firstCargo) fail("Cargo RUN must export the override or nproc budget before Cargo starts")
       if (instruction ~ /cargo[ \t]+install[ \t]+wasm-bindgen-cli([ \t]|$)/) wasmInstall++
       if (instruction ~ /scripts\/build-wasm[.]sh/) wasmBuild++
-      if (instruction ~ /cargo[ \t]+build[ \t]/ && index(instruction, "-p chat-" service)) serviceBuild++
+      if (instruction ~ /cargo[ \t]+build[ \t]/ && index(instruction, "-p " package)) serviceBuild++
     }
     /^[ \t]*#/ || /^[ \t]*$/ { next }
     {
@@ -69,9 +69,24 @@ check_cargo_dockerfile() {
   ' "$file"
 }
 
-for service in server web echo; do
-  check_cargo_dockerfile "$root/deploy/docker/$service.Dockerfile" "$service"
-done
+check_cargo_dockerfile "$root/deploy/docker/server.Dockerfile" server chat-server
+check_cargo_dockerfile "$root/deploy/docker/web.Dockerfile" web chat-server
+check_cargo_dockerfile "$root/deploy/docker/echo.Dockerfile" echo chat-echo
+check_cargo_dockerfile "$root/deploy/docker/bots.Dockerfile" bots chat-bot
+
+# The bot image must include only its native worker and offline coordinator
+# inputs. Runtime configuration and state remain mounted outside the image.
+bots_dockerfile="$root/deploy/docker/bots.Dockerfile"
+grep -Fqx 'FROM rust:1.99-bookworm AS build' "$bots_dockerfile"
+grep -Fqx 'FROM node:24-bookworm-slim' "$bots_dockerfile"
+grep -Fq 'ca-certificates util-linux' "$bots_dockerfile"
+grep -Fqx 'COPY --from=build /src/target/release/chat-bot /opt/chat/bin/chat-bot' "$bots_dockerfile"
+grep -Fqx 'COPY --from=build /src/scripts/bot-world /opt/chat/scripts/bot-world' "$bots_dockerfile"
+grep -Fqx 'COPY --from=build /src/fixtures/bot-world /opt/chat/fixtures/bot-world' "$bots_dockerfile"
+if grep -Eq '(^|/)(bots[.]env|invites[.]json)([[:space:]]|$)' "$bots_dockerfile"; then
+  echo 'Bot Dockerfile must not copy configuration secrets' >&2
+  exit 1
+fi
 
 export TEST_BUILD_LOG="$sandbox/build.log" TEST_NPROC_LOG="$sandbox/nproc.log"
 export TEST_BUILD_LOCK="$sandbox/build-active"
@@ -91,16 +106,27 @@ set -euo pipefail
 printf 'call\n' >> "$TEST_BUILD_LOG"
 [[ ${1:-} == compose ]] || { echo 'Expected docker compose' >&2; exit 90; }
 shift
-profile= build= jobs=
+echo_profile= bots_profile= build= jobs= base_file= bots_file=
 services=()
 while (($#)); do
   case "$1" in
-    -f|--file|--project-directory|--project-name|-p)
+    -f)
+      (($# >= 2)) || exit 90
+      case "$2" in
+        deploy/compose/docker-compose.yml) [[ -z $base_file ]] || exit 90; base_file=1 ;;
+        deploy/compose/docker-compose.bots.yml) [[ -z $bots_file ]] || exit 90; bots_file=1 ;;
+        *) echo "Unexpected Compose file: $2" >&2; exit 90 ;;
+      esac
+      shift 2 ;;
+    --file|--project-directory|--project-name|-p)
       (($# >= 2)) || exit 90
       shift 2 ;;
     --profile)
-      [[ ${2:-} == echo ]] || exit 90
-      profile=echo
+      case "${2:-}" in
+        echo) [[ -z $echo_profile ]] || exit 90; echo_profile=1 ;;
+        bots) [[ -z $bots_profile ]] || exit 90; bots_profile=1 ;;
+        *) exit 90 ;;
+      esac
       shift 2 ;;
     build)
       [[ -z $build ]] || exit 90
@@ -115,8 +141,13 @@ while (($#)); do
     *) services+=("$1"); shift ;;
   esac
 done
-[[ $profile == echo && $build == build && -n $jobs && ${#services[@]} == 1 ]] || exit 90
+[[ -n $base_file && -n $echo_profile && $build == build && -n $jobs && ${#services[@]} == 1 ]] || exit 90
 service=${services[0]}
+if [[ $service == bots ]]; then
+  [[ -n $bots_file && -n $bots_profile ]] || exit 90
+else
+  [[ -z $bots_file && -z $bots_profile ]] || exit 90
+fi
 # A parallel wrapper must fail, even if its log would otherwise look ordered.
 mkdir "$TEST_BUILD_LOCK" || { echo 'Overlapping Docker builds' >&2; exit 91; }
 trap 'rmdir -- "$TEST_BUILD_LOCK"' EXIT
@@ -170,6 +201,12 @@ reset_case
 export TEST_CPU_COUNT=3
 run_wrapper echo server custom.service_2 || { cat "$sandbox/output.log" >&2; exit 1; }
 expect_log 3 echo server custom.service_2
+
+# Only the bots build loads the bots overlay and bots profile.
+reset_case
+export TEST_CPU_COUNT=3
+run_wrapper bots || { cat "$sandbox/output.log" >&2; exit 1; }
+expect_log 3 bots
 
 # Validate the complete service list before starting the first build.
 for invalid in '--pull' '-x' 'two services' '' 'server;echo'; do

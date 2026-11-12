@@ -65,6 +65,12 @@ credentials, explicit room consent, and isolated-service validation. See the
 [bot setup guide](docs/ai-bots.md) for watching a conversation in a group you own.
 Optional AI mode must be enabled explicitly; free inference quotas are shared.
 
+For the existing Compose deployment, `./update-with-bots.sh --dry-run` previews a
+separate app-and-bots updater without touching your original `update.sh`.
+Use `./update-with-bots.sh --enable-bots --bot-count 2` to configure and start a
+small synthetic setup with private, persistent credentials. See the guide for
+staged bootstrap limits, observation, and stopping the runner.
+
 For isolated UI interaction tests without a database or chat server:
 
 ```sh
