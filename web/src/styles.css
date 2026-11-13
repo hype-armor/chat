@@ -234,7 +234,10 @@ form {
   display: grid;
   grid-template-columns: minmax(16rem, 22rem) 1fr;
   height: calc(var(--app-height, 100dvh) - var(--update-banner-height, 0px));
-  padding: env(safe-area-inset-top) env(safe-area-inset-right) var(--safe-bottom, env(safe-area-inset-bottom)) env(safe-area-inset-left);
+  /* The home indicator overlaps the bottom of the app: keep only a small
+     clearance, not the whole safe-area band, which would leave dead space
+     under the composer. `--safe-bottom` is 0px while the keyboard is open. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) var(--safe-bottom, min(env(safe-area-inset-bottom), 0.75rem)) env(safe-area-inset-left);
 }
 
 .chat-layout[hidden] {

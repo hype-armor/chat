@@ -2,23 +2,31 @@ import { useLayoutEffect, useRef } from 'react'
 
 type Viewport = Pick<VisualViewport, 'height' | 'offsetTop' | 'scale'>
 
-export function visualViewportProperties(viewport: Viewport | null, innerHeight: number) {
+/**
+ * `tallestHeight` is the largest viewport height seen since mount, which is the
+ * height without a keyboard. Comparing against the current `innerHeight` fails
+ * once the browser resizes the layout viewport for the keyboard too, as
+ * `interactive-widget=resizes-content` requests.
+ */
+export function visualViewportProperties(viewport: Viewport | null, tallestHeight: number) {
   if (!viewport || viewport.scale !== 1) return undefined
   return {
     '--app-height': `${viewport.height}px`,
     '--app-top': `${viewport.offsetTop}px`,
-    '--safe-bottom': viewport.height < innerHeight - 100 ? '0px' : undefined,
+    '--safe-bottom': viewport.height < tallestHeight - 100 ? '0px' : undefined,
   }
 }
 
 export function trackVisualViewport(
-  win: Pick<Window, 'visualViewport' | 'innerHeight' | 'requestAnimationFrame' | 'cancelAnimationFrame'>,
+  win: Pick<Window, 'visualViewport' | 'requestAnimationFrame' | 'cancelAnimationFrame'>,
   style: Pick<CSSStyleDeclaration, 'setProperty' | 'removeProperty'>,
 ) {
   const viewport = win.visualViewport
   if (!viewport) return () => {}
+  let tallestHeight = viewport.height
   const update = () => {
-    const properties = visualViewportProperties(viewport, win.innerHeight)
+    if (viewport.height > tallestHeight) tallestHeight = viewport.height
+    const properties = visualViewportProperties(viewport, tallestHeight)
     if (!properties) return
     for (const [name, value] of Object.entries(properties)) {
       if (value === undefined) style.removeProperty(name)
