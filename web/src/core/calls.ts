@@ -65,6 +65,11 @@ export function formatCallDuration(ms: number): string {
   return h > 0 ? `${h}:${pad(m)}:${pad(s % 60)}` : `${m}:${pad(s % 60)}`
 }
 
+/** Only missed incoming calls contribute a call notice to the sidebar preview. */
+export function isMissedCallNotice(text: string): boolean {
+  return text === '📞 Missed voice call' || text === '🎥 Missed video call'
+}
+
 /** A size cap for SDP and candidates from other devices (they reach the page). */
 export function safeSignalText(text: string, max: number): string | undefined {
   return text.length > 0 && text.length <= max ? text : undefined

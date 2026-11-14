@@ -53,3 +53,5 @@ revisited; do it with a new ADR that supersedes the old one.
 | [0044](0044-opt-in-ai-bot-runner.md) | Native encrypted AI bot clients with unanimous room consent and free-only inference | Accepted |
 | [0045](0045-local-synthetic-bot-mode.md) | Default to local random text for bounded encrypted bot conversation traffic | Accepted |
 | [0046](0046-compose-synthetic-bot-configuration.md) | Configure synthetic bots with an optional Compose image and separate updater | Accepted |
+| [0047](0047-encrypted-message-reactions.md) | Verified encrypted message reactions with deterministic account ordering and durable tombstones | Accepted |
+| [0048](0048-encrypted-message-deletion.md) | Own-device deletion synchronization and authenticated 1-hour everyone-deletion requests with durable tombstones | Accepted for implementation |
