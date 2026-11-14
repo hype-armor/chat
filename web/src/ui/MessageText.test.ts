@@ -18,8 +18,9 @@ describe('MessageText', () => {
     expect(html).toContain('<pre><code>const answer = 42</code></pre>')
   })
 
-  it('preserves single line breaks from a sent message', () => {
+  it('preserves each line break from a sent message', () => {
     expect(render('first line\nsecond line')).toContain('<div class="text message-text">first line<br/>second line</div>')
+    expect(render('first line\n\n\nsecond line')).toContain('<div class="text message-text">first line<br/><br/><br/>second line</div>')
   })
 
   it('uses safe explicit links, preserves formatting in labels, and leaves unsafe links as text', () => {
