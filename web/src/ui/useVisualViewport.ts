@@ -2,18 +2,11 @@ import { useLayoutEffect, useRef } from 'react'
 
 type Viewport = Pick<VisualViewport, 'height' | 'offsetTop' | 'scale'>
 
-/**
- * `tallestHeight` is the largest viewport height seen since mount, which is the
- * height without a keyboard. Comparing against the current `innerHeight` fails
- * once the browser resizes the layout viewport for the keyboard too, as
- * `interactive-widget=resizes-content` requests.
- */
-export function visualViewportProperties(viewport: Viewport | null, tallestHeight: number) {
+export function visualViewportProperties(viewport: Viewport | null) {
   if (!viewport || viewport.scale !== 1) return undefined
   return {
     '--app-height': `${viewport.height}px`,
     '--app-top': `${viewport.offsetTop}px`,
-    '--safe-bottom': viewport.height < tallestHeight - 100 ? '0px' : undefined,
   }
 }
 
@@ -23,10 +16,8 @@ export function trackVisualViewport(
 ) {
   const viewport = win.visualViewport
   if (!viewport) return () => {}
-  let tallestHeight = viewport.height
   const update = () => {
-    if (viewport.height > tallestHeight) tallestHeight = viewport.height
-    const properties = visualViewportProperties(viewport, tallestHeight)
+    const properties = visualViewportProperties(viewport)
     if (!properties) return
     for (const [name, value] of Object.entries(properties)) {
       if (value === undefined) style.removeProperty(name)
@@ -48,7 +39,7 @@ export function trackVisualViewport(
     viewport.removeEventListener('resize', schedule)
     viewport.removeEventListener('scroll', schedule)
     if (frame !== undefined) win.cancelAnimationFrame(frame)
-    for (const name of ['--app-height', '--app-top', '--safe-bottom']) style.removeProperty(name)
+    for (const name of ['--app-height', '--app-top']) style.removeProperty(name)
   }
 }
 

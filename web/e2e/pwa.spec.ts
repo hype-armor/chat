@@ -230,9 +230,8 @@ test.describe('setup reminders and Settings', () => {
     await page.evaluate('Object.assign(window.visualViewport, { scale: 1 })')
     await changeViewport(844, 0, 'resize')
     await expectConversationFits(0, 844)
-    await expect.poll(() => page.locator('html').evaluate(
-      (root) => root.style.getPropertyValue('--safe-bottom'),
-    )).toBe('')
+    // The layout never reserves a bottom safe-area band, so nothing to reset.
+    await expect(layout).toHaveCSS('padding-bottom', '0px')
 
     // Active sharing must not add a banner or reduce the conversation viewport.
     await page.context().grantPermissions(['geolocation'])

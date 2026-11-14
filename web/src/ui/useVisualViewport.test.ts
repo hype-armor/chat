@@ -25,21 +25,15 @@ function setup(viewport: VisualViewport | null = Object.assign(new EventTarget()
 }
 
 describe('visualViewportProperties', () => {
-  it('aligns with an iOS keyboard pan and removes the bottom clearance', () => {
-    expect(visualViewportProperties({ height: 500, offsetTop: 344, scale: 1 }, 844)).toEqual({
-      '--app-height': '500px', '--app-top': '344px', '--safe-bottom': '0px',
-    })
-  })
-
-  it('removes the bottom clearance when the keyboard also shrinks the layout viewport', () => {
-    expect(visualViewportProperties({ height: 500, offsetTop: 0, scale: 1 }, 844)).toEqual({
-      '--app-height': '500px', '--app-top': '0px', '--safe-bottom': '0px',
+  it('aligns with an iOS keyboard pan', () => {
+    expect(visualViewportProperties({ height: 500, offsetTop: 344, scale: 1 })).toEqual({
+      '--app-height': '500px', '--app-top': '344px',
     })
   })
 
   it('ignores pinch zoom and unavailable VisualViewport', () => {
-    expect(visualViewportProperties({ height: 400, offsetTop: 100, scale: 2 }, 844)).toBeUndefined()
-    expect(visualViewportProperties(null, 844)).toBeUndefined()
+    expect(visualViewportProperties({ height: 400, offsetTop: 100, scale: 2 })).toBeUndefined()
+    expect(visualViewportProperties(null)).toBeUndefined()
   })
 })
 
@@ -51,7 +45,7 @@ describe('trackVisualViewport', () => {
     expect(s.win.requestAnimationFrame).toHaveBeenCalledTimes(1)
     s.flush()
     expect(Object.fromEntries(s.properties)).toEqual({
-      '--app-height': '500px', '--app-top': '344px', '--safe-bottom': '0px',
+      '--app-height': '500px', '--app-top': '344px',
     })
     s.change({ offsetTop: 300 }, 'scroll')
     s.flush()
@@ -59,7 +53,7 @@ describe('trackVisualViewport', () => {
     s.dispose()
   })
 
-  it('resets height, top and the bottom clearance when the keyboard closes', () => {
+  it('resets height and top when the keyboard closes', () => {
     const s = setup()
     s.change({ height: 500, offsetTop: 344 })
     s.flush()
@@ -68,23 +62,6 @@ describe('trackVisualViewport', () => {
     expect(Object.fromEntries(s.properties)).toEqual({ '--app-height': '844px', '--app-top': '0px' })
     s.dispose()
     expect(s.properties.size).toBe(0)
-  })
-
-  it('keeps the tallest height as the keyboard-free height', () => {
-    // A shelf or address bar can grow and shrink without a keyboard.
-    const s = setup(Object.assign(new EventTarget(), { height: 700, offsetTop: 0, scale: 1 }) as VisualViewport)
-    s.change({ height: 844 })
-    s.flush()
-    expect(s.properties.get('--safe-bottom')).toBeUndefined()
-    // The keyboard shrinks the visual and the layout viewport together.
-    s.change({ height: 500 })
-    s.flush()
-    expect(s.properties.get('--safe-bottom')).toBe('0px')
-    // A shelf that returns after the keyboard closes must not keep the override.
-    s.change({ height: 844 })
-    s.flush()
-    expect(s.properties.get('--safe-bottom')).toBeUndefined()
-    s.dispose()
   })
 
   it('leaves layout variables unchanged during pinch zoom', () => {

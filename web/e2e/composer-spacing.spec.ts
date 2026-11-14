@@ -42,27 +42,21 @@ for (const width of [390, 1280]) {
     }).toBe(0)
   })
 
-  test(`the keyboard removes the bottom clearance even when it resizes the layout viewport (${width}px)`, async ({ page }) => {
+  test(`the composer stays flush with the bottom when the keyboard resizes the layout viewport (${width}px)`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 })
-    // `interactive-widget=resizes-content` shrinks the layout viewport with the
-    // keyboard, so `innerHeight` follows the visual viewport instead of staying
-    // at its keyboard-free height.
     await page.addInitScript(() => {
       Object.defineProperty(window, 'visualViewport', {
         configurable: true,
         value: Object.assign(new EventTarget(), { width: window.innerWidth, height: 844, offsetTop: 0, scale: 1 }),
       })
-      Object.defineProperty(window, 'innerHeight', {
-        configurable: true,
-        get: () => window.visualViewport!.height,
-      })
     })
     await openFixture(page, 'Alice', `composer-spacing-resizes-content-${width}`)
+    // `interactive-widget=resizes-content` shortens the layout viewport and the
+    // visual viewport together as the keyboard opens.
     await page.evaluate(() => {
       Object.assign(window.visualViewport!, { height: 500, offsetTop: 0 })
       window.visualViewport!.dispatchEvent(new Event('resize'))
     })
-    await expect.poll(() => page.locator('html').evaluate((root) => root.style.getPropertyValue('--safe-bottom'))).toBe('0px')
     await expect(page.locator('.chat-layout')).toHaveCSS('padding-bottom', '0px')
     await expect.poll(async () => {
       const area = (await page.locator('.chat-layout').boundingBox())!
@@ -119,7 +113,7 @@ for (const width of [390, 1280]) {
     await expectCompact(composer)
     await viewport(844, 0)
     await expectCompact(composer)
-    await expect.poll(() => page.locator('html').evaluate((element) => element.style.getPropertyValue('--safe-bottom'))).toBe('')
+    await expect(page.locator('.chat-layout')).toHaveCSS('padding-bottom', '0px')
   })
 
   test(`active remote typing remains visible and collapses when it stops (${width}px)`, async ({ context, page }) => {
