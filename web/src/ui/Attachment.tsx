@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CoreClient } from '../core/client'
 import { type FileInfo, isPhoto, isPlayable } from '../core/protocol'
 import { formatDuration } from './media'
+import { ImageAttachment } from './ImageViewer'
 
 export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -14,7 +15,7 @@ export function formatSize(bytes: number): string {
 /** An object URL for `blob`, revoked when it changes or on unmount. */
 function useObjectUrl(blob: Blob | undefined): string | undefined {
   const [url, setUrl] = useState<string>()
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (!blob) return setUrl(undefined)
     const u = URL.createObjectURL(blob)
     setUrl(u)
@@ -33,20 +34,22 @@ function save(blob: Blob, name: string) {
   return url
 }
 
-export function Attachment({
-  core,
-  conversationId,
-  messageId,
-  file,
-  sending,
-}: {
+type AttachmentProps = {
   core: CoreClient
   conversationId: string
   messageId: string
   file: FileInfo
   /** Ours and still uploading. */
   sending: boolean
-}) {
+}
+
+export function Attachment(props: AttachmentProps) {
+  // Only the existing raster allowlist can enter the viewer. SVG and unsupported
+  // images remain downloads, like other generic files.
+  return isPhoto(props.file.mime) ? <ImageAttachment {...props} /> : <FileAttachment {...props} />
+}
+
+function FileAttachment({ core, conversationId, messageId, file, sending }: AttachmentProps) {
   const root = useRef<HTMLDivElement>(null)
   const lifetime = useRef(0)
   const downloads = useRef(new Set<string>())
@@ -64,10 +67,9 @@ export function Attachment({
       downloads.current.clear()
     }
   }, [conversationId, messageId])
-  const photo = isPhoto(file.mime)
   const playable = isPlayable(file.mime)
   const video = playable && file.mime.startsWith('video/')
-  const generic = !photo && !playable
+  const generic = !playable
   const extension = file.name.includes('.') ? file.name.split('.').pop()!.toUpperCase() : ''
   const fileType = ['PDF', 'TXT', 'CSV', 'DOC', 'DOCX', 'XLS', 'XLSX', 'ZIP', 'GZ', 'TAR'].includes(extension) ? extension : 'FILE'
   const [thumb] = useState(() => (file.thumbnail ? new Blob([file.thumbnail], { type: 'image/jpeg' }) : undefined))
@@ -88,14 +90,14 @@ export function Attachment({
   }, [core, messageId])
 
   const open = async () => {
-    const generation = lifetime.current
     if (full) return full
+    const generation = lifetime.current
     setBusy(true)
     setError(undefined)
     try {
       const blob = await core.openAttachment(conversationId, messageId)
       if (lifetime.current !== generation) return undefined
-      if (photo || playable) setFull(blob)
+      if (playable) setFull(blob)
       return blob
     } catch (e) {
       if (lifetime.current === generation) setError(e instanceof Error ? e.message : String(e))
@@ -103,11 +105,6 @@ export function Attachment({
       if (lifetime.current === generation) setBusy(false)
     }
   }
-
-  // Photos already on this device show full size (ADR-0025).
-  useEffect(() => {
-    if (photo && file.downloaded && !full && !busy) void open()
-  }, [photo, file.downloaded])
 
   const download = async () => {
     const generation = lifetime.current
@@ -157,20 +154,6 @@ export function Attachment({
             </span>
           )}
         </button>
-      ) : photo ? (
-        <button
-          type="button"
-          className="photo"
-          onClick={() => void open()}
-          disabled={busy || !!full}
-          aria-label={full ? `Photo ${file.name}` : `Show photo ${file.name}`}
-        >
-          {fullUrl || thumbUrl ? (
-            <img src={fullUrl ?? thumbUrl} alt={file.name} style={mediaStyle} data-full={!!fullUrl} />
-          ) : (
-            <span>Show photo {file.name}</span>
-          )}
-        </button>
       ) : (
         <span className="file-name" title={file.name}>{generic ? file.name : `📎 ${file.name}`}</span>
       )}
@@ -186,7 +169,7 @@ export function Attachment({
           <>
             {' · '}
             <button type="button" className="link small" onClick={() => void download()} disabled={busy}>
-              {busy ? 'Opening…' : photo || playable ? 'Save' : 'Download'}
+              {busy ? 'Opening…' : playable ? 'Save' : 'Download'}
             </button>
           </>
         )}

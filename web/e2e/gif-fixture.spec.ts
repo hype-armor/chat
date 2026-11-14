@@ -16,15 +16,21 @@ test('GIF originals survive worker encryption and animate without a thumbnail', 
   // The render fixture deliberately omits the thumbnail.
   // openAttachment is a stub: this checks UI retry, not network/storage retry.
   await page.getByLabel('Fail download').check()
-  await page.getByRole('button', { name: 'Show photo animated.gif' }).click()
-  await expect(page.getByRole('alert')).toHaveText('Fixture download failed')
-  await page.getByLabel('Fail download').uncheck()
-  await page.getByRole('button', { name: 'Show photo animated.gif' }).click()
-  const image = page.getByRole('img', { name: 'animated.gif' })
+  const trigger = page.getByRole('button', { name: 'Show photo animated.gif', exact: true })
+  await trigger.click()
+  const viewer = page.getByRole('dialog', { name: 'Image: animated.gif', exact: true })
+  await expect(viewer.getByRole('alert')).toHaveText('Fixture download failed')
+  // Change the fake worker result without activating an inert background control.
+  await page.evaluate(() => (window as unknown as { gifFixture: { setFailure(on: boolean): void } }).gifFixture.setFailure(false))
+  await viewer.getByRole('button', { name: 'Try again', exact: true }).click()
+  const image = viewer.getByRole('img', { name: 'animated.gif', exact: true })
   await expect(image).toHaveAttribute('data-full', 'true')
   await expect(image).toHaveJSProperty('naturalWidth', 1)
   const first = await image.screenshot()
   await expect.poll(async () => !(await image.screenshot()).equals(first), { timeout: 5000 }).toBe(true)
+  await viewer.getByRole('button', { name: 'Close image', exact: true }).click()
+  await expect(viewer).toHaveCount(0)
+  await expect(trigger).toBeFocused()
   const [download] = await Promise.all([
     page.waitForEvent('download'), page.getByRole('button', { name: 'Save', exact: true }).click(),
   ])

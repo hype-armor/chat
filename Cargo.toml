@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/chat-proto", "crates/chat-core", "crates/chat-server", "crates/chat-echo"]
+members = ["crates/chat-proto", "crates/chat-core", "crates/chat-server", "crates/chat-echo", "crates/chat-bot"]
 
 [workspace.package]
 edition = "2024"

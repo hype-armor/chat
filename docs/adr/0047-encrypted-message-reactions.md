@@ -1,4 +1,4 @@
-# ADR-0041: Encrypted message reactions
+# ADR-0047: Encrypted message reactions
 
 - **Status:** Accepted
 - **Date:** 2026-11-08
@@ -18,7 +18,7 @@ Delayed events, duplicate delivery, device clock differences, and restored histo
 3. Send reaction text as an ordinary visible message. This creates unwanted history, quotes, receipts, and unread entries.
 
 ## Decision
-Use option 2. Add `Content.reaction`, tag 14, to the encrypted body oneof.
+Use option 2. Add `Content.reaction`, tag 16, to the encrypted body oneof.
 The body contains `target` (16 bytes), `target_hash` (32 bytes), `target_author` (16-byte account), and `emoji`.
 An empty emoji removes the account reaction. Supported emoji are `👍`, `❤️`, `😂`, `😮`, `😢`, and `🙏`.
 Other emoji remain unsupported and do not affect projection.
@@ -120,7 +120,7 @@ Do not prune tombstones independently of their reaction history. This implementa
 History size limits are the existing conversation and backup limits; this change adds no history compaction scheme.
 Older backup readers can show empty notice records from a newer backup; wire compatibility does not imply backup downgrade support.
 
-Existing protobuf readers ignore tag 14 and display no reaction message.
+Existing protobuf readers ignore tag 16 and display no reaction message.
 They must still persist the MLS state after decrypting an unknown application body.
 New clients continue to read old messages without reaction fields.
 No server API, database schema, outer envelope field, or plaintext storage changes.
@@ -150,7 +150,7 @@ Legacy targets fail closed rather than receiving a synthetic verification hash.
 New linked devices do not gain earlier history from this feature.
 
 ## Validation
-- Rust core tests exchange encrypted reactions, verify sender and conversation, and model a previous protobuf reader ignoring tag 14.
+- Rust core tests exchange encrypted reactions, verify sender and conversation, and model a previous protobuf reader ignoring tag 16.
 - The compatibility test restores the recipient snapshot after an ignored reaction and decrypts the next ordinary message.
 - WASM tests check the encrypted binding bytes, removal encoding, sender identity, snapshots, and invalid outgoing bindings.
 - Worker tests cover toggling, replacement, account ordering, multiple devices, duplicates, replay, and persistent removal tombstones.

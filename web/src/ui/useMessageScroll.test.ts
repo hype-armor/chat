@@ -1,9 +1,69 @@
 import { describe, expect, it, vi } from 'vitest'
-import { firstVisibleMessage } from './useMessageScroll'
+import { firstVisibleMessage, latestIncomingMessageId, messageBottomGap, nearMessageBottom, restoredHasNewMessages, restoreMessagePosition, type MessageScrollPosition } from './useMessageScroll'
 
 function child(bottom: number) {
   return { getBoundingClientRect: vi.fn(() => ({ bottom }) as DOMRect) } as unknown as Element
 }
+
+describe('incoming messages while a conversation is unmounted', () => {
+  const message = (id: string, from: string, kind?: 'notice') => ({ id, from, kind, text: id, sentAt: 1, status: 'received' as const })
+  const saved: MessageScrollPosition = { top: 100, bottom: false, newMessages: false, latestIncomingId: 'last' }
+
+  it('detects new incoming messages without counting local sends or notices', () => {
+    const history = [message('last', 'peer'), message('own', 'me'), message('notice', '', 'notice')]
+    expect(latestIncomingMessageId(history)).toBe('last')
+    expect(restoredHasNewMessages(saved, history)).toBe(false)
+    expect(restoredHasNewMessages(saved, [...history, message('new', 'peer')])).toBe(true)
+  })
+
+  it('keeps an existing indicator and detects a first incoming message', () => {
+    expect(restoredHasNewMessages({ ...saved, newMessages: true }, [message('last', 'peer')])).toBe(true)
+    expect(restoredHasNewMessages({ ...saved, latestIncomingId: undefined }, [message('first', 'peer')])).toBe(true)
+    expect(latestIncomingMessageId([])).toBeUndefined()
+  })
+})
+
+describe('message bottom state', () => {
+  it('shows the chevron even inside the auto-follow threshold', () => {
+    expect(nearMessageBottom(1000, 450, 500)).toBe(true)
+    expect(messageBottomGap(1000, 450, 500)).toBe(50)
+    expect(messageBottomGap(1000, 500, 500)).toBe(0)
+    expect(messageBottomGap(1000, 510, 500)).toBe(0)
+    expect(nearMessageBottom(1000, 419, 500)).toBe(false)
+  })
+})
+
+describe('restoreMessagePosition', () => {
+  function fixture() {
+    const list = { scrollTop: 0, getBoundingClientRect: () => ({ top: 100 }) as DOMRect }
+    const element = {
+      getAttribute: () => null,
+      querySelector: () => ({ getAttribute: () => 'message-20' }),
+      getBoundingClientRect: () => ({ top: 700 - list.scrollTop }) as DOMRect,
+    } as unknown as Element
+    const saved: MessageScrollPosition = { top: 400, bottom: false, key: 'message-20', offset: 20, newMessages: false }
+    return { list, element, saved }
+  }
+
+  it('restores a message offset after the message layout changes', () => {
+    const { list, element, saved } = fixture()
+    expect(restoreMessagePosition(list, [element], saved)).toBe(element)
+    expect(list.scrollTop).toBe(580)
+    expect(element.getBoundingClientRect().top - list.getBoundingClientRect().top).toBe(saved.offset)
+  })
+
+  it('uses the saved pixel position if the anchor no longer exists', () => {
+    const { list, element, saved } = fixture()
+    expect(restoreMessagePosition(list, [element], { ...saved, key: 'deleted' })).toBeUndefined()
+    expect(list.scrollTop).toBe(saved.top)
+  })
+
+  it('does not choose an arbitrary child when the saved anchor has no key', () => {
+    const { list, saved } = fixture()
+    expect(restoreMessagePosition(list, [child(10)], { ...saved, key: undefined })).toBeUndefined()
+    expect(list.scrollTop).toBe(saved.top)
+  })
+})
 
 describe('firstVisibleMessage', () => {
   it('uses a strict bottom-edge comparison and returns the first matching child', () => {

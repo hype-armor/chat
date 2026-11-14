@@ -5,6 +5,9 @@ import type { MapInfo } from './maps'
 
 export type ConnectionState = 'offline' | 'connecting' | 'online'
 
+export type LocalityPlace = { city: string; region: string; country: string }
+export type LocalityInfo = LocalityPlace & { updatedAt: number; expiresAt: number }
+
 export type ConversationSummary = {
   id: string
   title: string
@@ -16,6 +19,8 @@ export type ConversationSummary = {
   memberCount: number
   /** 1:1 chats: the other person's account id. */
   peer?: string
+  /** Derived only from the peer's explicit authenticated share in this direct conversation. */
+  locality?: LocalityInfo
   /** From someone with no connection to this user, until accepted (FR-SAF-3). */
   request: boolean
   /** Received messages not seen yet. */

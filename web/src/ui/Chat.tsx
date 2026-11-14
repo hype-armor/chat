@@ -37,7 +37,10 @@ import {
 import { useVisualViewport } from './useVisualViewport'
 import { MessageText } from './MessageText'
 import { reactionLabel } from './reactions'
-import { useMessageScroll } from './useMessageScroll'
+import { useMessageScroll, type MessageScrollPosition } from './useMessageScroll'
+import './issue132-chat.css'
+import { localityLabel } from '../core/locality'
+import type { LocalityInfo } from '../core/protocol'
 import { ConversationDrafts, useConversationDraft } from './useConversationDrafts'
 import { useModalBackground } from './useModalBackground'
 import { ReplyPreview, quoteMessage, useRemoteTyping, useSendTyping } from './messageInteractions'
@@ -107,6 +110,12 @@ export function Chat({
 }) {
   useVisualViewport()
   const drafts = useMemo(() => new ConversationDrafts(core), [core, view.me.account])
+  // Reading positions are transient UI state, isolated from other account sessions.
+  const scrollPositions = useMemo(() => new Map<string, MessageScrollPosition>(), [core, view.me.account])
+  useEffect(() => {
+    const available = new Set(view.conversations.map((conversation) => conversation.id))
+    for (const id of scrollPositions.keys()) if (!available.has(id)) scrollPositions.delete(id)
+  }, [scrollPositions, view.conversations])
   useLayoutEffect(() => {
     drafts.activate()
     return () => drafts.invalidate()
@@ -126,20 +135,18 @@ export function Chat({
   useEffect(() => {
     void refreshSubscription(core)
   }, [core])
-  const [calls] = useState(() => new CallController(core))
-  const [groupCalls] = useState(() => {
-    const g = new GroupCallController(core)
-    g.otherBusy = () => calls.busy
-    calls.otherBusy = () => g.busy
-    return g
-  })
-  useEffect(
-    () => () => {
+  const [calls] = useState(() => new CallController(core, { deferActivation: true }))
+  const [groupCalls] = useState(() => new GroupCallController(core, { deferActivation: true }))
+  useEffect(() => {
+    groupCalls.otherBusy = () => calls.busy
+    calls.otherBusy = () => groupCalls.busy
+    calls.activate()
+    groupCalls.activate()
+    return () => {
       calls.dispose()
       groupCalls.dispose()
-    },
-    [calls, groupCalls],
-  )
+    }
+  }, [calls, groupCalls])
   calls.relayOnly = view.relayCalls
   const conversation = view.conversations.find((c) => c.id === selected)
   const select = (id: string) => {
@@ -237,6 +244,13 @@ export function Chat({
               </section>
               <section className="settings-group" aria-labelledby="settings-about">
                 <h3 id="settings-about">About</h3>
+                <details>
+                  <summary>Location data</summary>
+                  <p className="small muted">
+                    Approximate city names use <a href="https://www.geonames.org/" target="_blank" rel="noopener noreferrer">GeoNames</a> data,
+                    licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a>.
+                  </p>
+                </details>
                 <button type="button" className="setting-row" aria-label="Diagnostics" onClick={onDiagnostics}>
                   <span>Diagnostics</span>
                   <span className="setting-status">Version &amp; self-test</span>
@@ -274,9 +288,10 @@ export function Chat({
         </aside>
         {conversation ? (
           <Conversation
-            key={conversation.id}
+            key={`${view.me.account}:${conversation.id}`}
             core={core}
             drafts={drafts}
+            scrollPositions={scrollPositions}
             calls={calls}
             groupCalls={groupCalls}
             id={conversation.id}
@@ -286,6 +301,7 @@ export function Chat({
             amAdmin={conversation.amAdmin}
             status={conversation.status}
             peer={conversation.peer}
+            locality={conversation.locality}
             verification={conversation.verification}
             blocked={conversation.blocked ?? false}
             request={conversation.request}
@@ -1130,6 +1146,7 @@ function AddPeople({ core, id, onDone }: { core: CoreClient; id: string; onDone:
 function Conversation({
   core,
   drafts,
+  scrollPositions,
   calls,
   groupCalls,
   id,
@@ -1139,6 +1156,7 @@ function Conversation({
   amAdmin,
   status,
   peer,
+  locality,
   verification,
   blocked,
   request,
@@ -1149,6 +1167,7 @@ function Conversation({
 }: {
   core: CoreClient
   drafts: ConversationDrafts
+  scrollPositions: Map<string, MessageScrollPosition>
   calls: CallController
   groupCalls: GroupCallController
   id: string
@@ -1158,6 +1177,7 @@ function Conversation({
   amAdmin: boolean
   status: ConversationSummary['status']
   peer?: string
+  locality?: LocalityInfo
   verification?: ConversationSummary['verification']
   blocked: boolean
   request: boolean
@@ -1168,8 +1188,8 @@ function Conversation({
 }) {
   const [panel, updatePanel] = useState<'add' | 'info' | 'verify' | 'report'>()
   const [detailsVersion, setDetailsVersion] = useState(0)
-  const detailsId = useId()
   const detailsHeadingId = useId()
+  const recipientDescriptionId = useId()
   const details = useRef<HTMLElement>(null)
   const detailsClose = useRef<HTMLButtonElement>(null)
   const detailsScrim = useRef<HTMLButtonElement>(null)
@@ -1189,8 +1209,8 @@ function Conversation({
   const [compactHeader, setCompactHeader] = useState(false)
   const [reported, setReported] = useState(false)
   const active = status === 'active'
-  const openPanel = (p: 'add' | 'info' | 'verify' | 'report') => {
-    if (!panel) detailsTrigger.current = document.activeElement as HTMLElement | null
+  const openPanel = (p: 'add' | 'info' | 'verify' | 'report', trigger?: HTMLElement) => {
+    if (!panel) detailsTrigger.current = trigger ?? document.activeElement as HTMLElement | null
     setDetailsVersion((version) => version + 1)
     setPanel(p)
   }
@@ -1270,6 +1290,7 @@ function Conversation({
       else conversationElement.current?.focus({ preventScroll: true })
     })
   }
+  const [messagesReady, setMessagesReady] = useState(false)
   const [messagesError, setMessagesError] = useState<string>()
   const [messagesLoading, setMessagesLoading] = useState(false)
   const [messageReload, setMessageReload] = useState(0)
@@ -1285,7 +1306,9 @@ function Conversation({
   useSendTyping(core, id, draft, typingEnabled && active && !blocked && !request, composerFocused)
   const [attaching, setAttaching] = useState(false)
   const [attachError, setAttachError] = useState<string>()
-  const { viewport, content, onScroll, capture, scrollToBottom, newMessages } = useMessageScroll(messages, panelOpen)
+  const { viewport, content, onScroll, capture, scrollToBottom, newMessages, showScrollToBottom } = useMessageScroll(messages, panelOpen, {
+    positions: scrollPositions, id, ready: messagesReady,
+  })
   const picker = useRef<HTMLInputElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const [recording, setRecording] = useState(false)
@@ -1349,6 +1372,7 @@ function Conversation({
           for (const message of next) if (message.deleted) drafts.forgetReply(id, message.id)
           previousMessages.current = next
           setMessages(next)
+          setMessagesReady(true)
           if (document.activeElement === historyRetry.current) conversationElement.current?.focus({ preventScroll: true })
           setMessagesError(undefined)
         }
@@ -1480,16 +1504,20 @@ function Conversation({
           </button>
           <button
             type="button"
-            className="conversation-title"
-            aria-label={isGroup ? 'Group info' : 'Verify safety number'}
-            aria-describedby={detailsId}
+            className="conversation-title issue132-recipient-details"
+            aria-label={isGroup ? 'Group info' : 'Contact details'}
+            aria-describedby={recipientDescriptionId}
             aria-expanded={panelOpen}
-            onClick={() => openPanel(isGroup ? 'info' : 'verify')}
+            onClick={(event) => openPanel(isGroup ? 'info' : 'verify', event.currentTarget)}
           >
             <Avatar name={title} id={peer ?? id} account={peer} />
-            <span className="who" id={detailsId}>
-              <span className="conversation-name" role="heading" aria-level={2}>
-                {title}
+            <span className="who" id={recipientDescriptionId}>
+              <span className="issue132-recipient-heading">
+                <span className="conversation-name" role="heading" aria-level={2}>{title}</span>
+                {!isGroup && locality && <span
+                  className="issue132-recipient-locality muted small"
+                  title={`${localityLabel(locality)} · Approximate nearby city, not a verified boundary`}
+                >{localityLabel(locality)}</span>}
               </span>
               {isGroup && <span className="muted small">{memberCount} people</span>}
               <span className="conversation-connection muted" role="status" aria-label="Conversation connection" hidden={connection === 'online'}>
@@ -1520,7 +1548,7 @@ function Conversation({
               </button>
             </>
           )}
-          <Menu key={id} triggerLabel="Conversation menu" triggerContent="⋮" items={menuItems} />
+          <Menu key={id} triggerLabel="Conversation menu" triggerDescriptionId={recipientDescriptionId} triggerContent="⋮" items={menuItems} />
         </div>
       </header>
       {isGroup && active && !request && <OngoingCall core={core} groupCalls={groupCalls} id={id} title={title} />}
@@ -1572,13 +1600,14 @@ function Conversation({
           Retry loading messages
         </button>
       </div>}
+      <div className="issue132-messages-area">
       <div className="messages-viewport" ref={viewport} onScroll={onScroll}>
         <ol className="messages" ref={content}>
           {messageLayout(messages, Date.now()).map(({ message: m, day, first, last }) => (
             <Fragment key={m.id}>
-              {day && <li role="separator" aria-label={day} className="day-separator small">{day}</li>}
+              {day && <li role="separator" aria-label={day} className="day-separator small" data-scroll-key={`day:${m.id}`}>{day}</li>}
               {m.kind === 'notice' ? (
-                <li className="notice-msg small" data-testid="notice">
+                <li className="notice-msg small" data-testid="notice" data-scroll-key={m.id}>
                   {m.text}
                 </li>
               ) : (
@@ -1599,7 +1628,7 @@ function Conversation({
                     composer.current?.focus({ preventScroll: true })
                   } : undefined}
                 >
-                  <span className={isGroup && m.from !== 'me' && first ? 'sender small' : 'visually-hidden'}>
+                  <span data-scroll-key={m.id} className={isGroup && m.from !== 'me' && first ? 'sender small' : 'visually-hidden'}>
                     {m.from === 'me' ? 'You' : m.fromName ?? (isGroup ? m.from : title)}
                   </span>
                   {m.deleted ? <p className="deleted-message">Message deleted</p> : <>
@@ -1673,6 +1702,17 @@ function Conversation({
           ))}
         </ol>
       </div>
+      {showScrollToBottom && <button
+        type="button"
+        className="issue132-scroll-bottom"
+        aria-label={newMessages ? '↓ New messages' : 'Scroll to bottom'}
+        title="Scroll to bottom"
+        onClick={scrollToBottom}
+      >
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+        {newMessages && <span className="visually-hidden">New messages</span>}
+      </button>}
+      </div>
       {!active && (
         <p className="notice" role="note">
           {status === 'restoring'
@@ -1687,13 +1727,6 @@ function Conversation({
           {attachError}
         </p>
       )}
-      <div className="new-messages">
-        {newMessages && (
-          <button type="button" onClick={scrollToBottom}>
-            ↓ New messages
-          </button>
-        )}
-      </div>
       <form
         className="composer"
         onSubmit={(e) => {

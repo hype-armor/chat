@@ -148,7 +148,7 @@ encrypted envelopes. See ADR-0038 for the protocol and compatibility rules.
 
 ### 5.1.2 Message reactions
 
-Reactions use the MLS-encrypted body extension in ADR-0041. The UI selects a
+Reactions use the MLS-encrypted body extension in ADR-0047. The UI selects a
 message identifier and emoji. The worker supplies the verified original hash
 and author from the same conversation. Legacy or mismatched targets fail closed.
 Each account has 1 projected reaction per target across its devices. Logical

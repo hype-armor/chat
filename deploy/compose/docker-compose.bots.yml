@@ -1,0 +1,38 @@
+# Optional encrypted bot runner. Combine with docker-compose.yml and activate
+# explicitly: --profile bots. Bootstrap with the same service configuration:
+# docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.bots.yml \
+#   --profile bots run --rm --no-deps bots bootstrap
+services:
+  bots:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/bots.Dockerfile
+    profiles: [bots]
+    entrypoint: ["node", "/opt/chat/scripts/bot-world/run.mjs"]
+    command: ["run"]
+    env_file:
+      - ${CHAT_BOT_CONFIG_DIR:-../../bot-config}/bots.env
+    environment:
+      # network_mode makes this address the server container loopback address.
+      CHAT_BOT_SERVER: http://127.0.0.1:8080
+      CHAT_BOT_BINARY: /opt/chat/bin/chat-bot
+      CHAT_BOT_STATE_DIR: /var/lib/chat-bots
+      CHAT_BOT_INVITES_FILE: /run/chat-bots/invites.json
+    user: "${CHAT_BOT_UID:-1000}:${CHAT_BOT_GID:-1000}"
+    network_mode: service:server
+    depends_on:
+      server:
+        condition: service_started
+    volumes:
+      - ${CHAT_BOT_DATA_DIR:-../../chat-bot-state}:/var/lib/chat-bots
+      - ${CHAT_BOT_CONFIG_DIR:-../../bot-config}/invites.json:/run/chat-bots/invites.json:ro
+    restart: unless-stopped
+    stop_grace_period: 45s
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

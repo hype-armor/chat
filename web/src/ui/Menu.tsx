@@ -11,10 +11,12 @@ export type MenuItem = {
 export function Menu({
   triggerLabel,
   triggerContent,
+  triggerDescriptionId,
   items,
 }: {
   triggerLabel: string
   triggerContent: ReactNode
+  triggerDescriptionId?: string
   items: MenuItem[]
 }) {
   const [open, setOpen] = useState(false)
@@ -132,6 +134,7 @@ export function Menu({
         className="icon"
         ref={trigger}
         aria-label={triggerLabel}
+        aria-describedby={triggerDescriptionId}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? id : undefined}

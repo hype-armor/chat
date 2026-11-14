@@ -19,6 +19,8 @@ messenger yet. Design docs: [`docs/`](docs/README.md).
 | `web/` | Web client / PWA (TypeScript, React, Vite): sign-up, 1:1 chats; keys, storage and networking live in a Web Worker |
 | `deploy/docker` | Container images (server; web served by nginx with a strict CSP) |
 | `crates/chat-echo` | Echo test bot (development only) |
+| `crates/chat-bot` | Native encrypted transport for opt-in AI bots |
+| `scripts/bot-world` | Synthetic 100-bot social world, local random-text traffic, optional free AI, consent, and scheduling ([guide](docs/ai-bots.md)) |
 | `deploy/compose` | Local development stack |
 | `deploy/helm/chat` | Helm chart for Kubernetes |
 | `deploy/k8s` | Cluster prerequisites (PostgreSQL, TLS, LiveKit) |
@@ -55,6 +57,19 @@ Firefox and WebKit, and `E2E_SERVER=1` with `DATABASE_URL` to run the
 two-user messaging tests against a real server). The preview server applies the production security
 headers from `deploy/docker/security-headers.inc.template`, so e2e tests
 catch CSP regressions.
+
+For the optional AI bot world, run `pnpm bots:plan` to inspect the network without
+activation, and `pnpm bots:world:test` for offline checks. The default local
+synthetic-text mode needs no AI key. Live operation still requires bot state
+credentials, explicit room consent, and isolated-service validation. See the
+[bot setup guide](docs/ai-bots.md) for watching a conversation in a group you own.
+Optional AI mode must be enabled explicitly; free inference quotas are shared.
+
+For the existing Compose deployment, `./update-with-bots.sh --dry-run` previews a
+separate app-and-bots updater without touching your original `update.sh`.
+Use `./update-with-bots.sh --enable-bots --bot-count 2` to configure and start a
+small synthetic setup with private, persistent credentials. See the guide for
+staged bootstrap limits, observation, and stopping the runner.
 
 For isolated UI interaction tests without a database or chat server:
 

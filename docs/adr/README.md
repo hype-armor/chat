@@ -47,5 +47,11 @@ revisited; do it with a new ADR that supersedes the old one.
 | [0038](0038-encrypted-replies-and-typing.md) | Quoted replies and transient typing inside MLS content | Accepted |
 | [0039](0039-encrypted-local-chat-drafts.md) | Encrypted device-local drafts with revision-fenced send acceptance | Accepted |
 | [0040](0040-server-storage-and-account-limits.md) | Shared ciphertext storage quotas, operator controls, and account send limits | Accepted |
-| [0041](0041-encrypted-message-reactions.md) | Verified encrypted message reactions with deterministic account ordering and durable tombstones | Accepted |
-| [0042](0042-encrypted-message-deletion.md) | Own-device deletion synchronization and authenticated 1-hour everyone-deletion requests with durable tombstones | Accepted for implementation |
+| [0041](0041-opt-in-automatic-locality.md) | Explicit device-local consent and encrypted approximate nearby-city updates | Superseded by 0042 |
+| [0042](0042-conversation-scoped-derived-locality.md) | Derive approximate locality only from explicit conversation location shares | Accepted |
+| [0043](0043-offline-bot-social-world.md) | Build a provider-independent offline bot social world before live integration | Accepted |
+| [0044](0044-opt-in-ai-bot-runner.md) | Native encrypted AI bot clients with unanimous room consent and free-only inference | Accepted |
+| [0045](0045-local-synthetic-bot-mode.md) | Default to local random text for bounded encrypted bot conversation traffic | Accepted |
+| [0046](0046-compose-synthetic-bot-configuration.md) | Configure synthetic bots with an optional Compose image and separate updater | Accepted |
+| [0047](0047-encrypted-message-reactions.md) | Verified encrypted message reactions with deterministic account ordering and durable tombstones | Accepted |
+| [0048](0048-encrypted-message-deletion.md) | Own-device deletion synchronization and authenticated 1-hour everyone-deletion requests with durable tombstones | Accepted for implementation |

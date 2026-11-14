@@ -2,8 +2,8 @@
 
 use chat_proto::v1::{
     Ack, Attachment, Authenticate, Call, ClientFrame, Content, ContentType, Deletion, DeviceSync,
-    Envelope, GroupInfo, LiveLocation, Location, Ping, Profile, Reaction, Receipt, SendEnvelope,
-    ServerFrame, Text, Typing, client_frame, content, receipt, server_frame,
+    Envelope, GroupInfo, LiveLocation, Locality, Location, Ping, Profile, Reaction, Receipt,
+    SendEnvelope, ServerFrame, Text, Typing, client_frame, content, receipt, server_frame,
 };
 use js_sys::{Array, Uint8Array};
 use prost::Message;
@@ -244,6 +244,8 @@ pub struct EventView {
     pub typing_expires_at_ms: Option<f64>,
     #[wasm_bindgen(getter_with_clone, js_name = displayName)]
     pub display_name: Option<String>,
+    #[wasm_bindgen(getter_with_clone)]
+    pub locality: Option<LocalityView>,
     /// A `Profile`'s photo (JPEG), if the sender has one.
     #[wasm_bindgen(getter_with_clone)]
     pub avatar: Option<Vec<u8>>,
@@ -269,6 +271,20 @@ pub struct EventView {
     pub live: Option<LiveLocationView>,
     #[wasm_bindgen(getter_with_clone)]
     pub call: Option<CallView>,
+}
+
+/// Coarse locality only. An empty city is a revocation (ADR-0041).
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct LocalityView {
+    #[wasm_bindgen(getter_with_clone)]
+    pub city: String,
+    #[wasm_bindgen(getter_with_clone)]
+    pub region: String,
+    #[wasm_bindgen(getter_with_clone)]
+    pub country: String,
+    #[wasm_bindgen(js_name = expiresAtMs)]
+    pub expires_at_ms: f64,
 }
 
 /// A `Call` signalling message (ADR-0028). `kind`: 0 offer, 1 answer,
@@ -345,6 +361,7 @@ impl EventView {
             typing_active: None,
             typing_expires_at_ms: None,
             display_name: None,
+            locality: None,
             avatar: None,
             group_name: None,
             group_admins: Vec::new(),
@@ -1015,6 +1032,42 @@ impl CoreClient {
         )
     }
 
+    /// Send coarse locality through MLS, independently of names and avatar bytes.
+    #[allow(clippy::too_many_arguments)]
+    #[wasm_bindgen(js_name = sendLocality)]
+    pub fn send_locality(
+        &mut self,
+        conversation_id: &[u8],
+        city: String,
+        region: String,
+        country: String,
+        expires_at_ms: f64,
+        sent_at_ms: f64,
+        message_id: Vec<u8>,
+    ) -> Result<Vec<u8>, JsError> {
+        let sent = exact_timestamp(sent_at_ms)
+            .ok_or_else(|| JsError::new("invalid locality timestamp"))?;
+        let expires = exact_timestamp(expires_at_ms)
+            .ok_or_else(|| JsError::new("invalid locality expiry"))?;
+        if expires <= sent || expires - sent > 3_600_000 {
+            return Err(JsError::new("invalid locality lifetime"));
+        }
+        if city.len() > 256 || region.len() > 256 || country.len() > 2 {
+            return Err(JsError::new("invalid locality label"));
+        }
+        self.send(
+            conversation_id,
+            sent_at_ms,
+            content::Body::Locality(Locality {
+                city,
+                region,
+                country,
+                expires_at_ms: expires,
+            }),
+            message_id,
+        )
+    }
+
     #[wasm_bindgen(js_name = sendProfile)]
     pub fn send_profile(
         &mut self,
@@ -1139,6 +1192,14 @@ impl CoreClient {
                         } else {
                             view.kind = "ignored".to_owned();
                         }
+                    }
+                    Some(content::Body::Locality(l)) => {
+                        view.locality = Some(LocalityView {
+                            city: l.city,
+                            region: l.region,
+                            country: l.country,
+                            expires_at_ms: l.expires_at_ms as f64,
+                        });
                     }
                     Some(content::Body::Text(t)) => view.text = Some(t.body),
                     Some(content::Body::Profile(p)) => {

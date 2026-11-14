@@ -52,7 +52,7 @@ becomes unverifiable during composition, reject the reply and show an error.
 Typing indicators are optional, expire automatically, and never transmit draft text.
 
 Reactions implement the reaction part of FR-MSG-7 through
-[ADR-0041](adr/0041-encrypted-message-reactions.md). Each account has 1 reaction
+[ADR-0047](adr/0047-encrypted-message-reactions.md). Each account has 1 reaction
 per verified message. Selecting the same emoji removes it; another emoji replaces it.
 The message action menu offers 6 named emoji. Aggregated chips expose counts and own removal.
 Targets, emoji, ordering, and removal state remain inside MLS encryption and encrypted worker storage.
@@ -62,7 +62,7 @@ Offline sends use durable acceptance gating. Pending and failed updates must hav
 Account ordering and removal tombstones survive replay, history reload, and encrypted backup.
 The reaction feature does not transfer earlier history to linked devices or implement editing.
 
-Message deletion uses [ADR-0042](adr/0042-encrypted-message-deletion.md). Delete for me
+Message deletion uses [ADR-0048](adr/0048-encrypted-message-deletion.md). Delete for me
 synchronizes verified deletions across the account’s linked devices and has no
 time limit. Unverified originals have a clearly labeled device-only fallback.
 Delete for everyone

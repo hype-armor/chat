@@ -40,7 +40,7 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
 ## Ground rules
 
 - No hand-rolled cryptography; no plaintext or extra metadata on the server.
-- Message deletion follows ADR-0042: Me syncs verified suppression across own
+- Message deletion follows ADR-0048: Me syncs verified suppression across own
   devices through authenticated private DeviceSync; unverified originals stay
   device-only. Everyone requires an authentic own original and a request within
   1 hour. Keep hash/author tombstones
@@ -66,11 +66,13 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   discard stale plans and schedule a coalesced retry. Preserve additions before removals.
 - Chat drafts use encrypted device-local worker storage (ADR-0039), not UI browser storage.
   Keep drafts outside backups and sync. Clear only the accepted draft revision, never by text equality.
+- Persist upload retry work before publishing `sending`. History recovery must not classify an active
+  retry as an unaccepted send. Keep retries in the core worker and retain sealed bytes for resumption.
 - Quoted replies resolve originals only within their conversation in the worker
   and verify the encrypted content hash; outer envelope IDs are not authenticated.
   Typing indicators use encrypted, expiring events, not history or persistent retries
   (ADR-0038). Never include draft text in typing events.
-- Message reactions use verified original hashes in the worker (ADR-0041). Never
+- Message reactions use verified original hashes in the worker (ADR-0047). Never
   reconstruct legacy hashes, trust UI eligibility hints, or prune removal tombstones alone.
   Gate reaction transport until history, ratchet, and app-state acceptance succeeds.
   Fence reactions and retries by account and lifecycle epoch across async reads/writes.
@@ -85,14 +87,50 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   Reply actions require worker-confirmed eligibility. Own sends reach the
   bottom; incoming messages must not displace a reader who scrolled up.
   Map error fallbacks must preserve map dimensions so dialog controls do not move
-  during activation. Fixture data mutations do not guarantee rendered rows. Await
+  during activation. Map labels must use bundled/local resources, not external glyph or sprite
+  origins. Accuracy areas must use the reported radius in metres and update with live fixes.
+  Preserve account-scoped conversation reading positions across navigation. Keep the
+  scroll-to-bottom chevron available whenever the viewport is not at the bottom.
+  Put derived locality below the contact name, not inline; each line must use the available header width independently.
+  Image viewers must use worker-opened attachments, make background regions inert,
+  release object URLs, and yield focus to incoming call dialogs.
+  Fixture data mutations do not guarantee rendered rows. Await
   the intended row identity/count before focusing it or opening its action menu;
   a live `last()` locator can still resolve an older row during history refresh.
 - Live sharing has no app-wide banner or layout offset. Keep the conversation-list
   sharing icon, live message card and Stop sharing control. The Conversation menu
   must offer Stop sharing location for active shares, even with an expired or
   off-screen card. Removing the banner must not stop the watcher or change expiry.
+- The synthetic bot world is offline configuration (`docs/bot-social-world.md`, ADR-0043).
+  The separate opt-in runner follows ADR-0044 (`docs/ai-bots.md`); its CLI defaults to local
+  synthetic text (ADR-0045). Synthetic generation must receive only a cancellation signal,
+  never prompts or human text. Preserve AI quota on mode switches and apply the synthetic
+  traffic budget to retries. Keep friendship separate from MLS membership.
+  Require unanimous authenticated human consent before external inference;
+  reset consent/context on membership/device or disclosure changes. Observe revocation before queued I/O,
+  fence sends against unacknowledged room events, and never replay stale AI outbox work autonomously.
+  Keep keys/state encrypted, inference free-only, and quota reservations durable before requests.
+  Run `pnpm bots:world:test` and `cargo test -p chat-bot`; never activate bots against a live deployment for tests.
+  `update-with-bots.sh` is a separate Compose updater (ADR-0046); preserve the operator's
+  `update.sh`. Bot registration/start requires `--enable-bots`. Never replace missing
+  keys over existing state or bypass bootstrap quotas. Run `scripts/test-update-with-bots.sh`
+  with mock services after updater changes; keep bot config outside Git and build context.
 - Run browser tests against isolated test services, never a live deployment.
+- Browser and OS permission grants belong to the browser. Do not cache fake grants or keep
+  idle camera/microphone streams to avoid prompts. Prevent duplicate capture requests and
+  stop active or late-granted tracks when the requesting operation ends.
+- Derive `Near city, region` only in the worker, with bundled offline data, from the peer's
+  authenticated location/live messages explicitly shared in that conversation (ADR-0042).
+  Existing Send location and live-share controls supply consent; no global watcher or coarse-only broadcast.
+  No own/group/request sources or legacy standalone locality bodies. Cap headers at 1 hour from source time;
+  clear the current source on live stop/expiry, but do not let an old-session stop clear a newer unrelated share.
+  Retain source-device provenance; authorize stops by canonical peer account/session, including another current authenticated peer device.
+  Same-member rekeys/device addition preserve live consent. Prune removed/ineligible sources without permanent session stops;
+  retain explicit stop/block tombstones. Ordering and tombstone lookups must reject inherited records, including after JSON restore.
+  Run lazy lookup outside the receive lock; re-enter `exclusive()` only to validate and publish.
+  Never restore older labels as fallback or reconstruct headers on history load, request acceptance, unblock, or restore.
+  Clear old global consent/caches without migration broadcasts. Retain queued MLS ciphertext to avoid ratchet gaps.
+  Keep derived caches account/conversation-scoped and outside backup/sync; preserve approximate wording and GeoNames attribution.
 - Rust Docker build stages must retain the shared BuildKit Cargo lock and CPU-sized
   job budget. Use `scripts/compose-build.sh` for sequential image builds and run
   `scripts/test-compose-build.sh` after changes to build controls.
@@ -113,6 +151,9 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   panned visual viewports. Bound upward menus from their actual popup edge and
   preserve stricter CSS height caps. Selected conversations must expose offline/connecting feedback even
   when the phone sidebar is hidden.
+- Contact-name/avatar clicks open the existing contact-details modal for authorized shared-location cards.
+  Keep the conversation menu separate and retain its accessible recipient/status description.
+  Opening details must not request a position or reconstruct the locality header.
 - Details modals must make background app regions inert, including the sidebar
   and notices outside Chat. Call dialogs take priority and must receive keyboard
   focus without interference from details focus restoration.

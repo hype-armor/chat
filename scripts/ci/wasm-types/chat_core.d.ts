@@ -177,6 +177,10 @@ export class CoreClient {
      */
     sendLiveLocation(conversation_id: Uint8Array, session_id: Uint8Array, expires_at_ms: number, until_stopped: boolean, point: boolean, latitude: number, longitude: number, accuracy_m: number, sent_at_ms: number, message_id: Uint8Array): Uint8Array;
     /**
+     * Send coarse locality through MLS, independently of names and avatar bytes.
+     */
+    sendLocality(conversation_id: Uint8Array, city: string, region: string, country: string, expires_at_ms: number, sent_at_ms: number, message_id: Uint8Array): Uint8Array;
+    /**
      * Returns the encoded `Envelope`.
      */
     sendLocation(conversation_id: Uint8Array, latitude: number, longitude: number, accuracy_m: number, label: string, sent_at_ms: number, message_id: Uint8Array, reply_to?: Uint8Array | null, reply_to_hash?: Uint8Array | null): Uint8Array;
@@ -260,6 +264,8 @@ export class EventView {
     kind: string;
     get live(): LiveLocationView | undefined;
     set live(value: LiveLocationView | null | undefined);
+    get locality(): LocalityView | undefined;
+    set locality(value: LocalityView | null | undefined);
     get location(): LocationView | undefined;
     set location(value: LocationView | null | undefined);
     get reaction(): Uint8Array | undefined;
@@ -324,6 +330,19 @@ export class LiveLocationView {
     sessionId: Uint8Array;
     stopped: boolean;
     untilStopped: boolean;
+}
+
+/**
+ * Coarse locality only. An empty city is a revocation (ADR-0041).
+ */
+export class LocalityView {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    city: string;
+    country: string;
+    expiresAtMs: number;
+    region: string;
 }
 
 /**
@@ -532,6 +551,7 @@ export interface InitOutput {
     readonly __wbg_get_eventview_groupName: (a: number) => [number, number];
     readonly __wbg_get_eventview_kind: (a: number) => [number, number];
     readonly __wbg_get_eventview_live: (a: number) => number;
+    readonly __wbg_get_eventview_locality: (a: number) => number;
     readonly __wbg_get_eventview_location: (a: number) => number;
     readonly __wbg_get_eventview_reaction: (a: number) => [number, number];
     readonly __wbg_get_eventview_receiptIds: (a: number) => [number, number];
@@ -548,6 +568,10 @@ export interface InitOutput {
     readonly __wbg_get_livelocationview_sessionId: (a: number) => [number, number];
     readonly __wbg_get_livelocationview_stopped: (a: number) => number;
     readonly __wbg_get_livelocationview_untilStopped: (a: number) => number;
+    readonly __wbg_get_localityview_city: (a: number) => [number, number];
+    readonly __wbg_get_localityview_country: (a: number) => [number, number];
+    readonly __wbg_get_localityview_expiresAtMs: (a: number) => number;
+    readonly __wbg_get_localityview_region: (a: number) => [number, number];
     readonly __wbg_get_locationview_accuracyM: (a: number) => number;
     readonly __wbg_get_locationview_label: (a: number) => [number, number];
     readonly __wbg_get_locationview_latitude: (a: number) => number;
@@ -575,6 +599,7 @@ export interface InitOutput {
     readonly __wbg_get_startedview_welcome: (a: number) => [number, number];
     readonly __wbg_groupbench_free: (a: number, b: number) => void;
     readonly __wbg_livelocationview_free: (a: number, b: number) => void;
+    readonly __wbg_localityview_free: (a: number, b: number) => void;
     readonly __wbg_locationview_free: (a: number, b: number) => void;
     readonly __wbg_pendingclient_free: (a: number, b: number) => void;
     readonly __wbg_qrview_free: (a: number, b: number) => void;
@@ -616,6 +641,7 @@ export interface InitOutput {
     readonly __wbg_set_eventview_groupName: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_kind: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_live: (a: number, b: number) => void;
+    readonly __wbg_set_eventview_locality: (a: number, b: number) => void;
     readonly __wbg_set_eventview_location: (a: number, b: number) => void;
     readonly __wbg_set_eventview_reaction: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_receiptIds: (a: number, b: number, c: number) => void;
@@ -632,6 +658,10 @@ export interface InitOutput {
     readonly __wbg_set_livelocationview_sessionId: (a: number, b: number, c: number) => void;
     readonly __wbg_set_livelocationview_stopped: (a: number, b: number) => void;
     readonly __wbg_set_livelocationview_untilStopped: (a: number, b: number) => void;
+    readonly __wbg_set_localityview_city: (a: number, b: number, c: number) => void;
+    readonly __wbg_set_localityview_country: (a: number, b: number, c: number) => void;
+    readonly __wbg_set_localityview_expiresAtMs: (a: number, b: number) => void;
+    readonly __wbg_set_localityview_region: (a: number, b: number, c: number) => void;
     readonly __wbg_set_locationview_accuracyM: (a: number, b: number) => void;
     readonly __wbg_set_locationview_label: (a: number, b: number, c: number) => void;
     readonly __wbg_set_locationview_latitude: (a: number, b: number) => void;
@@ -694,6 +724,7 @@ export interface InitOutput {
     readonly coreclient_sendDeviceSync: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly coreclient_sendGroupInfo: (a: number, b: number, c: number, d: number, e: number, f: any, g: number, h: number, i: number) => [number, number, number, number];
     readonly coreclient_sendLiveLocation: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => [number, number, number, number];
+    readonly coreclient_sendLocality: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number, number, number];
     readonly coreclient_sendLocation: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number) => [number, number, number, number];
     readonly coreclient_sendProfile: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
     readonly coreclient_sendReaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => [number, number, number, number];

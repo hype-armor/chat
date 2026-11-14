@@ -1,0 +1,6 @@
+body { margin: 16px; font-family: sans-serif; }
+.location { margin: 12px 0; display: grid; gap: 8px; }
+.map { height: 260px; width: 100%; max-width: 560px; }
+.map-unavailable { background: #e6ecf0; }
+button { min-height: 44px; }
+.share-location { width: min(560px, 85vw); }

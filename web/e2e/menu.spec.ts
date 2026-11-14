@@ -63,7 +63,8 @@ test('conversation menu supports keyboard, dismissal, actions and a 320px header
   await expect(alice.getByRole('button', { name: 'Close details' })).toBeFocused()
   await expect(alice.getByTestId('safety-number')).toBeVisible()
   await alice.getByRole('button', { name: 'Mark as verified' }).click()
-  await expect(alice.locator('.conversation-title')).toHaveAccessibleDescription(/Verified$/)
+  await expect(trigger).toHaveAccessibleDescription(/Verified$/)
+  await closeDetails(alice)
   await alice.setViewportSize({ width: 320, height: 640 })
   await expectSingleRow(alice)
   await expect(alice.getByRole('button', { name: 'Voice call', exact: true })).toBeHidden()
@@ -75,7 +76,7 @@ test('conversation menu supports keyboard, dismissal, actions and a 320px header
   expect(bounds!.x).toBeGreaterThanOrEqual(0)
   expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(320)
   await alice.keyboard.press('Escape')
-  await alice.locator('.conversation-title').click()
+  await conversationAction(alice, 'Verify safety number')
   await expect(alice.getByTestId('safety-number')).toBeVisible()
   await conversationAction(alice, 'Add people')
   await expect(alice.getByLabel('Usernames to add')).toBeVisible()
@@ -87,17 +88,17 @@ test('conversation menu supports keyboard, dismissal, actions and a 320px header
   await expect(alice.getByRole('button', { name: 'Voice call', exact: true })).toBeHidden()
 })
 
-test('group title opens info and the menu keeps group actions on one row', async ({ browser }) => {
+test('group title menu opens info and keeps group actions on one row', async ({ browser }) => {
   const username = randomUsername()
   const ann = await signUp(browser, 'Ann', randomUsername())
   await signUp(browser, 'Ben', username)
   await createGroup(ann, 'A group with a very long title', [username])
   await expect(ann.getByRole('heading', { name: 'A group with a very long title' })).toBeVisible()
-  await expect(ann.locator('.conversation-title')).toHaveAccessibleDescription(/2 people$/)
+  await expect(ann.getByRole('button', { name: 'Conversation menu', exact: true })).toHaveAccessibleDescription(/2 people$/)
   await expectSingleRow(ann)
   await ann.setViewportSize({ width: 320, height: 640 })
   await expectSingleRow(ann)
-  await ann.locator('.conversation-title').click()
+  await conversationAction(ann, 'Group info')
   await expect(conversationDetails(ann)).toBeVisible()
   await expect(ann.getByLabel('Group name', { exact: true })).toBeHidden()
   await expect(ann.getByRole('button', { name: 'Back to conversation' })).toBeFocused()
@@ -114,7 +115,7 @@ test('details stay beside messages on desktop and replace them on phones without
   const ann = await signUp(browser, 'Ann', randomUsername())
   await signUp(browser, 'Ben', username)
   await createGroup(ann, 'Club', [username])
-  const title = ann.getByRole('button', { name: 'Group info', exact: true })
+  const title = ann.getByRole('button', { name: 'Conversation menu', exact: true })
   const panel = conversationDetails(ann)
   const viewport = ann.locator('.messages-viewport')
   const composer = ann.getByLabel('Message', { exact: true })
@@ -124,7 +125,7 @@ test('details stay beside messages on desktop and replace them on phones without
   }
   const pinned = () => viewport.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)
   await expect.poll(pinned).toBeLessThan(3)
-  await title.click()
+  await conversationAction(ann, 'Group info')
   await expect(ann.getByRole('button', { name: 'Close details' })).toBeFocused()
   const messageBounds = (await viewport.boundingBox())!
   const panelBounds = (await panel.boundingBox())!
@@ -141,9 +142,10 @@ test('details stay beside messages on desktop and replace them on phones without
   await expect.poll(() => viewport.evaluate((el) => el.scrollTop)).toBe(0)
   await viewport.evaluate((el) => { el.scrollTop = el.scrollHeight })
   await expect.poll(pinned).toBeLessThan(3)
+  await title.click()
   await ann.evaluate(`(() => {
     document.querySelector('.messages-viewport').scrollTop = 0
-    document.querySelector('.conversation-title').click()
+    Array.from(document.querySelectorAll('[role="menuitem"]')).find(button => button.textContent === 'Group info').click()
   })()`)
   await ann.evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
   await expect(panel).toBeVisible()
@@ -179,7 +181,7 @@ test('details stay beside messages on desktop and replace them on phones without
 
   await viewport.evaluate((el) => { el.scrollTop = 0 })
   await expect.poll(() => viewport.evaluate((el) => el.scrollTop)).toBe(0)
-  await title.click()
+  await conversationAction(ann, 'Group info')
   await expect.poll(() => viewport.evaluate((el) => el.scrollTop)).toBe(0)
   await ann.setViewportSize({ width: 641, height: 720 })
   await expect(panel).toHaveAttribute('role', 'dialog')
@@ -194,7 +196,7 @@ test('details stay beside messages on desktop and replace them on phones without
   await expect.poll(() => panel.locator('.details-content').evaluate((el) => el.scrollWidth - el.clientWidth)).toBe(0)
   await closeDetails(ann)
   await ann.setViewportSize({ width: 320, height: 640 })
-  await title.click()
+  await conversationAction(ann, 'Group info')
   const back = panel.getByRole('button', { name: 'Back to conversation' })
   await expect(back).toBeFocused()
   await expect(composer).toBeHidden()

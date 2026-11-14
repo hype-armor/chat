@@ -1,6 +1,6 @@
 import { type Page, expect, test } from './fixtures'
 import { expectDialogLayout, expectLayout, layoutViewports } from './layout'
-import { conversationCall, conversationDetails } from './support'
+import { conversationAction, conversationCall, conversationDetails } from './support'
 import { fixtureAction } from './interaction-fixture-support'
 
 test.skip(!process.env.E2E_UI_FIXTURES, 'use playwright.fixtures.config.ts; in-memory UI only, no call media or transport')
@@ -25,8 +25,8 @@ for (const width of [768, 1024, 1100, 1280]) {
     const viewport = page.locator('.messages-viewport')
     await viewport.evaluate((element) => { element.scrollTop = 180 })
     const scroll = await viewport.evaluate((element) => element.scrollTop)
-    const trigger = page.getByRole('button', { name: 'Group info', exact: true })
-    await trigger.click()
+    const trigger = page.getByRole('button', { name: 'Conversation menu', exact: true })
+    await conversationAction(page, 'Group info')
     const details = conversationDetails(page)
     await expect(details).toBeVisible()
     const overlay = width < 1280
@@ -62,7 +62,7 @@ for (const width of [768, 1024, 1100, 1280]) {
     await expect(trigger).toBeFocused()
     await expect.poll(() => viewport.evaluate((element) => element.scrollTop)).toBeCloseTo(scroll, 0)
     if (overlay) {
-      await trigger.click()
+      await conversationAction(page, 'Group info')
       await page.locator('.details-scrim').click({ position: { x: 5, y: 200 } })
       await expect(details).toBeHidden()
       await expect(trigger).toBeFocused()
@@ -120,7 +120,7 @@ for (const { width, height, colorScheme } of layoutViewports) {
 
 test('group edit stays beside the name, with the count below; resize preserves focus handling', async ({ page }) => {
   await open(page, 1280)
-  await page.getByRole('button', { name: 'Group info', exact: true }).click()
+  await conversationAction(page, 'Group info')
   const details = conversationDetails(page)
   const name = (await details.locator('.details-name strong').boundingBox())!
   const edit = details.getByRole('button', { name: 'Edit group name' })
@@ -142,5 +142,5 @@ test('group edit stays beside the name, with the count below; resize preserves f
   }
   await page.keyboard.press('Escape')
   await expect(details).toBeHidden()
-  await expect(page.getByRole('button', { name: 'Group info', exact: true })).toBeFocused()
+  await expect(page.getByRole('button', { name: 'Conversation menu', exact: true })).toBeFocused()
 })

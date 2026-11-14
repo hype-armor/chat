@@ -1,8 +1,9 @@
 // Browser-only UI fixture. No worker, encryption, storage, or server transport.
+import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Chat } from '../ui/Chat'
 import { canEncryptCalls, type CoreClient } from '../core/client'
-import type { AppView, ChatMessage, Draft, StorageUsage } from '../core/protocol'
+import type { AppView, ChatMessage, Draft, LocationInfo, StorageUsage } from '../core/protocol'
 import { TypingLeases, TYPING_TTL_MS } from '../core/typing'
 import '../styles.css'
 
@@ -51,7 +52,8 @@ let storageRequests = 0
 let pendingStorage: { resolve: (usage: StorageUsage) => void; reject: (error: Error) => void } | undefined
 const callActions: string[] = []
 const liveActivity = { updates: 0, pauses: 0, stops: [] as string[] }
-const liveStarts: { conversationId: string; durationMs: number | null; location: { latitude: number; longitude: number; accuracyM: number } }[] = []
+const liveStarts: { conversationId: string; durationMs: number | null; location: LocationInfo }[] = []
+const locationSends: { conversationId: string; location: LocationInfo }[] = []
 const leases = new TypingLeases()
 let lastTyping = ''
 const typists = () => leases.accounts(Date.now(), () => true).map((account) => ({ account, name: account }))
@@ -205,12 +207,17 @@ const core = {
   groupCallJoin: () => { callActions.push('join'); return new Promise(() => {}) },
   recordCall: () => {},
   avatarPhoto: async () => undefined,
+  // A display placeholder only. This fixture does not verify cryptographic keys.
+  safetyNumber: async () => ({ digits: '0'.repeat(60), qrSize: 1, qrModules: [0] }),
   pushStatus: async () => ({ enabled: false }),
   mapInfo: () => new Promise((_resolve, reject) => {
     rejectMapInfo = reject
     document.documentElement.dataset.mapStylePending = 'true'
   }),
-  startLive: async (conversationId: string, durationMs: number | null, location: { latitude: number; longitude: number; accuracyM: number }) => {
+  sendLocation: async (conversationId: string, location: LocationInfo) => {
+    locationSends.push({ conversationId, location })
+  },
+  startLive: async (conversationId: string, durationMs: number | null, location: LocationInfo) => {
     liveStarts.push({ conversationId, durationMs, location })
   },
   liveUpdate: async () => { liveActivity.updates++ },
@@ -256,8 +263,10 @@ const view: Extract<AppView, { phase: 'ready' }> = {
 Object.assign(window, {
   interactionFixture: {
     liveStarts,
+    locationSends,
     liveActivity,
     callActions,
+    subscriberCount: () => subscribers.size,
     storageRequests() { return storageRequests },
     storagePending() { return !!pendingStorage },
     resolveStorage(usage: StorageUsage) {
@@ -299,6 +308,16 @@ Object.assign(window, {
       else message.deleted = true
       emit({ type: 'messages', conversationId: 'chat', deletions: [{ messageId: message.id, scope: options.scope }] })
     },
+    // Model a conversation-scoped worker view, not lookup or authentication.
+    peerLocality(mode = 1, conversationId = 'chat') {
+      const conversation = view.conversations.find((item) => item.id === conversationId)
+      if (!conversation) throw new Error('Unknown locality fixture conversation')
+      conversation.locality = mode === 0 ? undefined : {
+        city: mode === 2 ? 'Paris' : 'Austin', region: mode === 2 ? '' : 'TX', country: mode === 2 ? 'FR' : 'US',
+        updatedAt: Date.now(), expiresAt: Date.now() + 3600_000,
+      }
+      renderFixture()
+    },
     failMessages(value: number) { failMessages = value === 1 },
     holdMessages() { holdMessages = true },
     holdStaleHistory() { staleHistory = resolveMessages(); holdMessages = true },
@@ -326,6 +345,20 @@ Object.assign(window, {
     failMap() {
       rejectMapInfo?.(new Error('Delayed map style failure from fixture'))
       rejectMapInfo = undefined
+    },
+    contactLocationMessages() {
+      const now = Date.now()
+      const live = { sessionId: 'contact-share', expiresAt: now + 15 * 60_000, untilStopped: false, ended: false,
+        latest: { latitude: 30.2672, longitude: -97.7431, accuracyM: 12, at: now } }
+      stored.push(
+        { id: 'contact-current', from: remote, text: '', sentAt: now, status: 'received', live },
+        { id: 'unrelated-current', from: 'Unrelated', text: '', sentAt: now, status: 'received', live: { ...live, sessionId: 'unrelated-share' } },
+        { id: 'own-current', from: 'me', text: '', sentAt: now, status: 'sent', live: { ...live, sessionId: 'own-share' } },
+        { id: 'contact-expired', from: remote, text: '', sentAt: now, status: 'received', live: { ...live, sessionId: 'expired-share', expiresAt: now - 1 } },
+        { id: 'contact-stopped', from: remote, text: '', sentAt: now, status: 'received', live: { ...live, sessionId: 'stopped-share', stopped: true } },
+        { id: 'contact-static', from: remote, text: '', sentAt: now, status: 'received', location: { latitude: 40, longitude: -75, accuracyM: 10 } },
+      )
+      refresh()
     },
     activeLiveShare(expired?: number) {
       const now = Date.now()
@@ -357,7 +390,7 @@ Object.assign(window, {
     restartUI() { fixtureSession++; renderFixture() },
     addChat() {
       if (!view.conversations.some((conversation) => conversation.id === 'other')) {
-        view.conversations.push({ ...view.conversations[0], id: 'other', title: 'Other chat', peer: 'Other' })
+        view.conversations.push({ ...view.conversations[0], id: 'other', title: 'Other chat', peer: 'Other', locality: undefined })
         renderFixture()
       }
     },
@@ -414,6 +447,7 @@ window.addEventListener('error', (event) => {
 })
 const fixtureRoot = createRoot(document.getElementById('root')!)
 function renderFixture() {
-  fixtureRoot.render(<Chat key={fixtureSession} core={core} view={{ ...view }} showDiagnostics={false} onDiagnostics={() => {}} />)
+  const chat = <Chat key={fixtureSession} core={core} view={{ ...view }} showDiagnostics={false} onDiagnostics={() => {}} />
+  fixtureRoot.render(params.get('strict') === '1' ? <StrictMode>{chat}</StrictMode> : chat)
 }
 renderFixture()

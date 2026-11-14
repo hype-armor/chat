@@ -23,12 +23,15 @@ Architecture Decision Records (ADRs) under [`adr/`](adr/).
 | — | [Fail-fast CI](ci.md) | Validation stages, shared CI, generated type contract, and gated image publication |
 | — | [WebKit navigation diagnostic](testing-webkit-navigation.md) | Targeted signup-stall capture, baseline comparison, and artifact privacy |
 | — | [Server management](server-management.md) | Storage quotas, account limits, operator commands, and user usage view |
+| — | [Browser permissions](browser-permissions.md) | Browser-controlled grants, capture cleanup, and security headers |
+| — | [Bot social world](bot-social-world.md) | Offline 100-bot social graph, personalities, and scoped conversation fixtures |
+| — | [Synthetic and opt-in AI bots](ai-bots.md) | Local random-text traffic, optional free inference, room consent, and operator setup |
 | — | [ADR index](adr/README.md) | Decision log |
 
-Message reactions use [ADR-0041](adr/0041-encrypted-message-reactions.md): verified
+Message reactions use [ADR-0047](adr/0047-encrypted-message-reactions.md): verified
 original bindings, encrypted durable updates, deterministic account ordering, and removal tombstones.
 
-Message deletion uses [ADR-0042](adr/0042-encrypted-message-deletion.md): encrypted
+Message deletion uses [ADR-0048](adr/0048-encrypted-message-deletion.md): encrypted
 own-device suppression (device-only fallback for unverified originals) and
 authenticated own-message deletion requests for everyone within 1 hour.
 

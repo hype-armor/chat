@@ -10,6 +10,8 @@ function Fixture() {
   const [blob, setBlob] = useState<Blob>()
   const [result, setResult] = useState('Choose a GIF')
   const [failure, setFailure] = useState(false)
+  // Synthetic worker control, not a user action on the inert background page.
+  Object.assign(window, { gifFixture: { setFailure } })
   const core = {
     subscribe: () => () => {},
     openAttachment: async () => {

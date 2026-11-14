@@ -6,6 +6,7 @@ import type { CoreClient } from '../core/client'
 import type { LocationInfo } from '../core/protocol'
 import { MapView } from './MapView'
 import { isApple, mapsAppLink } from './mapsLink'
+import { permissionGuidance } from './permissions'
 
 const APPLE = typeof navigator !== 'undefined' && isApple(navigator.userAgent, navigator.maxTouchPoints ?? 0)
 
@@ -28,7 +29,7 @@ export function LocationCard({ core, location }: { core: CoreClient; location: L
       <span className="small muted">
         {formatCoordinates(location)} · ±{location.accuracyM} m
       </span>
-      {map && <MapView core={core} latitude={location.latitude} longitude={location.longitude} />}
+      {map && <MapView core={core} latitude={location.latitude} longitude={location.longitude} accuracyM={location.accuracyM} />}
       <span className="small">
         <button type="button" className="link small" onClick={() => setMap(!map)}>
           {map ? 'Hide map' : 'Show map'}
@@ -64,6 +65,9 @@ export function ShareLocation({
 }) {
   const [state, setState] = useState<'idle' | 'locating' | LocationInfo>('idle')
   const dialog = useRef<HTMLDialogElement>(null)
+  const request = useRef<object>(undefined)
+
+  useEffect(() => () => { request.current = undefined }, [])
 
   useEffect(() => {
     if (typeof state === 'object') dialog.current?.showModal()
@@ -75,19 +79,26 @@ export function ShareLocation({
   }
 
   const locate = () => {
-    if (state !== 'idle') return
+    if (state !== 'idle' || request.current) return
     if (!navigator.geolocation) return onError("This browser can't share a location")
+    const ticket = {}
+    request.current = ticket
     setState('locating')
     navigator.geolocation.getCurrentPosition(
-      (p) =>
+      (p) => {
+        if (request.current !== ticket) return
+        request.current = undefined
         setState({
           latitude: p.coords.latitude,
           longitude: p.coords.longitude,
           accuracyM: Math.round(p.coords.accuracy),
-        }),
+        })
+      },
       (e) => {
+        if (request.current !== ticket) return
+        request.current = undefined
         close()
-        onError(e.code === e.PERMISSION_DENIED ? 'Allow location access to share where you are' : "Couldn't find your location")
+        onError(e.code === e.PERMISSION_DENIED ? `Cannot access your location. ${permissionGuidance('location')}` : "Couldn't find your location")
       },
       { enableHighAccuracy: true, timeout: 20_000, maximumAge: 30_000 },
     )
@@ -119,9 +130,9 @@ export function ShareLocation({
       {state === 'locating' && <span className="location-progress small" role="status">Finding location…</span>}
       {typeof state === 'object' && (
         <dialog className="share-location" ref={dialog} aria-label="Share this location?" onCancel={close}>
-          <MapView core={core} latitude={state.latitude} longitude={state.longitude} />
+          <MapView core={core} latitude={state.latitude} longitude={state.longitude} accuracyM={state.accuracyM} />
           <p className="small">
-            {formatCoordinates(state)} · ±{state.accuracyM} m. Only the people in this conversation will see it.
+            {formatCoordinates(state)} · ±{state.accuracyM} m. Shared only in this conversation.
           </p>
           <div className="actions">
             <button type="button" onClick={() => void send(state)}>
@@ -136,8 +147,7 @@ export function ShareLocation({
               ))}
             </div>
             <p className="small muted">
-              Live sharing pauses when this app is closed or in the background.
-              Recipients remove the last point after 8 hours without an update.
+              Live updates pause in the background. The last point expires after 8 hours without an update.
             </p>
             <button type="button" className="link" onClick={close}>
               Cancel

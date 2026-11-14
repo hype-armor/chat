@@ -6,3 +6,12 @@ web/src/core/pkg
 web/test-results
 web/playwright-report
 .git
+bot-state
+chat-bot-state
+bot-config
+bot-invites.json
+bots.env
+.bot-state-test-*
+.bot-ipc-test-*
+.bot-integration-*
+.bot-world-integration-*

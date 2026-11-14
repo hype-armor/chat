@@ -1,10 +1,10 @@
-# ADR-0042: Encrypted message deletion
+# ADR-0048: Encrypted message deletion
 
 - **Status:** Accepted for implementation
 - **Date:** 2026-11-08
 - **Deciders:** Greg, implementation agents
 - **Related requirements:** FR-MSG-7, FR-MSG-13, NFR-SEC-1, NFR-SEC-5
-- **Builds on:** ADR-0022, ADR-0038, ADR-0039, ADR-0041
+- **Builds on:** ADR-0022, ADR-0038, ADR-0039, ADR-0047
 
 ## Context
 
@@ -74,7 +74,7 @@ account's original. No server-visible timing/target field or new crypto is added
 
 ### Encrypted protocol and binding
 
-Add `Content.deletion`, body tag 15, with `Deletion.target` (16 bytes),
+Add `Content.deletion`, body tag 17, with `Deletion.target` (16 bytes),
 `target_hash` (32 bytes), and `target_author` (16-byte account).
 The authenticated MLS sender account must equal `target_author`.
 The worker resolves the original in the same conversation and verifies its
@@ -87,7 +87,7 @@ messageId)` in WASM. Validate widths, time, and local author-account equality.
 Expose deletion binding fields on the received event, with the normal
 conversation, authenticated sender, and signed timestamp. Invalid bodies have no
 projection effect. Unknown bodies still advance and persist the MLS ratchet.
-Older readers ignore tag 15 and must decrypt the next ordinary message.
+Older readers ignore tag 17 and must decrypt the next ordinary message.
 
 ### Tombstones and early candidates
 

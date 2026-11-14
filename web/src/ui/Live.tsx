@@ -143,7 +143,7 @@ export function LiveCard({
         {formatCoordinates(live.latest)} · ±{live.latest.accuracyM} m · updated{' '}
         {ago === 0 ? 'just now' : `${ago} min ago`}
       </span>
-      {map && <MapView core={core} latitude={live.latest.latitude} longitude={live.latest.longitude} />}
+      {map && <MapView core={core} latitude={live.latest.latitude} longitude={live.latest.longitude} accuracyM={live.latest.accuracyM} />}
       <span className="small">
         <button type="button" className="link small" onClick={() => setMap(!map)}>
           {map ? 'Hide map' : 'Show map'}

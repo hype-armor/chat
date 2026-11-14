@@ -30,6 +30,11 @@ done
 
 for service in "$@"; do
   printf 'Building %s with %s Cargo job(s); image builds are sequential.\n' "$service" "$jobs"
-  docker compose -f deploy/compose/docker-compose.yml --profile echo build \
-    --build-arg "CARGO_BUILD_JOBS=$jobs" "$service"
+  if [[ "$service" == bots ]]; then
+    docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.bots.yml \
+      --profile echo --profile bots build --build-arg "CARGO_BUILD_JOBS=$jobs" "$service"
+  else
+    docker compose -f deploy/compose/docker-compose.yml --profile echo build \
+      --build-arg "CARGO_BUILD_JOBS=$jobs" "$service"
+  fi
 done
