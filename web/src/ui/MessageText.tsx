@@ -49,6 +49,13 @@ function inline(tokens: Token[], key: string): ReactNode[] {
   })
 }
 
+function inlineBlocks(tokens: Token[], key: string): ReactNode[] {
+  return tokens.flatMap<ReactNode>((token, index) => token.type === 'paragraph'
+    ? inline(childTokens(token), `${key}-${index}`)
+    : token.type === 'space' ? plainText(token.raw, `${key}-${index}`, false)
+      : [])
+}
+
 function blocks(tokens: Token[], key: string): ReactNode[] {
   return tokens.flatMap<ReactNode>((token, index) => {
     const tokenKey = `${key}-${index}`
@@ -77,9 +84,9 @@ function blocks(tokens: Token[], key: string): ReactNode[] {
 /** Renders a safe, basic Markdown subset. Raw HTML is always visible text. */
 export function MessageText({ text }: { text: string }) {
   const tokens = marked.lexer(text, { breaks: true, gfm: true })
-  // Keep a plain message in one text node flow. This preserves native selection behavior.
-  const content = tokens.length === 1 && tokens[0].type === 'paragraph'
-    ? inline(childTokens(tokens[0]), 'message')
+  // Keep plain paragraphs in one text flow. This preserves native selection behavior and blank lines.
+  const content = tokens.every((token) => token.type === 'paragraph' || token.type === 'space')
+    ? inlineBlocks(tokens, 'message')
     : blocks(tokens, 'message')
   return <div className="text message-text">{content}</div>
 }
