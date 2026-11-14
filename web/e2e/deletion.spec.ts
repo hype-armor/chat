@@ -166,7 +166,10 @@ for (const scope of ['me', 'everyone'] as const) {
       await expect(reply.getByLabel('Quoted message')).toContainText('Own deletion target')
       if (content === 'photo') {
         await original.getByRole('button', { name: 'Show photo secret.jpg', exact: true }).click()
-        await expect(original.getByRole('button', { name: 'Photo secret.jpg', exact: true })).toBeVisible()
+        await expect(page.getByRole('dialog', { name: 'Image: secret.jpg' })).toBeVisible()
+        await expect(original.locator('img[data-full="true"]')).toBeVisible()
+        await page.getByRole('button', { name: 'Close image', exact: true }).click()
+        await expect(page.getByRole('dialog')).toHaveCount(0)
         await page.evaluate(() => {
           const src = document.querySelector<HTMLImageElement>('[data-testid="attachment"] img')!.src
           const activity = { src, revoked: [] as string[] }
