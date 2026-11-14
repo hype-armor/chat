@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import './linkActions.css'
 
@@ -6,7 +6,7 @@ const LONG_PRESS_MS = 550
 const MOVE_LIMIT_PX = 10
 
 /** Only an owned link gesture replaces the native callout. Never load a preview. */
-export function LinkActions({ text, href }: { text: string; href: string }) {
+export function LinkActions({ text, href }: { text: ReactNode; href: string }) {
   const link = useRef<HTMLAnchorElement>(null)
   const menu = useRef<HTMLDivElement>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)

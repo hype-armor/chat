@@ -97,6 +97,18 @@ test('links have no visible disclosure, preserve normal clicks, and never fetch 
   await expect(page.getByRole('menu', { name: 'Message actions', exact: true })).toHaveCount(0)
 })
 
+test('messages render basic Markdown, preserve newlines, and retain safe link actions', async ({ page }) => {
+  await openFixture(page)
+  await fixtureAction(page, 'incoming', '**bold**\nsecond line\n\n[Safe link](https://example.invalid/markdown)\n\n<img src=x onerror=alert(1)>')
+  const message = messages(page).last()
+
+  await expect(message.locator('strong')).toHaveText('bold')
+  await expect(message.locator('.message-paragraph').first().locator('br')).toHaveCount(1)
+  await expect(message.getByRole('link', { name: 'Safe link', exact: true })).toHaveAttribute('href', 'https://example.invalid/markdown')
+  await expect(message.locator('img')).toHaveCount(0)
+  await expect(message).toContainText('<img src=x onerror=alert(1)>')
+})
+
 test('keyboard and right-click menus isolate Open, Copy, and Share and restore link focus', async ({ page, context }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'clipboard', {

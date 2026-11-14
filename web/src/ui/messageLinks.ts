@@ -1,5 +1,16 @@
 export type MessagePart = { text: string; href?: string }
 
+/** Only unauthenticated HTTP(S) URLs can become links. */
+export function isSafeMessageUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:')
+      && !!parsed.hostname && !parsed.username && !parsed.password
+  } catch {
+    return false
+  }
+}
+
 /** Only explicit web URLs become links. Never fetch or parse message HTML. */
 export function messageLinks(text: string): MessagePart[] {
   const parts: MessagePart[] = []
@@ -21,13 +32,11 @@ export function messageLinks(text: string): MessagePart[] {
       excessClosing--
     }
     const url = candidate.slice(0, boundary)
-    try {
-      const parsed = new URL(url)
-      if (!parsed.hostname || parsed.username || parsed.password) continue
+    if (isSafeMessageUrl(url)) {
       if (start > end) parts.push({ text: text.slice(end, start) })
       parts.push({ text: url, href: url })
       end = start + url.length
-    } catch { /* Invalid URLs remain selectable text. */ }
+    }
   }
   if (end < text.length) parts.push({ text: text.slice(end) })
   return parts
