@@ -8,6 +8,8 @@ const origin = `http://127.0.0.1:${port}`
 export default defineConfig({
   testDir: 'e2e',
   testMatch: [
+    'reactions.spec.ts',
+    'deletion.spec.ts',
     'quality-of-life.spec.ts',
     'composer-spacing.spec.ts',
     'message-interactions.spec.ts',

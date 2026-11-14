@@ -72,6 +72,25 @@ describe('reply and typing WASM contracts', () => {
     expect((await engine.messages(id))[1].reply).toMatchObject({ from: 'me', fromName: 'You', text: 'Worker original' })
   })
 
+  it('authenticates encrypted reaction bindings and survives snapshots and ignored updates', () => {
+    const { alice, bob, conversationId, aliceIdentity } = pair()
+    const target = randomId()
+    const original = bob.receive(alice.sendText(conversationId, 'Original', 1, target))
+    const hash = original.contentHash!
+    const event = bob.receive(alice.sendReaction(conversationId, target, hash, aliceIdentity.slice(0, 16), '👍', 2, randomId()))
+    expect(event.sender).toEqual(aliceIdentity)
+    expect(event.conversationId).toEqual(conversationId)
+    expect(event.text).toBeUndefined()
+    expect(event.reaction).toEqual(new Uint8Array([...target, ...hash, ...aliceIdentity.slice(0, 16), ...new TextEncoder().encode('👍')]))
+    expect(alice.lastSentContentHash).toBeUndefined()
+    const restored = CoreClient.restore(bob.snapshot())
+    const removal = restored.receive(alice.sendReaction(conversationId, target, hash, aliceIdentity.slice(0, 16), '', 3, randomId()))
+    expect(removal.reaction?.length).toBe(64)
+    expect(restored.receive(alice.sendText(conversationId, 'After reaction', 4, randomId())).text).toBe('After reaction')
+    expect(() => alice.sendReaction(conversationId, target, new Uint8Array(31), aliceIdentity.slice(0, 16), '👍', 5, randomId())).toThrow()
+    expect(() => alice.sendReaction(conversationId, target, hash, aliceIdentity.slice(0, 16), '👍', NaN, randomId())).toThrow()
+  })
+
   it('retains the ratchet after transient typing and a dropped typing envelope', () => {
     const { alice, bob, conversationId } = pair()
     const now = Date.now()

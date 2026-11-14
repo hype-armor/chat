@@ -146,6 +146,20 @@ existing silent-envelope transport carries typing events without Web Push.
 Recipients must still reject delayed events because the transport can queue
 encrypted envelopes. See ADR-0038 for the protocol and compatibility rules.
 
+### 5.1.2 Message reactions
+
+Reactions use the MLS-encrypted body extension in ADR-0047. The UI selects a
+message identifier and emoji. The worker supplies the verified original hash
+and author from the same conversation. Legacy or mismatched targets fail closed.
+Each account has 1 projected reaction per target across its devices. Logical
+timestamps, authenticated device identifiers, and a removal tie-break establish
+deterministic ordering. Encrypted history retains events and removal tombstones.
+The normal outbox carries accepted updates. An acceptance gate prevents transport
+before history, ratchet, and app-state persistence complete. Pending or failed
+updates show explicit UI state. Retry creates a new ordered edit without deleting
+older tombstones. Backups retain these records; metadata device sync does not
+transfer history. No reaction metadata or new API enters the server.
+
 ### 5.2 Send media
 
 1. Client generates random key K, encrypts the file (STREAM over

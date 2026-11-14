@@ -19,6 +19,8 @@ message Content {
     Call call = 10;
     Typing typing = 12;
     Locality locality = 14;
+    Reaction reaction = 16;
+    Deletion deletion = 17;
   }
   // Original envelope message id in this conversation, exactly 16 bytes.
   // Absent for an ordinary message. Only used on user-visible messages.
@@ -34,6 +36,22 @@ message Content {
 message Typing {
   bool active = 1;
   uint64 expires_at_ms = 2;
+}
+
+// Encrypted durable update. Empty emoji removes the account reaction.
+message Reaction {
+  bytes target = 1;
+  bytes target_hash = 2;
+  bytes target_author = 3;
+  string emoji = 4;
+}
+
+// Encrypted deletion request. The authenticated sender account must equal
+// target_author. The worker verifies the original hash and the 1-hour window.
+message Deletion {
+  bytes target = 1;
+  bytes target_hash = 2;
+  bytes target_author = 3;
 }
 
 // Coarse foreground locality, shared only after explicit opt-in (ADR-0041).
