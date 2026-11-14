@@ -234,7 +234,10 @@ form {
   display: grid;
   grid-template-columns: minmax(16rem, 22rem) 1fr;
   height: calc(var(--app-height, 100dvh) - var(--update-banner-height, 0px));
-  padding: env(safe-area-inset-top) env(safe-area-inset-right) var(--safe-bottom, env(safe-area-inset-bottom)) env(safe-area-inset-left);
+  /* The home indicator overlaps the bottom edge, as it does in native
+     messengers: reserving the safe-area band there leaves dead space under the
+     composer. The composer row keeps its own small bottom padding. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
 }
 
 .chat-layout[hidden] {

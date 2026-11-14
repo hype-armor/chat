@@ -28,6 +28,43 @@ async function expectCompact(composer: Locator) {
 // CSS and event-ordering coverage only. The synthetic visual viewport does not
 // emulate a real mobile keyboard, browser chrome, or physical safe-area insets.
 for (const width of [390, 1280]) {
+  test(`the composer ends at the bottom of the layout (${width}px)`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 })
+    await openFixture(page, 'Alice', `composer-spacing-bottom-${width}`)
+    const layout = page.locator('.chat-layout')
+    const composer = page.locator('.composer')
+    // A reserved home-indicator strip would show as dead space below the box.
+    await expect(layout).toHaveCSS('padding-bottom', '0px')
+    await expect.poll(async () => {
+      const area = (await layout.boundingBox())!
+      const form = (await composer.boundingBox())!
+      return Math.round(area.y + area.height - form.y - form.height)
+    }).toBe(0)
+  })
+
+  test(`the composer stays flush with the bottom when the keyboard resizes the layout viewport (${width}px)`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 })
+    await page.addInitScript(() => {
+      Object.defineProperty(window, 'visualViewport', {
+        configurable: true,
+        value: Object.assign(new EventTarget(), { width: window.innerWidth, height: 844, offsetTop: 0, scale: 1 }),
+      })
+    })
+    await openFixture(page, 'Alice', `composer-spacing-resizes-content-${width}`)
+    // `interactive-widget=resizes-content` shortens the layout viewport and the
+    // visual viewport together as the keyboard opens.
+    await page.evaluate(() => {
+      Object.assign(window.visualViewport!, { height: 500, offsetTop: 0 })
+      window.visualViewport!.dispatchEvent(new Event('resize'))
+    })
+    await expect(page.locator('.chat-layout')).toHaveCSS('padding-bottom', '0px')
+    await expect.poll(async () => {
+      const area = (await page.locator('.chat-layout').boundingBox())!
+      const form = (await page.locator('.composer').boundingBox())!
+      return { height: area.height, gap: Math.round(area.y + area.height - form.y - form.height) }
+    }).toEqual({ height: 500, gap: 0 })
+  })
+
   test(`the idle composer stays compact across edits and visual viewport changes (${width}px)`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 })
     await page.addInitScript((width) => {
@@ -76,7 +113,7 @@ for (const width of [390, 1280]) {
     await expectCompact(composer)
     await viewport(844, 0)
     await expectCompact(composer)
-    await expect.poll(() => page.locator('html').evaluate((element) => element.style.getPropertyValue('--safe-bottom'))).toBe('')
+    await expect(page.locator('.chat-layout')).toHaveCSS('padding-bottom', '0px')
   })
 
   test(`active remote typing remains visible and collapses when it stops (${width}px)`, async ({ context, page }) => {

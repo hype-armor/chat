@@ -2,23 +2,22 @@ import { useLayoutEffect, useRef } from 'react'
 
 type Viewport = Pick<VisualViewport, 'height' | 'offsetTop' | 'scale'>
 
-export function visualViewportProperties(viewport: Viewport | null, innerHeight: number) {
+export function visualViewportProperties(viewport: Viewport | null) {
   if (!viewport || viewport.scale !== 1) return undefined
   return {
     '--app-height': `${viewport.height}px`,
     '--app-top': `${viewport.offsetTop}px`,
-    '--safe-bottom': viewport.height < innerHeight - 100 ? '0px' : undefined,
   }
 }
 
 export function trackVisualViewport(
-  win: Pick<Window, 'visualViewport' | 'innerHeight' | 'requestAnimationFrame' | 'cancelAnimationFrame'>,
+  win: Pick<Window, 'visualViewport' | 'requestAnimationFrame' | 'cancelAnimationFrame'>,
   style: Pick<CSSStyleDeclaration, 'setProperty' | 'removeProperty'>,
 ) {
   const viewport = win.visualViewport
   if (!viewport) return () => {}
   const update = () => {
-    const properties = visualViewportProperties(viewport, win.innerHeight)
+    const properties = visualViewportProperties(viewport)
     if (!properties) return
     for (const [name, value] of Object.entries(properties)) {
       if (value === undefined) style.removeProperty(name)
@@ -40,7 +39,7 @@ export function trackVisualViewport(
     viewport.removeEventListener('resize', schedule)
     viewport.removeEventListener('scroll', schedule)
     if (frame !== undefined) win.cancelAnimationFrame(frame)
-    for (const name of ['--app-height', '--app-top', '--safe-bottom']) style.removeProperty(name)
+    for (const name of ['--app-height', '--app-top']) style.removeProperty(name)
   }
 }
 

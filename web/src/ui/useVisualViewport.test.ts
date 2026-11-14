@@ -12,7 +12,6 @@ function setup(viewport: VisualViewport | null = Object.assign(new EventTarget()
   let callback: FrameRequestCallback | undefined
   const win = {
     visualViewport: viewport,
-    innerHeight: 844,
     requestAnimationFrame: vi.fn((cb: FrameRequestCallback) => { callback = cb; return 1 }),
     cancelAnimationFrame: vi.fn(() => { callback = undefined }),
   }
@@ -26,21 +25,15 @@ function setup(viewport: VisualViewport | null = Object.assign(new EventTarget()
 }
 
 describe('visualViewportProperties', () => {
-  it('aligns with an iOS keyboard pan and removes the bottom safe area', () => {
-    expect(visualViewportProperties({ height: 500, offsetTop: 344, scale: 1 }, 844)).toEqual({
-      '--app-height': '500px', '--app-top': '344px', '--safe-bottom': '0px',
-    })
-  })
-
-  it('keeps the safe area when the layout viewport also shrinks (Android)', () => {
-    expect(visualViewportProperties({ height: 500, offsetTop: 0, scale: 1 }, 500)).toEqual({
-      '--app-height': '500px', '--app-top': '0px', '--safe-bottom': undefined,
+  it('aligns with an iOS keyboard pan', () => {
+    expect(visualViewportProperties({ height: 500, offsetTop: 344, scale: 1 })).toEqual({
+      '--app-height': '500px', '--app-top': '344px',
     })
   })
 
   it('ignores pinch zoom and unavailable VisualViewport', () => {
-    expect(visualViewportProperties({ height: 400, offsetTop: 100, scale: 2 }, 844)).toBeUndefined()
-    expect(visualViewportProperties(null, 844)).toBeUndefined()
+    expect(visualViewportProperties({ height: 400, offsetTop: 100, scale: 2 })).toBeUndefined()
+    expect(visualViewportProperties(null)).toBeUndefined()
   })
 })
 
@@ -52,7 +45,7 @@ describe('trackVisualViewport', () => {
     expect(s.win.requestAnimationFrame).toHaveBeenCalledTimes(1)
     s.flush()
     expect(Object.fromEntries(s.properties)).toEqual({
-      '--app-height': '500px', '--app-top': '344px', '--safe-bottom': '0px',
+      '--app-height': '500px', '--app-top': '344px',
     })
     s.change({ offsetTop: 300 }, 'scroll')
     s.flush()
@@ -60,7 +53,7 @@ describe('trackVisualViewport', () => {
     s.dispose()
   })
 
-  it('resets height, top and the safe-area override when the keyboard closes', () => {
+  it('resets height and top when the keyboard closes', () => {
     const s = setup()
     s.change({ height: 500, offsetTop: 344 })
     s.flush()
