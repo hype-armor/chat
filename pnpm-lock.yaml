@@ -19,6 +19,9 @@ importers:
       maplibre-gl:
         specifier: ^6.16.0
         version: 6.16.0
+      marked:
+        specifier: 17.0.1
+        version: 17.0.1
       pmtiles:
         specifier: ^4.5.0
         version: 4.5.0
@@ -1750,6 +1753,9 @@ packages:
   maplibre-gl@6.16.0:
     resolution: {integrity: sha512-gApO66EMtoDZuio680RUBvskR7ahFd/NNhLN4tBAs+Y7FeT4gQV8zVFgYVMRmFxQznOEzecW19w6xOd9XjZjiA==}
     engines: {node: '>=16.14.0', npm: '>=8.1.0'}
+
+  marked@17.0.1:
+    resolution: {integrity: sha512-boeBdiS0ghpWcSwoNm/jJBwdpFaMnZWRzjA6SkUMYb40SVaN1x7mmfGKp0jvexGcx+7y2La5zRZsYFZI6Qpypg==}
 
   math-intrinsics@1.1.0:
     resolution: {integrity: sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==}
@@ -4034,6 +4040,8 @@ snapshots:
       potpack: 2.1.0
       quickselect: 3.0.0
       tinyqueue: 3.0.0
+
+  marked@17.0.1: {}
 
   math-intrinsics@1.1.0: {}
 
