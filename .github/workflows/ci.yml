@@ -28,14 +28,52 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: bash -n scripts/compose-build.sh scripts/test-compose-build.sh
+      - run: bash -n scripts/compose-build.sh scripts/test-compose-build.sh update-with-bots.sh scripts/test-update-with-bots.sh
       - run: scripts/test-compose-build.sh
+      - name: Test the updater with standard and private caller permissions
+        run: |
+          (umask 022; scripts/test-update-with-bots.sh)
+          (umask 077; scripts/test-update-with-bots.sh)
+      - name: Validate optional bots Compose configuration without secrets
+        run: docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.bots.yml --profile bots config --no-env-resolution --quiet
       - uses: docker/setup-buildx-action@v3
       - name: Validate Docker build definitions without compiling
         run: |
-          for image in server web echo; do
+          for image in server web echo bots; do
             docker buildx build --check -f "deploy/docker/$image.Dockerfile" .
           done
+
+  bots-image:
+    needs: [bot-tools, build-controls]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - id: cpu
+        run: echo "jobs=$(nproc)" >> "$GITHUB_OUTPUT"
+      - name: Build the optional bot image in CI, not on the development host
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/bots.Dockerfile
+          tags: chat-bots-smoke:ci
+          load: true
+          build-args: CARGO_BUILD_JOBS=${{ steps.cpu.outputs.jobs }}
+          cache-from: type=gha,scope=bots-image
+          cache-to: type=gha,mode=max,scope=bots-image
+      - name: Check the read-only runtime without credentials or networking
+        run: |
+          docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL \
+            --security-opt no-new-privileges --entrypoint sh chat-bots-smoke:ci -ec '
+              command -v flock
+              node scripts/bot-world/run.mjs plan
+              ldd bin/chat-bot > /tmp/native-libraries
+              if grep -q "not found" /tmp/native-libraries; then
+                cat /tmp/native-libraries
+                exit 1
+              fi
+            '
 
   rust:
     needs: bot-tools
@@ -148,4 +186,4 @@ jobs:
       - run: helm template chat deploy/helm/chat --set turn.enabled=true --set livekit.url=wss://rtc.example.com --set "server.mapAreas.source=https://build.protomaps.com/{yesterday}.pmtiles" > /dev/null
       - run: helm template chat deploy/helm/chat -f deploy/helm/chat/values-k3s.yaml -f deploy/helm/chat/values-dev.yaml --set server.image.tag=sha-0000000 > /dev/null
       # Deployment scripts (shellcheck is preinstalled on GitHub runners).
-      - run: shellcheck scripts/*.sh
+      - run: shellcheck scripts/*.sh update-with-bots.sh

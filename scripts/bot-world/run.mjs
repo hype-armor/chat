@@ -17,7 +17,7 @@ async function shutdown() {
   await controller?.stop(); transport?.close();
 }
 try {
-  if (!['plan', 'bootstrap', 'run'].includes(mode) || process.argv.length > 3) throw new Error('Usage: node scripts/bot-world/run.mjs [plan|bootstrap|run]');
+  if (!['plan', 'status', 'bootstrap', 'run'].includes(mode) || process.argv.length > 3) throw new Error('Usage: node scripts/bot-world/run.mjs [plan|status|bootstrap|run]');
   const generationMode = process.env.CHAT_BOT_MODE ?? 'synthetic';
   if (!['synthetic', 'ai'].includes(generationMode)) throw new Error('Bot generation mode must be synthetic or ai.');
   const syntheticMessagesPerMinute = generationMode === 'synthetic' ? Number(process.env.CHAT_BOT_MESSAGES_PER_MINUTE ?? 12) : 12;
@@ -28,6 +28,13 @@ try {
     console.log(JSON.stringify({ ...summarizeWorld(world), generationMode, model: generationMode === 'ai' ? process.env.CHAT_BOT_AI_MODEL ?? 'openrouter/free' : null,
       messagesPerMinute: generationMode === 'synthetic' ? syntheticMessagesPerMinute : null,
       activated: false, note: 'No accounts created, network requests, or model calls.' }, null, 2));
+  } else if (mode === 'status') {
+    // Atomic encrypted snapshots permit an aggregate, read-only status check.
+    // Do not spawn the native worker, require activation, or expose identities.
+    store = new StateStore(resolve(process.env.CHAT_BOT_STATE_DIR ?? 'bot-state', 'controller'), stateKey(process.env.CHAT_BOT_STATE_KEY));
+    const state = await store.load();
+    if (state && state.version !== 1) throw new Error('Controller state version is unsupported.');
+    console.log(JSON.stringify({ registeredAccounts: Object.keys(state?.accounts ?? {}).length, fixtureConversations: Object.keys(state?.fixtures ?? {}).length }));
   } else {
     if (process.env.CHAT_BOTS_ENABLED !== 'true') throw new Error('Set CHAT_BOTS_ENABLED=true to explicitly enable bot network operations.');
     const server = new URL(process.env.CHAT_BOT_SERVER ?? 'http://127.0.0.1:8080');
