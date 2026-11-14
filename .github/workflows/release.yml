@@ -1,0 +1,174 @@
+name: Release
+
+# A merged PR is the release boundary. This repository is pre-production, so
+# each release uses the shared source version plus an immutable PR prerelease
+# identifier (for example, v0.1.0-pr.123).
+on:
+  pull_request:
+    branches: [main]
+    types: [closed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # On a merged pull_request event, github.sha is the resulting main
+          # commit. Pin every artifact and the release tag to that commit.
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Derive and validate the prerelease version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_version="$({
+            python3 - <<'PY'
+          import json
+          import re
+          import tomllib
+          from pathlib import Path
+
+          manifests = {
+              "crates/chat-proto/Cargo.toml": "cargo",
+              "crates/chat-core/Cargo.toml": "cargo",
+              "crates/chat-server/Cargo.toml": "cargo",
+              "crates/chat-echo/Cargo.toml": "cargo",
+              "crates/chat-bot/Cargo.toml": "cargo",
+              "web/package.json": "npm",
+              "deploy/helm/chat/Chart.yaml": "helm",
+          }
+          versions = {}
+          for filename, kind in manifests.items():
+              path = Path(filename)
+              if kind == "cargo":
+                  with path.open("rb") as source:
+                      versions[filename] = tomllib.load(source)["package"]["version"]
+              elif kind == "npm":
+                  versions[filename] = json.loads(path.read_text())["version"]
+              else:
+                  versions[filename] = next(
+                      line.split(":", 1)[1].strip().strip('"')
+                      for line in path.read_text().splitlines()
+                      if line.startswith("version:")
+                  )
+          unique_versions = set(versions.values())
+          if len(unique_versions) != 1:
+              raise SystemExit(f"Version mismatch: {versions}")
+          version = unique_versions.pop()
+          if not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version):
+              raise SystemExit(f"Version is not SemVer: {version}")
+          print(version)
+          PY
+          })"
+          release_version="${base_version}-pr.${PR_NUMBER}"
+          printf 'base=%s\n' "$base_version" >> "$GITHUB_OUTPUT"
+          printf 'release=%s\n' "$release_version" >> "$GITHUB_OUTPUT"
+          printf 'tag=v%s\n' "$release_version" >> "$GITHUB_OUTPUT"
+          printf 'image=sha-%s\n' "$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the Linux server archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --release -p chat-server --bins
+          directory="chat-server-${{ steps.version.outputs.release }}-linux-x86_64"
+          mkdir -p "release/$directory"
+          install -m 0755 target/release/chat-server "release/$directory/chat-server"
+          install -m 0755 target/release/chat-admin "release/$directory/chat-admin"
+          tar --create --gzip --file="release/$directory.tar.gz" --directory=release "$directory"
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Build the web archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          pnpm install --frozen-lockfile
+          cargo install wasm-bindgen-cli --locked --version "$(scripts/wasm-bindgen-version.sh)"
+          scripts/build-wasm.sh
+          pnpm --filter web build
+          directory="chat-web-${{ steps.version.outputs.release }}"
+          mkdir -p "release/$directory"
+          cp -a web/dist/. "release/$directory/"
+          tar --create --gzip --file="release/$directory.tar.gz" --directory=release "$directory"
+
+      - uses: azure/setup-helm@v4
+
+      - name: Package the Helm chart and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          helm package deploy/helm/chat \
+            --version "${{ steps.version.outputs.release }}" \
+            --app-version "${{ steps.version.outputs.image }}" \
+            --destination release
+          (
+            cd release
+            sha256sum -- *.tar.gz *.tgz > SHA256SUMS
+          )
+          cat > release/RELEASE_NOTES.md <<EOF
+          This is a pre-production release from pull request #${PR_NUMBER}.
+
+          Assets:
+          - `chat-server-${{ steps.version.outputs.release }}-linux-x86_64.tar.gz`: Linux x86_64 server and administration binaries.
+          - `chat-web-${{ steps.version.outputs.release }}.tar.gz`: static web/PWA files.
+          - `chat-${{ steps.version.outputs.release }}.tgz`: Helm chart, with its image tags set to the immutable merged-commit image.
+          - `SHA256SUMS`: SHA-256 checksums for the archives.
+
+          The Images workflow publishes the matching containers as `ghcr.io/${{ github.repository }}-server:${{ steps.version.outputs.image }}` and `ghcr.io/${{ github.repository }}-web:${{ steps.version.outputs.image }}`.
+          EOF
+
+      - name: Upload build artifacts to this workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: chat-${{ steps.version.outputs.tag }}
+          path: |
+            release/*.tar.gz
+            release/*.tgz
+            release/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Create or update the GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          RELEASE: ${{ steps.version.outputs.release }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release/*.tar.gz release/*.tgz release/SHA256SUMS --clobber
+          else
+            gh release create "$TAG" release/*.tar.gz release/*.tgz release/SHA256SUMS \
+              --target "$GITHUB_SHA" \
+              --title "Chat $RELEASE" \
+              --notes-file release/RELEASE_NOTES.md \
+              --generate-notes \
+              --prerelease
+          fi
