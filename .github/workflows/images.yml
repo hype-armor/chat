@@ -1,6 +1,6 @@
 name: Images
 
-# Publishes container images to GHCR on main and on version tags.
+# Validate this exact commit before publishing images that the dev timer can deploy.
 on:
   push:
     branches: [main]
@@ -8,11 +8,19 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
+  validation:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   build:
+    needs: validation
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     strategy:
       matrix:
         image: [server, web]

@@ -18,9 +18,16 @@ const subscribers = new Set<(event: unknown) => void>()
 let stored: ChatMessage[] = []
 let failMessages = false
 let holdMessages = false
+let staleHistory: ChatMessage[] | undefined
 let releaseMessages: (() => void) | undefined
 let rejectMessages: ((error: Error) => void) | undefined
 let failAttachment = false
+let holdAttachment = false
+let releaseAttachment: (() => void) | undefined
+let failDeletion = false
+let failDeletionAcceptance = false
+const hiddenMessages = new Set<string>()
+const deletionRequests: { id: string; scope: 'me' | 'everyone' }[] = []
 const qualityActivity = { historyLoads: 0, attachmentOpens: 0 }
 let dropTypingStops = false
 let holdNextSend = false
@@ -60,9 +67,17 @@ const publishTyping = () => {
 setInterval(publishTyping, 100)
 const emit = (event: unknown) => subscribers.forEach((listener) => listener(event))
 const refresh = () => emit({ type: 'messages', conversationId: 'chat' })
-const resolveMessages = () => stored.map((message) => {
+const resolveMessages = () => stored.filter((message) => !hiddenMessages.has(message.id)).map((storedMessage) => {
+  const deletion = params.get('deletion') === '1'
+  const deadline = storedMessage.deleteForEveryoneUntil ?? storedMessage.sentAt + 3_600_000
+  const message = { ...storedMessage, canReact: !storedMessage.deleted && params.get('reactions') === '1' && storedMessage.canReply === true,
+    canDeleteForMe: deletion,
+    deleteForMeLocalOnly: storedMessage.deleteForMeLocalOnly !== false,
+    canDeleteForEveryone: deletion && !storedMessage.deleted && storedMessage.from === 'me' && storedMessage.canDeleteForEveryone === true && Date.now() <= deadline,
+    deleteForEveryoneUntil: deletion ? deadline : undefined }
+  if (message.deleted) return { ...message, text: '', file: undefined, live: undefined, location: undefined, reply: undefined, reactions: undefined, canReply: false, canReact: false }
   if (!message.replyTo) return message
-  const original = stored.find((m) => m.id === message.replyTo)
+  const original = stored.find((m) => m.id === message.replyTo && !m.deleted && !hiddenMessages.has(m.id))
   return { ...message, reply: original
     ? { messageId: original.id, from: original.from, fromName: original.fromName, text: original.text }
     : { messageId: message.replyTo, text: 'Original message unavailable', unavailable: true } }
@@ -84,7 +99,8 @@ const core = {
   messages: async (id: string) => {
     qualityActivity.historyLoads++
     if (failMessages) throw new Error('Fixture history is temporarily unavailable')
-    const messages = id === 'chat' ? resolveMessages() : []
+    const messages = id === 'chat' ? staleHistory ?? resolveMessages() : []
+    staleHistory = undefined
     if (holdMessages) {
       holdMessages = false
       await new Promise<void>((resolve, reject) => { releaseMessages = resolve; rejectMessages = reject })
@@ -93,6 +109,10 @@ const core = {
   },
   openAttachment: async () => {
     qualityActivity.attachmentOpens++
+    if (holdAttachment) {
+      holdAttachment = false
+      await new Promise<void>((resolve) => { releaseAttachment = resolve })
+    }
     if (failAttachment) throw new Error('Fixture attachment is temporarily unavailable')
     return new Blob(['Local fixture bytes'], { type: 'text/plain' })
   },
@@ -124,6 +144,50 @@ const core = {
     const draft = { text, revision: expectedRevision + 1 }
     draftRecords.set(id, draft)
     return { applied: true, draft }
+  },
+  deleteMessage: async (_id: string, messageId: string, scope: 'me' | 'everyone') => {
+    if (failDeletionAcceptance) throw new Error('Fixture tombstone storage failed')
+    const message = stored.find((message) => message.id === messageId)
+    if (!message) throw new Error('Missing message')
+    if (scope === 'everyone' && (message.deleted || message.from !== 'me' || message.canDeleteForEveryone !== true || Date.now() > (message.deleteForEveryoneUntil ?? message.sentAt + 3_600_000))) throw new Error('Deletion window or authorization changed')
+    deletionRequests.push({ id: messageId, scope })
+    if (message.live && message.from === 'me') {
+      liveActivity.stops.push(_id)
+      view.liveSharing = view.liveSharing.filter((share) => share.conversationId !== _id)
+      renderFixture()
+    }
+    if (scope === 'me') hiddenMessages.add(messageId)
+    else {
+      message.deleted = true
+      message.deletionStatus = { id: `delete-${messageId}`, status: failDeletion ? 'failed' : 'sending', ...(failDeletion ? { error: 'Fixture delivery refused' } : {}) }
+    }
+    refresh()
+    return { accepted: true as const, scope }
+  },
+  retryDeletion: async (_id: string, eventId: string) => {
+    const message = stored.find((message) => message.deletionStatus?.id === eventId)
+    if (!message) throw new Error('Missing accepted deletion')
+    message.deletionStatus = { id: eventId, status: 'sending' }
+    refresh()
+    return { accepted: true as const, scope: 'everyone' as const }
+  },
+  react: async (_id: string, targetId: string, emoji: string) => {
+    const message = stored.find((m) => m.id === targetId)
+    if (!message) throw new Error('Missing fixture message')
+    const own = message.reactions?.find((r) => r.own)
+    const next = own?.emoji === emoji ? '' : emoji
+    message.reactions = (message.reactions ?? []).map((r) => ({ ...r, count: r.count - (r.own ? 1 : 0), own: false })).filter((r) => r.count > 0)
+    if (next) {
+      const existing = message.reactions.find((r) => r.emoji === next)
+      if (existing) { existing.count++; existing.own = true }
+      else message.reactions.push({ emoji: next, count: 1, own: true })
+    }
+    refresh()
+  },
+  retryMessage: async (_id: string, messageId: string) => {
+    const message = stored.find((m) => m.reactionStatus?.id === messageId)
+    if (message?.reactionStatus) message.reactionStatus = { id: messageId, status: 'sending' }
+    refresh()
   },
   markRead: async () => {},
   typing: async () => typists(),
@@ -177,7 +241,7 @@ const core = {
       holdNextSend = false
       await new Promise<void>((resolve, reject) => { acceptPendingSend = resolve; rejectPendingSend = reject })
     }
-    const message: ChatMessage = { id: crypto.randomUUID(), from: 'me', text, replyTo, sentAt: Date.now(), status: 'sent', canReply: true }
+    const message: ChatMessage = { id: crypto.randomUUID(), from: 'me', text, replyTo, sentAt: Date.now(), status: 'sent', canReply: true, canDeleteForEveryone: true, deleteForMeLocalOnly: false }
     stored.push(message)
     refresh()
     channel.postMessage({ type: 'message', message })
@@ -218,6 +282,32 @@ Object.assign(window, {
     attachmentCaptions,
     canEncryptCalls,
     qualityActivity,
+    deletionRequests,
+    failDeletion(value: number) { failDeletion = value === 1 },
+    failDeletionAcceptance(value: number) { failDeletionAcceptance = value === 1 },
+    holdAttachment() { holdAttachment = true },
+    attachmentPending() { return !!releaseAttachment },
+    releaseAttachment() { releaseAttachment?.(); releaseAttachment = undefined },
+    requestChat() { view.conversations[0].request = true; renderFixture() },
+    ownDeletionMessage(options: { legacy?: boolean; noReply?: boolean; deadline?: number; pending?: boolean; media?: boolean; video?: boolean; photo?: boolean; location?: boolean } = {}) {
+      const message: ChatMessage = { id: crypto.randomUUID(), from: 'me', text: 'Own deletion target', sentAt: Date.now(), status: options.pending ? 'sending' : 'sent', canReply: !options.legacy && !options.noReply, canDeleteForEveryone: !options.legacy, deleteForMeLocalOnly: !!options.legacy, deleteForEveryoneUntil: options.deadline }
+      if (options.media) message.file = { name: 'secret.txt', mime: 'text/plain', size: 19 }
+      if (options.video) message.file = { name: 'secret.webm', mime: 'video/webm', size: 19 }
+      if (options.photo) message.file = { name: 'secret.jpg', mime: 'image/jpeg', size: 19 }
+      if (options.location) message.location = { latitude: 48.8584, longitude: 2.2945, accuracyM: 12, label: 'Private meeting point' }
+      stored.push(message)
+      refresh()
+    },
+    deleteIncoming() { if (stored[0]) stored[0].deleted = true; refresh() },
+    remoteDeletion(options: { scope: 'me' | 'everyone'; mode: 'hold' | 'fail' }) {
+      const message = stored[0]
+      if (!message) throw new Error('No fixture original')
+      if (options.mode === 'hold') { staleHistory = resolveMessages(); holdMessages = true }
+      else failMessages = true
+      if (options.scope === 'me') hiddenMessages.add(message.id)
+      else message.deleted = true
+      emit({ type: 'messages', conversationId: 'chat', deletions: [{ messageId: message.id, scope: options.scope }] })
+    },
     // Model a conversation-scoped worker view, not lookup or authentication.
     peerLocality(mode = 1, conversationId = 'chat') {
       const conversation = view.conversations.find((item) => item.id === conversationId)
@@ -230,6 +320,8 @@ Object.assign(window, {
     },
     failMessages(value: number) { failMessages = value === 1 },
     holdMessages() { holdMessages = true },
+    holdStaleHistory() { staleHistory = resolveMessages(); holdMessages = true },
+    refreshHistory() { refresh() },
     historyPending() { return !!releaseMessages },
     releaseMessages(reject?: number) {
       if (reject === 1) rejectMessages?.(new Error('Late fixture history failure'))
@@ -239,7 +331,7 @@ Object.assign(window, {
     },
     failAttachment(value: number) { failAttachment = value === 1 },
     sampleAttachment(filename: string) {
-      stored.push({ id: crypto.randomUUID(), from: remote, text: '', sentAt: Date.now(), status: 'received', canReply: true,
+      stored.push({ id: crypto.randomUUID(), from: remote, text: '', sentAt: Date.now(), status: 'received', canReply: true, deleteForMeLocalOnly: false,
         file: { name: filename, mime: 'text/plain', size: 19 } })
       refresh()
     },
@@ -274,7 +366,7 @@ Object.assign(window, {
       const expiresAt = now + (untilStopped ? -60_000 : 15 * 60_000)
       view.liveSharing = [{ conversationId: 'chat', title, expiresAt, untilStopped }]
       stored.push({
-        id: crypto.randomUUID(), from: 'me', text: '', sentAt: now, status: 'sent', canReply: true,
+        id: crypto.randomUUID(), from: 'me', text: '', sentAt: now, status: 'sent', canReply: true, canDeleteForEveryone: true, deleteForMeLocalOnly: false,
         live: { sessionId: crypto.randomUUID(), expiresAt, untilStopped, ended: false, latest: { latitude: 48.8584, longitude: 2.2945, accuracyM: 12, at: now } },
       })
       refresh()
@@ -304,14 +396,14 @@ Object.assign(window, {
     },
     rejectSend() { rejectPendingSend?.(new Error('Fixture send failed')); rejectPendingSend = undefined },
     seed(count: number) {
-      stored = Array.from({ length: count }, (_, i) => ({ id: `history-${i}`, from: remote, fromName: remote, text: `History ${i}`, sentAt: Date.now() - (count - i) * 1000, status: 'received' as const, canReply: true }))
+      stored = Array.from({ length: count }, (_, i) => ({ id: `history-${i}`, from: remote, fromName: remote, text: `History ${i}`, sentAt: Date.now() - (count - i) * 1000, status: 'received' as const, canReply: true, deleteForMeLocalOnly: false }))
       refresh()
     },
     incoming(text: string) {
-      receive({ type: 'message', message: { id: crypto.randomUUID(), from: remote, text, sentAt: Date.now(), status: 'received', canReply: true } })
+      receive({ type: 'message', message: { id: crypto.randomUUID(), from: remote, text, sentAt: Date.now(), status: 'received', canReply: true, deleteForMeLocalOnly: false } })
     },
     legacyMessage(value?: number) {
-      receive({ type: 'message', message: { id: crypto.randomUUID(), from: remote, text: 'Legacy message without verification data', sentAt: Date.now(), status: 'received', canReply: value === 1 ? undefined : false } })
+      receive({ type: 'message', message: { id: crypto.randomUUID(), from: remote, text: 'Legacy message without verification data', sentAt: Date.now(), status: 'received', canReply: value === 1 ? undefined : false, deleteForMeLocalOnly: true } })
     },
     makeReplyAvailable() {
       // Simulate eligibility changing after worker encryption, not UI verification.
@@ -319,8 +411,30 @@ Object.assign(window, {
       if (message) message.canReply = true
       refresh()
     },
+    blockRenamedDirect() {
+      view.conversations[0].title = 'Renamed direct chat'
+      view.conversations[0].blocked = true
+      renderFixture()
+    },
+    failReaction() {
+      if (stored[0]) stored[0].reactionStatus = { id: 'failed-reaction', status: 'failed', error: 'The server refused this message' }
+      refresh()
+    },
+    acceptReaction() {
+      if (stored[0]) stored[0].reactionStatus = undefined
+      refresh()
+    },
+    loseReactionEligibility() {
+      if (stored[0]) stored[0].canReply = false
+      refresh()
+    },
+    seedReactions() {
+      const message = stored[0]
+      if (message) message.reactions = [{ emoji: '👍', count: 2, own: false }]
+      refresh()
+    },
     missingReply() {
-      stored.push({ id: 'missing-reply', from: remote, fromName: remote, text: 'Reply without local original', replyTo: 'not-on-this-device', sentAt: Date.now(), status: 'received', canReply: true })
+      stored.push({ id: 'missing-reply', from: remote, fromName: remote, text: 'Reply without local original', replyTo: 'not-on-this-device', sentAt: Date.now(), status: 'received', canReply: true, deleteForMeLocalOnly: false })
       refresh()
     },
   },
