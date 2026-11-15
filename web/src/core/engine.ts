@@ -139,6 +139,7 @@ const MEMBER_CHECK_MS = 10 * 60_000
 const KEY_PACKAGE_CHECK_MS = 6 * 60 * 60_000
 const MAX_RECONNECT_MS = 30_000
 const MAX_GROUP_MEMBERS = 50
+const MAX_DISPLAY_NAME_LENGTH = 64
 /** Envelopes held for conversations not yet joined (see `onDeliver`). */
 const MAX_EARLY = 200
 /** Link codes live 10 minutes on the server (ADR-0019). */
@@ -660,6 +661,29 @@ export class Engine {
 
   // ---- profile pictures ----------------------------------------------------
 
+  /** Changes this account's encrypted profile name for current conversations and own devices. */
+  async setDisplayName(displayName: string) {
+    this.ready()
+    const name = validDisplayName(displayName)
+    let changed = false
+    await this.exclusive(async () => {
+      if (this.state.pendingCommit) throw new Error('Still finishing an earlier group change; try again shortly')
+      if (this.account!.displayName === name) return
+      this.account!.displayName = name
+      await this.store.putJson('account', this.account)
+      for (const c of Object.values(this.state.conversations)) {
+        if (!c.self && !c.status) this.queueProfile(c.id)
+      }
+      const self = Object.values(this.state.conversations).find((c) => c.self && !c.status)
+      if (self) this.queueDeviceSync(self.id)
+      await this.persist()
+      changed = true
+    })
+    if (!changed) return
+    this.emitView()
+    void this.flushOutbox()
+  }
+
   /**
    * Sets this account's profile picture from a photo, or removes it when
    * `file` is undefined. Everyone in a conversation gets it with their next
@@ -702,9 +726,10 @@ export class Engine {
 
   /** Creates the account with this device as its first (ADR-0021). */
   async signUp(username: string, displayName: string, invite?: string) {
+    const name = validDisplayName(displayName)
     this.pending ??= new PendingClient()
     const reg = await api.register(username.trim(), invite?.trim() || undefined, toBase64(this.pending.publicKey()))
-    await this.register(reg, displayName)
+    await this.register(reg, name)
   }
 
   /** An invite link for someone to sign up with (ADR-0021). */
@@ -3962,6 +3987,13 @@ export class Engine {
   private emitView() {
     this.emit({ type: 'view', view: this.view() })
   }
+}
+
+function validDisplayName(value: string): string {
+  const name = value.trim()
+  if (!name) throw new Error('Display name is required')
+  if ([...name].length > MAX_DISPLAY_NAME_LENGTH) throw new Error(`Display name must be ${MAX_DISPLAY_NAME_LENGTH} characters or fewer`)
+  return name
 }
 
 /** A call signal from a message, if well formed. */

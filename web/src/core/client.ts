@@ -269,6 +269,11 @@ export class CoreClient {
     return { ...(draft === undefined ? {} : { draft }), ...(consumedRevision === undefined ? {} : { consumedRevision }) }
   }
 
+  /** Changes this account's encrypted profile name. */
+  async setDisplayName(displayName: string) {
+    expect(await this.call({ type: 'setDisplayName', displayName }), 'ok')
+  }
+
   /** Sets this account's profile picture; without a file, removes it. */
   async setAvatar(file?: File) {
     expect(await this.call({ type: 'setAvatar', file }), 'ok')

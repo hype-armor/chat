@@ -212,6 +212,7 @@ export function Chat({
               <section className="settings-group" aria-labelledby="settings-account">
                 <h3 id="settings-account">Account</h3>
                 <SettingsIdentity
+                  key={view.me.displayName}
                   core={core}
                   account={view.me.account}
                   name={view.me.displayName}
@@ -343,6 +344,7 @@ function SettingsIdentity({
   username: string
 }) {
   const [copied, setCopied] = useState(false)
+  const [displayName, setDisplayName] = useState(name)
   const photo = useAvatarPhoto(account)
   const picker = useRef<HTMLInputElement>(null)
   const { busy, error, run } = useAction()
@@ -379,6 +381,25 @@ function SettingsIdentity({
         </div>
       </div>
       <strong>{name}</strong>
+      <form
+        className="display-name-form"
+        aria-label="Display name"
+        onSubmit={(e) => {
+          e.preventDefault()
+          void run(() => core.setDisplayName(displayName))
+        }}
+      >
+        <label htmlFor="display-name">Display name</label>
+        <input
+          id="display-name"
+          value={displayName}
+          onChange={(e) => setDisplayName(e.target.value)}
+          required
+          maxLength={64}
+          autoComplete="name"
+        />
+        <button type="submit" disabled={busy || displayName.trim() === name}>Save name</button>
+      </form>
       <span className="muted small">Your username: {username}</span>
       <button
         type="button"

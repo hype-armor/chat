@@ -56,6 +56,17 @@ test('groups every setting and keeps account deletion last', async ({ browser })
   await expect(page.getByTestId('self-test')).toHaveText('passed')
 })
 
+test('changes the current display name', async ({ browser }) => {
+  const page = await signUp(browser, 'Pat', randomUsername())
+  await openSettings(page)
+  const settings = page.getByRole('navigation', { name: 'Settings', exact: true })
+  const name = settings.getByRole('textbox', { name: 'Display name', exact: true })
+  await name.fill('Patricia')
+  await settings.getByRole('button', { name: 'Save name', exact: true }).click()
+  await expect(name).toHaveValue('Patricia')
+  await expect(settings.getByText('Patricia', { exact: true })).toBeVisible()
+})
+
 test('solid danger buttons have white text and AA contrast in both themes', async ({ browser }) => {
   const page = await signUp(browser, 'Pat', randomUsername())
   await openSetting(page, 'Delete account')
