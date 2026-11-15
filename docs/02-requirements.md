@@ -34,7 +34,7 @@ Items marked **[ASSUMPTION]** need stakeholder confirmation (see doc 09).
 | FR-MSG-4 | Group roles: owner/admin/member; admins control membership, name, avatar, and settings. | M |
 | FR-MSG-5 | Delivery states: sent, delivered, read (read receipts can be disabled). | M |
 | FR-MSG-6 | Typing indicators (can be disabled). | S |
-| FR-MSG-7 | Reply/quote, reactions, edit, delete-for-everyone (time-limited). | S |
+| FR-MSG-7 | Reply/quote, reactions, edit, unlimited deletion across own linked devices (device-only fallback for unverified originals), and author-only delete-for-everyone requests within 1 hour. | S |
 | FR-MSG-8 | Disappearing messages with per-conversation timer. | S |
 | FR-MSG-9 | Messages sent while offline are queued and sent on reconnect; messages to offline recipients are held server-side until fetched or expired (30 days). | M |
 | FR-MSG-10 | Message history is available on a newly linked device (encrypted device-to-device transfer). | S |
@@ -50,6 +50,27 @@ previews show an unavailable placeholder when the original cannot be verified.
 Hide Reply actions for originals without a stored, verifiable hash. If an original
 becomes unverifiable during composition, reject the reply and show an error.
 Typing indicators are optional, expire automatically, and never transmit draft text.
+
+Reactions implement the reaction part of FR-MSG-7 through
+[ADR-0047](adr/0047-encrypted-message-reactions.md). Each account has 1 reaction
+per verified message. Selecting the same emoji removes it; another emoji replaces it.
+The message action menu offers 6 named emoji. Aggregated chips expose counts and own removal.
+Targets, emoji, ordering, and removal state remain inside MLS encryption and encrypted worker storage.
+The worker must verify the original content hash and conversation/author binding.
+Legacy targets without verification data cannot receive new reactions. Previously verified own reactions remain removable.
+Offline sends use durable acceptance gating. Pending and failed updates must have visible status and explicit retry.
+Account ordering and removal tombstones survive replay, history reload, and encrypted backup.
+The reaction feature does not transfer earlier history to linked devices or implement editing.
+
+Message deletion uses [ADR-0048](adr/0048-encrypted-message-deletion.md). Delete for me
+synchronizes verified deletions across the account’s linked devices and has no
+time limit. Unverified originals have a clearly labeled device-only fallback.
+Delete for everyone
+requires a verified own original and a request created within 1 hour. A timely
+request can arrive or retry later. Durable local acceptance must remain distinct
+from remote delivery; failures need truthful status and explicit retry. Deletion
+must redact content, quotes, reactions, and media without resetting draft text.
+Old exports, old backups, older clients, and uncooperative recipients can retain copies.
 
 ### 1.3 Media (MED)
 
