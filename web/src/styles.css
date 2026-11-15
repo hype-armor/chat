@@ -1327,7 +1327,19 @@ button.icon[aria-pressed='true'] {
 }
 
 .settings-identity strong,
-.settings-identity .error {
+.settings-identity .error,
+.display-name-form {
+  grid-column: 1 / -1;
+}
+
+.display-name-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.25rem 0.5rem;
+  align-items: end;
+}
+
+.display-name-form label {
   grid-column: 1 / -1;
 }
 
