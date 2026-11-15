@@ -234,7 +234,7 @@ export function Chat({
                 <h3 id="settings-data">Devices &amp; data</h3>
                 <ServerStorage core={core} />
                 <Devices core={core} />
-                <Backup core={core} backup={view.backup} />
+                <Backup core={core} backup={view.backup} username={view.me.username} />
                 <Media core={core} media={view.media} />
                 <SetupActions setup={setup} />
               </section>
