@@ -217,6 +217,7 @@ function Restore({ core, onCancel }: { core: CoreClient; onCancel: () => void })
       <label>
         Username
         <input
+          name="username"
           value={username}
           onChange={(e) => setUsername(e.target.value)}
           required
@@ -231,7 +232,9 @@ function Restore({ core, onCancel }: { core: CoreClient; onCancel: () => void })
           value={recoveryKey}
           onChange={(e) => setRecoveryKey(e.target.value)}
           required
-          autoComplete="off"
+          type="password"
+          name="password"
+          autoComplete="current-password"
           autoCapitalize="characters"
           spellCheck={false}
           placeholder="ABCD-EFGH-…"
