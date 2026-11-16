@@ -1,4 +1,5 @@
 import { Fragment, type FormEvent, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import type { CoreClient } from '../core/client'
 import type { AppView, ChatMessage, ConversationSummary, GroupCallStatus, MemberInfo } from '../core/protocol'
 import { SetupActions, SetupBanner, useSetup } from './Banners'
@@ -9,6 +10,8 @@ import { Backup } from './Backup'
 import { Avatar, useAvatarPhoto } from './Avatar'
 import { Menu, type MenuItem } from './Menu'
 import { MessageActions } from './MessageActions'
+import { DeletionConfirmation } from './DeletionConfirmation'
+import { projectAcceptedDeletions } from './deletion'
 import { Attachment } from './Attachment'
 import { Recorder } from './Recorder'
 import { Media } from './Media'
@@ -34,6 +37,7 @@ import {
 } from '../notifications'
 import { useVisualViewport } from './useVisualViewport'
 import { MessageText } from './MessageText'
+import { reactionLabel } from './reactions'
 import { useMessageScroll, type MessageScrollPosition } from './useMessageScroll'
 import './issue132-chat.css'
 import { localityLabel } from '../core/locality'
@@ -213,6 +217,7 @@ export function Chat({
               <section className="settings-group" aria-labelledby="settings-account">
                 <h3 id="settings-account">Account</h3>
                 <SettingsIdentity
+                  key={view.me.displayName}
                   core={core}
                   account={view.me.account}
                   name={view.me.displayName}
@@ -235,7 +240,7 @@ export function Chat({
                 <h3 id="settings-data">Devices &amp; data</h3>
                 <ServerStorage core={core} />
                 <Devices core={core} />
-                <Backup core={core} backup={view.backup} />
+                <Backup core={core} backup={view.backup} username={view.me.username} />
                 <Media core={core} media={view.media} />
                 <SetupActions setup={setup} />
               </section>
@@ -344,6 +349,7 @@ function SettingsIdentity({
   username: string
 }) {
   const [copied, setCopied] = useState(false)
+  const [displayName, setDisplayName] = useState(name)
   const photo = useAvatarPhoto(account)
   const picker = useRef<HTMLInputElement>(null)
   const { busy, error, run } = useAction()
@@ -380,6 +386,25 @@ function SettingsIdentity({
         </div>
       </div>
       <strong>{name}</strong>
+      <form
+        className="display-name-form"
+        aria-label="Display name"
+        onSubmit={(e) => {
+          e.preventDefault()
+          void run(() => core.setDisplayName(displayName))
+        }}
+      >
+        <label htmlFor="display-name">Display name</label>
+        <input
+          id="display-name"
+          value={displayName}
+          onChange={(e) => setDisplayName(e.target.value)}
+          required
+          maxLength={64}
+          autoComplete="name"
+        />
+        <button type="submit" disabled={busy || displayName.trim() === name}>Save name</button>
+      </form>
       <span className="muted small">Your username: {username}</span>
       <button
         type="button"
@@ -1275,6 +1300,28 @@ function Conversation({
     }
   }, [panelOpen, detailsVersion, calls, groupCalls])
   const [messages, setMessages] = useState<ChatMessage[]>([])
+  const previousMessages = useRef<ChatMessage[]>([])
+  const acceptedDeletions = useRef(new Map<string, 'me' | 'everyone'>())
+  const [deleting, setDeleting] = useState<{ message: ChatMessage; scope: 'me' | 'everyone'; row: HTMLElement | null; index: number }>()
+  const deletingRef = useRef(deleting)
+  deletingRef.current = deleting
+  useEffect(() => { if (callOpen) setDeleting(undefined) }, [callOpen])
+  const beginDeletion = (message: ChatMessage, scope: 'me' | 'everyone') => {
+    const row = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const rows = [...(content.current?.querySelectorAll<HTMLElement>('[data-testid="message"]') ?? [])]
+    setDeleting({ message, scope, row, index: rows.indexOf(row!) })
+  }
+  const finishDeletion = (selection: NonNullable<typeof deleting>) => {
+    if (deletingRef.current !== selection) return
+    setDeleting(undefined)
+    requestAnimationFrame(() => {
+      if (calls.current() || groupCalls.current() || deletingRef.current) return
+      const rows = [...(content.current?.querySelectorAll<HTMLElement>('[data-testid="message"]') ?? [])]
+      const target = selection.row?.isConnected ? selection.row : rows[Math.max(0, Math.min(selection.index, rows.length - 1))]
+      if (target) { target.tabIndex = 0; target.focus({ preventScroll: true }) }
+      else conversationElement.current?.focus({ preventScroll: true })
+    })
+  }
   const [messagesReady, setMessagesReady] = useState(false)
   const [messagesError, setMessagesError] = useState<string>()
   const [messagesLoading, setMessagesLoading] = useState(false)
@@ -1348,9 +1395,14 @@ function Conversation({
       const version = ++latest
       setMessagesLoading(true)
       try {
-        const next = await core.messages(id)
+        const loaded = await core.messages(id)
+        const next = projectAcceptedDeletions(loaded, acceptedDeletions.current)
         if (live && version === latest) {
           capture()
+          const surviving = new Set(next.filter((message) => !message.deleted).map((message) => message.id))
+          for (const message of previousMessages.current) if (!surviving.has(message.id)) drafts.forgetReply(id, message.id)
+          for (const message of next) if (message.deleted) drafts.forgetReply(id, message.id)
+          previousMessages.current = next
           setMessages(next)
           setMessagesReady(true)
           if (document.activeElement === historyRetry.current) conversationElement.current?.focus({ preventScroll: true })
@@ -1364,13 +1416,28 @@ function Conversation({
     }
     load()
     const unsubscribe = core.subscribe((e) => {
-      if (e.type === 'messages' && e.conversationId === id) load()
+      if (e.type !== 'messages' || e.conversationId !== id) return
+      if (e.deletions?.length) {
+        for (const deletion of e.deletions) {
+          // A later everyone event cannot undo this device's accepted hide.
+          if (acceptedDeletions.current.get(deletion.messageId) !== 'me') acceptedDeletions.current.set(deletion.messageId, deletion.scope)
+          drafts.forgetReply(id, deletion.messageId)
+        }
+        // Commit invalidation before refresh can fail or media continuations can run.
+        capture()
+        flushSync(() => {
+          setMessages((current) => projectAcceptedDeletions(current, acceptedDeletions.current))
+          const selection = deletingRef.current
+          if (selection && acceptedDeletions.current.has(selection.message.id)) finishDeletion(selection)
+        })
+      }
+      void load()
     })
     return () => {
       live = false
       unsubscribe()
     }
-  }, [core, id, capture, messageReload])
+  }, [core, id, capture, messageReload, drafts])
 
   // Seen while visible: read receipts go out (FR-MSG-5).
   useEffect(() => {
@@ -1446,6 +1513,21 @@ function Conversation({
 
   return (
     <div ref={shell} className={`conversation-shell${panelOpen ? ' details-open' : ''}${overlay ? ' details-overlay' : ''}`}>
+    {deleting && !callOpen && <DeletionConfirmation
+      message={messages.find((message) => message.id === deleting.message.id) ?? deleting.message}
+      scope={deleting.scope}
+      onClose={() => finishDeletion(deleting)}
+      onConfirm={async () => {
+        const accepted = await core.deleteMessage(id, deleting.message.id, deleting.scope)
+        if (accepted.accepted && drafts.isActive()) {
+          if (acceptedDeletions.current.get(deleting.message.id) !== 'me') acceptedDeletions.current.set(deleting.message.id, accepted.scope)
+          drafts.forgetReply(id, deleting.message.id)
+          capture()
+          setMessages((current) => projectAcceptedDeletions(current, acceptedDeletions.current))
+          finishDeletion(deleting)
+        }
+      }}
+    />}
     <section ref={conversationElement} className="conversation" tabIndex={-1} aria-label={`Conversation with ${title}`} inert={panelOpen && overlay}>
       <header className="bar conversation-bar">
         <div className="title-row">
@@ -1565,17 +1647,23 @@ function Conversation({
                   className={`${m.from === 'me' ? 'mine' : 'theirs'}${first ? ' run-first' : ''}${last ? ' run-last' : ''}`}
                   title={new Date(m.sentAt).toLocaleString()}
                   author={m.from === 'me' ? 'You' : m.fromName ?? title}
-                  enabled={active && !blocked && !request && m.canReply === true}
-                  onReply={() => {
-                    if (m.canReply !== true) return
+                  enabled={m.canDeleteForMe === true || m.canDeleteForEveryone === true || (active && !blocked && !request && !m.deleted && (m.canReply === true || m.canReact === true))}
+                  onDeleteForMe={m.canDeleteForMe === true ? () => beginDeletion(m, 'me') : undefined}
+                  onDeleteForEveryone={!m.deleted && m.canDeleteForEveryone === true ? () => beginDeletion(m, 'everyone') : undefined}
+                  deleteForEveryoneUntil={m.deleteForEveryoneUntil}
+                  onReact={active && !blocked && !request && !m.deleted && m.canReact === true ? (emoji) => {
+                    void core.react(id, m.id, emoji).catch((error: unknown) => setAttachError(error instanceof Error ? error.message : 'Reaction failed'))
+                  } : undefined}
+                  onReply={active && !blocked && !request && !m.deleted && m.canReply === true ? () => {
                     setAttachError(undefined)
                     editReply(quoteMessage(m))
                     composer.current?.focus({ preventScroll: true })
-                  }}
+                  } : undefined}
                 >
                   <span data-scroll-key={m.id} className={isGroup && m.from !== 'me' && first ? 'sender small' : 'visually-hidden'}>
                     {m.from === 'me' ? 'You' : m.fromName ?? (isGroup ? m.from : title)}
                   </span>
+                  {m.deleted ? <p className="deleted-message">Message deleted</p> : <>
                   {m.file && (
                     <Attachment
                       core={core}
@@ -1589,6 +1677,21 @@ function Conversation({
                   {m.live && <LiveCard core={core} conversationId={id} message={m} live={m.live} />}
                   {m.reply && <ReplyPreview quote={m.reply} />}
                   {m.text && <MessageText text={m.text} />}
+                  {m.reactionStatus && <div className="reaction-delivery small" role={m.reactionStatus.status === 'failed' ? 'alert' : 'status'}>
+                    {m.reactionStatus.status === 'sending' ? 'Sending reaction…' : <>
+                      Reaction not sent{m.reactionStatus.error ? ': ' + m.reactionStatus.error : ''}
+                      <button type="button" className="link small" disabled={!active || blocked || !!request}
+                        onClick={() => void core.retryMessage(id, m.reactionStatus!.id).catch((error: unknown) => setAttachError(error instanceof Error ? error.message : 'Reaction retry failed'))}>Retry reaction</button>
+                    </>}
+                  </div>}
+                  {!!m.reactions?.length && <div className="reaction-chips" role="group" aria-label="Message reactions">
+                    {m.reactions.map((reaction) => <button key={reaction.emoji} type="button"
+                      aria-pressed={reaction.own}
+                      aria-label={reactionLabel(reaction.emoji) + ', ' + reaction.count + (reaction.own ? ', remove your reaction' : ', react')}
+                      disabled={!active || blocked || !!request || (!reaction.own && m.canReact !== true)}
+                      onClick={() => void core.react(id, m.id, reaction.emoji).catch((error: unknown) => setAttachError(error instanceof Error ? error.message : 'Reaction failed'))}
+                    >{reaction.emoji} <span>{reaction.count}</span></button>)}
+                  </div>}
                   <span className={last || m.status === 'failed' ? 'meta small' : 'visually-hidden'}>
                     <time
                       className={last ? undefined : 'visually-hidden'}
@@ -1617,6 +1720,14 @@ function Conversation({
                       Retry
                     </button>
                   )}
+                  </>}
+                  {m.deletionStatus && <div className="deletion-delivery small" role={m.deletionStatus.status === 'failed' ? 'alert' : 'status'}>
+                    {m.deletionStatus.status === 'sending' ? 'Deletion accepted on this device. Requesting deletion on other devices…' : <>
+                      Deletion accepted on this device. Deletion delivery unconfirmed{m.deletionStatus.error ? ': ' + m.deletionStatus.error : ''}.
+                      <button type="button" className="link small" disabled={!active}
+                        onClick={() => void core.retryDeletion(id, m.deletionStatus!.id).catch((error: unknown) => setAttachError(error instanceof Error ? error.message : 'Deletion retry failed'))}>Retry deletion</button>
+                    </>}
+                  </div>}
                 </MessageActions>
               )}
             </Fragment>

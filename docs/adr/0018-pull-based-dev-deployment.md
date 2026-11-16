@@ -32,10 +32,26 @@ Option 4. Nothing is exposed and no credential leaves the host, and it is
 about 70 lines of shell built on the same Helm command as the manual
 procedure. A release that does not become ready is rolled back.
 
+### Validation gate (2026-11-08)
+
+The Images workflow invokes reusable CI for the exact pushed `main` or version-tag
+commit. It must finish successfully before either image build or registry login
+starts. Cheap validation gates builds, integration tests, and browser tests.
+Publication waits for all required CI stages, not only the cheap checks.
+
+Pull requests invoke the same CI directly. Main and tag pushes invoke it through
+Images, not through a second standalone push trigger. This avoids duplicate CI
+runs and preserves the original push context for image tags. Validation receives
+read-only repository permissions. Only image publication receives package-write
+permission. No cluster credential enters GitHub Actions.
+
+The existing timer still deploys only after both commit-tagged images exist.
+The workflow change does not invoke the timer or perform a deployment itself.
+
 ## Consequences
-- Deploys trail a merge by the image build plus up to 5 minutes.
-- `main` must only receive commits whose CI passed (true: PRs merge only
-  when green); there is no separate gate.
+- Deploys trail a merge by validation, image builds, and up to 5 minutes of polling.
+- `main` must only receive commits whose PR checks passed. Image publication also
+  requires successful CI for the exact pushed commit.
 - The deploy clone on the host follows `main`, so the script and chart
   update themselves.
 - For production (Linode or own hardware) revisit: with real users, a
@@ -43,5 +59,6 @@ procedure. A release that does not become ready is rolled back.
   merge.
 
 ## Validation
-`journalctl -u chat-dev-update` shows each merge deployed within ~10
-minutes, and a deliberately broken image rolls back without downtime.
+`journalctl -u chat-dev-update` shows each validated merge deployed after CI,
+image publication, and the next timer poll. A deliberately broken image rolls
+back without downtime. Test this behavior only during an authorized deployment.

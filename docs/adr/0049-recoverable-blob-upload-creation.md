@@ -1,4 +1,4 @@
-# ADR-0047: Recoverable multipart upload creation
+# ADR-0049: Recoverable multipart upload creation
 
 - **Status:** Accepted
 - **Date:** 2026-11-16

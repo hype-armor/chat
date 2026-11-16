@@ -1,6 +1,8 @@
 import { scriptUrl } from '../trusted-types'
 import type {
   AppView,
+  DeleteAccepted,
+  DeletionScope,
   Draft,
   DraftSave,
   TextSent,
@@ -148,6 +150,20 @@ export class CoreClient {
     return { applied, draft }
   }
 
+  async deleteMessage(conversationId: string, messageId: string, scope: DeletionScope): Promise<DeleteAccepted> {
+    const { accepted, scope: resultScope } = expect(await this.call({ type: 'deleteMessage', conversationId, messageId, scope }), 'deleteAccepted')
+    return { accepted, scope: resultScope }
+  }
+
+  async retryDeletion(conversationId: string, deletionEventId: string): Promise<DeleteAccepted> {
+    const { accepted, scope } = expect(await this.call({ type: 'retryDeletion', conversationId, deletionEventId }), 'deleteAccepted')
+    return { accepted, scope }
+  }
+
+  async react(conversationId: string, targetId: string, emoji: string): Promise<void> {
+    expect(await this.call({ type: 'react', conversationId, targetId, emoji }), 'ok')
+  }
+
   async sendText(conversationId: string, text: string, replyTo?: string, draftRevision?: number): Promise<TextSent> {
     const { draft, consumedRevision } = expect(await this.call({ type: 'sendText', conversationId, text, replyTo, draftRevision }), 'textSent')
     return { ...(draft === undefined ? {} : { draft }), ...(consumedRevision === undefined ? {} : { consumedRevision }) }
@@ -267,6 +283,11 @@ export class CoreClient {
   async sendFile(conversationId: string, file: File, caption: string, media?: MediaInfo, draftRevision?: number): Promise<TextSent> {
     const { draft, consumedRevision } = expect(await this.call({ type: 'sendFile', conversationId, file, caption, media, draftRevision }), 'fileSent')
     return { ...(draft === undefined ? {} : { draft }), ...(consumedRevision === undefined ? {} : { consumedRevision }) }
+  }
+
+  /** Changes this account's encrypted profile name. */
+  async setDisplayName(displayName: string) {
+    expect(await this.call({ type: 'setDisplayName', displayName }), 'ok')
   }
 
   /** Sets this account's profile picture; without a file, removes it. */
