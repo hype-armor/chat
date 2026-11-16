@@ -760,6 +760,16 @@ async fn publish_completion(
 ) -> Result<Uploaded, ApiError> {
     let database = db(state)?;
     let mut tx = database.begin().await?;
+    // Match claim_completion's lock order. Locking the upload first would
+    // deadlock with a competing claim that holds the transfer row.
+    sqlx::query(
+        "SELECT transfer_id FROM blob_upload_transfers
+         WHERE upload_id = $1 AND device_id = $2 FOR UPDATE",
+    )
+    .bind(id)
+    .bind(device)
+    .fetch_optional(&mut *tx)
+    .await?;
     // Re-lock after object-store I/O. A stale claim can only be reclaimed for
     // another full verification pass; it can never publish this hash result.
     let row: Option<(i64, i32, Vec<i32>)> = sqlx::query_as(

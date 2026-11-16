@@ -50,7 +50,9 @@ writers and expiry reject or skip a live claim. It then hashes stored parts in
 order through 1 MiB range reads outside every database transaction. A second
 transaction must find the same claim and revalidate ready ledger entries before
 it creates the blob, promotes ledger entries, or records the transfer-to-blob
-mapping. A stale claim permits only a fresh hash and re-lock pass; it never
+mapping. Both claim and publication transactions lock an existing transfer row
+before the upload row. The same order prevents a concurrent recovery claim
+from deadlocking with publication. A stale claim permits only a fresh hash and re-lock pass; it never
 publishes by lease expiry alone. Completion retries use the mapping after the
 multipart session is deleted. Expiry changes a transfer to `expired` only after
 confirmed object deletion. The retained row never permits a new upload under

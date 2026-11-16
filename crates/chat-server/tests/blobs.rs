@@ -636,13 +636,125 @@ async fn concurrent_completers_publish_one_blob(pool: PgPool) {
         server.post(&complete, Some(&token), serde_json::json!({})),
     );
     assert!(left.0 == 200 || right.0 == 200, "{left:?} {right:?}");
-    assert!(matches!(left.0, 200 | 409));
-    assert!(matches!(right.0, 200 | 409));
+    assert!(matches!(left.0, 200 | 409), "{left:?} {right:?}");
+    assert!(matches!(right.0, 200 | 409), "{left:?} {right:?}");
     let (blobs,): (i64,) = sqlx::query_as("SELECT count(*) FROM blobs")
         .fetch_one(server.state.db.as_ref().unwrap())
         .await
         .unwrap();
     assert_eq!(blobs, 1);
+}
+
+#[sqlx::test]
+async fn publication_and_recovery_claim_lock_transfer_before_upload(pool: PgPool) {
+    let server = TestServer::start(pool).await;
+    let (_, token) = server.register("ann.01").await;
+    let transfer = uuid::Uuid::new_v4();
+    let (_, session) = server
+        .post(
+            "/v1/blobs/uploads",
+            Some(&token),
+            recoverable_request(transfer, 4, &[1, 2, 3, 4]),
+        )
+        .await;
+    let upload_id = session["upload_id"].as_str().unwrap();
+    assert_eq!(
+        server
+            .raw(
+                "PUT",
+                &format!("/v1/blobs/uploads/{upload_id}/0"),
+                &token,
+                vec![1, 2, 3, 4],
+            )
+            .await
+            .0,
+        204
+    );
+    let db = server.state.db.as_ref().unwrap();
+    // Pause publication after it locks the upload, but before its transfer
+    // update. This exposes the old upload/transfer lock inversion reliably.
+    sqlx::query(
+        "CREATE FUNCTION hold_blob_publication() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN PERFORM pg_advisory_xact_lock(152017::bigint); RETURN NEW; END; $$",
+    )
+    .execute(db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER hold_blob_publication BEFORE INSERT ON blobs
+         FOR EACH ROW EXECUTE FUNCTION hold_blob_publication()",
+    )
+    .execute(db)
+    .await
+    .unwrap();
+    let mut gate = db.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(152017::bigint)")
+        .execute(&mut *gate)
+        .await
+        .unwrap();
+    let (gate_pid,): (i32,) = sqlx::query_as("SELECT pg_backend_pid()")
+        .fetch_one(&mut *gate)
+        .await
+        .unwrap();
+    let complete = format!("/v1/blobs/uploads/{upload_id}/complete");
+    let publisher = server.post(&complete, Some(&token), serde_json::json!({}));
+    let contender = async {
+        let publisher_pid = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let blocked: Option<(i32,)> = sqlx::query_as(
+                    "SELECT pid FROM pg_stat_activity WHERE datname = current_database()
+                     AND $1 = ANY(pg_blocking_pids(pid))",
+                )
+                .bind(gate_pid)
+                .fetch_optional(db)
+                .await
+                .unwrap();
+                if let Some((pid,)) = blocked {
+                    break pid;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("publication must reach the test-only insert gate");
+        let retry = server.post(&complete, Some(&token), serde_json::json!({}));
+        let release = async {
+            let blocked_query = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                loop {
+                    let blocked: Option<(String,)> = sqlx::query_as(
+                        "SELECT query FROM pg_stat_activity WHERE datname = current_database()
+                         AND $1 = ANY(pg_blocking_pids(pid))",
+                    )
+                    .bind(publisher_pid)
+                    .fetch_optional(db)
+                    .await
+                    .unwrap();
+                    if let Some((query,)) = blocked {
+                        break query;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("the competing claim must wait for publication");
+            gate.commit().await.unwrap();
+            assert!(
+                blocked_query.contains("FROM blob_upload_transfers"),
+                "the competing claim must wait on the transfer, not the upload: {blocked_query}"
+            );
+        };
+        let (response, ()) = tokio::join!(retry, release);
+        response
+    };
+    let (left, right) = tokio::join!(publisher, contender);
+    assert_eq!(left.0, 200, "{left:?} {right:?}");
+    assert_eq!(right.0, 200, "{left:?} {right:?}");
+    assert_eq!(left.1["blob_id"], right.1["blob_id"]);
+    let (count,): (i64,) = sqlx::query_as("SELECT count(*) FROM blobs")
+        .fetch_one(db)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
 }
 
 #[sqlx::test]

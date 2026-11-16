@@ -57,6 +57,7 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
 - Recoverable multipart transfers follow ADR-0049. Keep device-scoped idempotency,
   permanent replay fences, completion claims, and quota reservations across retries.
   Hash outside database transactions and revalidate the exact claim before publication.
+  Lock existing transfer rows before upload rows in transactions that need both.
 - No third-party scripts or origins in the web client (strict CSP; Trusted
   Types policy in `web/src/trusted-types.ts`).
 - Keys, storage and networking stay in the core worker, never on the UI thread.
