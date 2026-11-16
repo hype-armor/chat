@@ -22,7 +22,8 @@ Environment=HOME=/root
 Environment=DOCKER_CONFIG=/root/.docker
 # The VAPID identity is a persistent host secret. Do not rely on Compose's
 # implicit .env lookup, which can be shadowed by an empty inherited variable.
-EnvironmentFile=/srv/chat/.env
+# Compose reads this file after systemd starts Docker, which avoids SELinux
+# restrictions on systemd reading files beneath an operator checkout.
 ExecStart=/usr/bin/docker compose --env-file /srv/chat/.env -f deploy/compose/docker-compose.yml up -d
 ExecStop=/usr/bin/docker compose --env-file /srv/chat/.env -f deploy/compose/docker-compose.yml stop
 TimeoutStartSec=900
