@@ -171,6 +171,35 @@ async fn connected_devices_also_get_a_content_free_push(pool: PgPool) {
 }
 
 #[sqlx::test]
+async fn transient_push_failures_retry_without_suppressing_the_wakeup(pool: PgPool) {
+    let (service, base) = FakePushService::start().await;
+    *service.status.lock().unwrap() = 503;
+    let push = PushSender::generate("mailto:test@example.com".into(), true).unwrap();
+    let server = TestServer::start_with_push(pool, Some(push)).await;
+    let (alice_dev, alice_token) = server.register("u5550006121.10").await;
+    let (bob, bob_token) = server.register("u5550006122.10").await;
+    server.admit(b"g", &[alice_dev, bob]).await;
+    let sub =
+        json!({ "endpoint": format!("{base}/push/bob"), "keys": { "p256dh": "P", "auth": "A" } });
+    let (status, _) = server
+        .post("/v1/push/subscription", Some(&bob_token), sub)
+        .await;
+    assert_eq!(status, 204);
+
+    let mut alice = server.connect(&alice_token).await;
+    send(&mut alice, bob).await;
+    assert!(
+        eventually(|| service.count() >= 1).await,
+        "first request reaches the provider"
+    );
+    *service.status.lock().unwrap() = 201;
+    assert!(
+        eventually(|| service.count() >= 2).await,
+        "a transient provider failure is retried"
+    );
+}
+
+#[sqlx::test]
 async fn expired_subscriptions_are_deleted(pool: PgPool) {
     let (service, base) = FakePushService::start().await;
     *service.status.lock().unwrap() = 410;

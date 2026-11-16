@@ -163,6 +163,11 @@ pub fn router(state: AppState) -> Router {
                 blobs::MAX_BLOB_BYTES as usize,
             )),
         )
+        .route("/v1/blobs/capabilities", get(blobs::capabilities))
+        .route(
+            "/v1/blobs/transfers/{transfer_id}",
+            get(blobs::transfer_status),
+        )
         .route("/v1/blobs/{id}", get(blobs::download))
         .route("/v1/blobs/uploads", post(blobs::create_upload))
         .route("/v1/blobs/uploads/{id}", get(blobs::upload_status))

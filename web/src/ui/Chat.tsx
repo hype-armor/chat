@@ -32,6 +32,7 @@ import {
   notificationState,
   preparePush,
   reconnectNotifications,
+  resetNotificationSubscription,
   refreshSubscription,
 } from '../notifications'
 import { useVisualViewport } from './useVisualViewport'
@@ -783,6 +784,16 @@ function NotificationToggle({ core }: { core: CoreClient }) {
           >
             Reconnect notifications
           </button>
+          {iosDevice && (
+            <button
+              type="button"
+              className="link"
+              disabled={busy}
+              onClick={() => run(async () => resetNotificationSubscription(core, await preparePush(core)))}
+            >
+              Reset notification subscription
+            </button>
+          )}
         </>
       ) : state === 'unsupported' ? (
         <p className="muted small">Notifications are not supported by this browser.</p>

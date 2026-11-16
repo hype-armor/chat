@@ -26,6 +26,8 @@ use crate::{
 
 /// Limit duplicate notifications during a burst of queued envelopes.
 const COALESCE: Duration = Duration::from_secs(30);
+const TRANSIENT_RETRIES: usize = 2;
+const RETRY_DELAY: Duration = Duration::from_millis(250);
 const JWT_LIFETIME_SECS: u64 = 12 * 3600;
 const VAPID_REFRESH_SECS: u64 = 3600;
 const MAX_ENDPOINT_LEN: usize = 1024;
@@ -174,8 +176,22 @@ impl PushSender {
             {
                 return Outcome::Skipped;
             }
+            // Reserve the coalescing window while the request is in flight.
+            // A failed request removes this reservation below, so it cannot
+            // suppress the next queued envelope.
             last.insert(device, now);
         }
+        let outcome = self.send(db, device).await;
+        if outcome != Outcome::Sent {
+            self.last_sent
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&device);
+        }
+        outcome
+    }
+
+    async fn send(&self, db: &PgPool, device: Uuid) -> Outcome {
         let subscription: Option<(Option<serde_json::Value>,)> =
             match sqlx::query_as("SELECT push_subscription FROM devices WHERE device_id = $1")
                 .bind(device)
@@ -211,35 +227,80 @@ impl PushSender {
             self.vapid_jwt(&audience, now),
             self.public_key
         );
-        let response = self
-            .http
-            .post(&endpoint)
-            .header("authorization", authorization)
-            .header("ttl", "86400")
-            .header("urgency", "high")
-            .header("content-length", "0")
-            .send()
-            .await;
-        match response.map(|r| r.status().as_u16()) {
-            Ok(200..=299) => Outcome::Sent,
-            Ok(404 | 410) => {
-                let _ =
-                    sqlx::query("UPDATE devices SET push_subscription = NULL WHERE device_id = $1")
-                        .bind(device)
-                        .execute(db)
-                        .await;
-                Outcome::Expired
-            }
-            Ok(status) => {
-                tracing::warn!(status, "push service rejected a push");
-                Outcome::Failed
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "push request failed");
-                Outcome::Failed
+        for attempt in 0..=TRANSIENT_RETRIES {
+            let response = self
+                .http
+                .post(&endpoint)
+                .header("authorization", &authorization)
+                .header("ttl", "86400")
+                .header("urgency", "high")
+                .header("content-length", "0")
+                .send()
+                .await;
+            match response {
+                Ok(response) if response.status().is_success() => {
+                    // This has no endpoint or device identifier. It lets an
+                    // operator distinguish provider acceptance from a skipped
+                    // subscription during delivery diagnosis.
+                    tracing::info!(
+                        status = response.status().as_u16(),
+                        "push service accepted a push"
+                    );
+                    return Outcome::Sent;
+                }
+                Ok(response) if matches!(response.status().as_u16(), 404 | 410) => {
+                    let _ = sqlx::query(
+                        "UPDATE devices SET push_subscription = NULL WHERE device_id = $1",
+                    )
+                    .bind(device)
+                    .execute(db)
+                    .await;
+                    return Outcome::Expired;
+                }
+                Ok(response) => {
+                    let status = response.status().as_u16();
+                    if transient_status(status) && attempt < TRANSIENT_RETRIES {
+                        let delay = retry_delay(response.headers());
+                        tracing::warn!(
+                            status,
+                            attempt,
+                            ?delay,
+                            "push service temporarily rejected a push; retrying"
+                        );
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                    tracing::warn!(status, "push service rejected a push");
+                    return Outcome::Failed;
+                }
+                Err(error) => {
+                    if attempt < TRANSIENT_RETRIES {
+                        tracing::warn!(error = %error, attempt, "push request failed; retrying");
+                        tokio::time::sleep(RETRY_DELAY).await;
+                        continue;
+                    }
+                    tracing::warn!(error = %error, "push request failed");
+                    return Outcome::Failed;
+                }
             }
         }
+        unreachable!("the retry loop always returns")
     }
+}
+
+fn transient_status(status: u16) -> bool {
+    status == 408 || status == 429 || (500..600).contains(&status)
+}
+
+fn retry_delay(headers: &reqwest::header::HeaderMap) -> Duration {
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        // Bound a provider instruction so one task cannot hold the in-flight
+        // coalescing reservation indefinitely.
+        .map(|seconds| Duration::from_secs(seconds.min(COALESCE.as_secs())))
+        .unwrap_or(RETRY_DELAY)
 }
 
 /// The JWT audience: the push endpoint's origin.
