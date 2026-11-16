@@ -18,7 +18,8 @@ use object_store::{
     GetOptions, ObjectStore, ObjectStoreExt, PutPayload, WriteMultipart, path::Path,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sha2::{Digest, Sha256};
+use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::{
@@ -36,6 +37,8 @@ const PART_BYTES: usize = 8 * 1024 * 1024;
 /// Parts of a resumable upload; all but the last are exactly this size.
 pub const UPLOAD_PART_BYTES: u64 = 8 * 1024 * 1024;
 const UPLOAD_TTL_HOURS: i32 = 24;
+const COMPLETION_CLAIM_TTL_SECS: i32 = 15 * 60;
+const HASH_RANGE_BYTES: u64 = 1024 * 1024;
 
 /// Opens the store named by `CHAT_BLOB_STORE`: `memory` (development),
 /// `file:///path`, or `s3://bucket` with the usual `AWS_*` variables
@@ -202,6 +205,23 @@ async fn take_quota(state: &AppState, device: Uuid, bytes: u64) -> Result<(), Ap
     .await
 }
 
+async fn take_quota_in(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    device: Uuid,
+    bytes: u64,
+) -> Result<(), ApiError> {
+    let megabytes = bytes.div_ceil(1024 * 1024) as i32;
+    limits::tx_take(
+        tx,
+        &format!("blob-mb:{device}"),
+        megabytes,
+        state.limits.blob_mb_per_day,
+        limits::DAY,
+    )
+    .await
+}
+
 /// The account that owns `device`.
 async fn account_of(db: &PgPool, device: Uuid) -> Result<Uuid, ApiError> {
     let (account,): (Uuid,) = sqlx::query_as("SELECT account_id FROM devices WHERE device_id = $1")
@@ -211,9 +231,22 @@ async fn account_of(db: &PgPool, device: Uuid) -> Result<Uuid, ApiError> {
     Ok(account)
 }
 
+async fn account_of_in(tx: &mut Transaction<'_, Postgres>, device: Uuid) -> Result<Uuid, ApiError> {
+    let (account,): (Uuid,) = sqlx::query_as("SELECT account_id FROM devices WHERE device_id = $1")
+        .bind(device)
+        .fetch_one(&mut **tx)
+        .await?;
+    Ok(account)
+}
+
 #[derive(Deserialize)]
 pub struct NewUpload {
     size: u64,
+    /// A caller-generated UUID. It is optional for legacy clients.
+    transfer_id: Option<Uuid>,
+    /// Lowercase 64-hex SHA-256 of the complete ciphertext. It is required
+    /// with `transfer_id`, and never used as a storage object key.
+    ciphertext_sha256: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -224,8 +257,42 @@ pub struct UploadSession {
     expires_in_hours: i32,
 }
 
+fn upload_session(upload_id: Uuid, size: u64) -> UploadSession {
+    UploadSession {
+        upload_id,
+        part_bytes: UPLOAD_PART_BYTES,
+        parts: size.div_ceil(UPLOAD_PART_BYTES) as i32,
+        expires_in_hours: UPLOAD_TTL_HOURS,
+    }
+}
+
+fn ciphertext_digest(value: Option<String>) -> Result<Option<Vec<u8>>, ApiError> {
+    match value {
+        None => Ok(None),
+        Some(value) => {
+            if value.len() != 64
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err(ApiError::BadRequest(
+                    "ciphertext_sha256 must be lowercase 64-hex SHA-256",
+                ));
+            }
+            let digest = (0..32)
+                .map(|index| u8::from_str_radix(&value[index * 2..index * 2 + 2], 16))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| {
+                    ApiError::BadRequest("ciphertext_sha256 must be lowercase 64-hex SHA-256")
+                })?;
+            Ok(Some(digest))
+        }
+    }
+}
+
 /// `POST /v1/blobs/uploads`: starts a resumable upload of `size` bytes. The
-/// whole size counts against today's allowance now.
+/// whole size counts against today's allowance now. Clients that provide a
+/// transfer id and ciphertext digest can safely retry a lost create response.
 pub async fn create_upload(
     State(state): State<AppState>,
     AuthDevice(device): AuthDevice,
@@ -235,35 +302,314 @@ pub async fn create_upload(
         return Err(ApiError::BadRequest("attachments are 1 byte to 100 MB"));
     }
     store(&state)?;
-    take_quota(&state, device, req.size).await?;
-    let account = account_of(db(&state)?, device).await?;
+    let digest = ciphertext_digest(req.ciphertext_sha256)?;
+    match (req.transfer_id, digest) {
+        (None, None) => create_legacy_upload(&state, device, req.size).await,
+        (Some(transfer_id), Some(digest)) => {
+            create_idempotent_upload(&state, device, transfer_id, req.size, digest).await
+        }
+        _ => Err(ApiError::BadRequest(
+            "transfer_id and ciphertext_sha256 must be supplied together",
+        )),
+    }
+}
+
+async fn create_legacy_upload(
+    state: &AppState,
+    device: Uuid,
+    size: u64,
+) -> Result<Json<UploadSession>, ApiError> {
+    take_quota(state, device, size).await?;
+    let account = account_of(db(state)?, device).await?;
     let id = Uuid::new_v4();
-    let parts = req.size.div_ceil(UPLOAD_PART_BYTES) as i32;
+    let parts = size.div_ceil(UPLOAD_PART_BYTES) as i32;
     let objects: Vec<_> = (0..parts)
         .map(|n| {
             (
                 part_path(id, n).to_string(),
-                part_len(req.size, parts, n) as i64,
+                part_len(size, parts, n) as i64,
             )
         })
         .collect();
-    storage::reserve(db(&state)?, account, &objects).await?;
+    storage::reserve(db(state)?, account, &objects).await?;
     sqlx::query(
         "INSERT INTO blob_uploads (upload_id, device_id, size_bytes, parts, expires_at)
          VALUES ($1, $2, $3, $4, now() + make_interval(hours => $5))",
     )
     .bind(id)
     .bind(device)
-    .bind(req.size as i64)
+    .bind(size as i64)
     .bind(parts)
     .bind(UPLOAD_TTL_HOURS)
-    .execute(db(&state)?)
+    .execute(db(state)?)
     .await?;
-    Ok(Json(UploadSession {
-        upload_id: id,
-        part_bytes: UPLOAD_PART_BYTES,
+    Ok(Json(upload_session(id, size)))
+}
+
+async fn create_idempotent_upload(
+    state: &AppState,
+    device: Uuid,
+    transfer_id: Uuid,
+    size: u64,
+    digest: Vec<u8>,
+) -> Result<Json<UploadSession>, ApiError> {
+    let database = db(state)?;
+    let mut tx = database.begin().await?;
+    // Serialize first use of this device-scoped caller key before any daily
+    // or durable quota debit. Hash collisions only serialize unrelated creates.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0::bigint))")
+        .bind(format!("{device}:{transfer_id}"))
+        .execute(&mut *tx)
+        .await?;
+    let existing: Option<(Uuid, i64, Vec<u8>, Uuid, String)> = sqlx::query_as(
+        "SELECT device_id, size_bytes, ciphertext_sha256, upload_id, state
+         FROM blob_upload_transfers WHERE device_id = $1 AND transfer_id = $2 FOR UPDATE",
+    )
+    .bind(device)
+    .bind(transfer_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some((owner, stored_size, stored_digest, upload_id, transfer_state)) = existing {
+        debug_assert_eq!(owner, device, "device is part of the transfer key");
+        if stored_size != size as i64 || stored_digest != digest {
+            return Err(ApiError::Conflict("transfer parameters conflict"));
+        }
+        if transfer_state == "expired" {
+            return Err(ApiError::Conflict("transfer expired"));
+        }
+        if transfer_state != "uploading" && transfer_state != "complete" {
+            return Err(ApiError::Conflict("transfer is unavailable"));
+        }
+        tx.commit().await?;
+        // A completed transfer returns its original upload id. Retrying its
+        // completion recovers the stable blob id without new quota effects.
+        return Ok(Json(upload_session(upload_id, size)));
+    }
+
+    let account = account_of_in(&mut tx, device).await?;
+    let upload_id = Uuid::new_v4();
+    let parts = size.div_ceil(UPLOAD_PART_BYTES) as i32;
+    let objects: Vec<_> = (0..parts)
+        .map(|n| {
+            (
+                part_path(upload_id, n).to_string(),
+                part_len(size, parts, n) as i64,
+            )
+        })
+        .collect();
+    take_quota_in(state, &mut tx, device, size).await?;
+    storage::reserve_in(&mut tx, account, &objects).await?;
+    sqlx::query(
+        "INSERT INTO blob_uploads (upload_id, device_id, size_bytes, parts, expires_at)
+         VALUES ($1, $2, $3, $4, now() + make_interval(hours => $5))",
+    )
+    .bind(upload_id)
+    .bind(device)
+    .bind(size as i64)
+    .bind(parts)
+    .bind(UPLOAD_TTL_HOURS)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO blob_upload_transfers
+         (transfer_id, device_id, size_bytes, ciphertext_sha256, upload_id, state)
+         VALUES ($1, $2, $3, $4, $5, 'uploading')",
+    )
+    .bind(transfer_id)
+    .bind(device)
+    .bind(size as i64)
+    .bind(digest)
+    .bind(upload_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Json(upload_session(upload_id, size)))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Capabilities {
+    transfer_idempotency: i32,
+}
+
+/// `GET /v1/blobs/capabilities`: authenticated feature discovery for clients.
+pub async fn capabilities(AuthDevice(_device): AuthDevice) -> Json<Capabilities> {
+    Json(Capabilities {
+        transfer_idempotency: 1,
+    })
+}
+
+#[derive(Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum TransferStatus {
+    Uploading { upload_id: Uuid },
+    Complete { blob_id: Uuid },
+}
+
+/// `GET /v1/blobs/transfers/{transfer_id}`: recover lost create or completion
+/// results without exposing another device's transfer state.
+pub async fn transfer_status(
+    State(state): State<AppState>,
+    AuthDevice(device): AuthDevice,
+    UrlPath(transfer_id): UrlPath<Uuid>,
+) -> Result<Json<TransferStatus>, ApiError> {
+    let row: Option<(Uuid, String, Uuid, Option<Uuid>)> = sqlx::query_as(
+        "SELECT device_id, state, upload_id, blob_id FROM blob_upload_transfers
+         WHERE device_id = $1 AND transfer_id = $2",
+    )
+    .bind(device)
+    .bind(transfer_id)
+    .fetch_optional(db(&state)?)
+    .await?;
+    let (owner, transfer_state, upload_id, blob_id) =
+        row.ok_or(ApiError::NotFound("no such transfer"))?;
+    debug_assert_eq!(owner, device, "device is part of the transfer key");
+    match (transfer_state.as_str(), blob_id) {
+        ("uploading", _) => Ok(Json(TransferStatus::Uploading { upload_id })),
+        ("complete", Some(blob_id)) => Ok(Json(TransferStatus::Complete { blob_id })),
+        ("expired", _) => Err(ApiError::Conflict("transfer expired")),
+        _ => Err(ApiError::Conflict("transfer is unavailable")),
+    }
+}
+
+/// Hash persisted multipart ciphertext in part order. Completion holds a
+/// durable claim, not a database transaction, during these bounded reads.
+async fn multipart_ciphertext_digest(
+    store: &Arc<dyn ObjectStore>,
+    id: Uuid,
+    size: u64,
+    parts: i32,
+) -> Result<Vec<u8>, ApiError> {
+    let mut hash = Sha256::new();
+    for part in 0..parts {
+        let length = part_len(size, parts, part);
+        for start in (0..length).step_by(HASH_RANGE_BYTES as usize) {
+            let end = (start + HASH_RANGE_BYTES).min(length);
+            let mut stream = store
+                .get_opts(
+                    &part_path(id, part),
+                    GetOptions::new().with_range(Some(start..end)),
+                )
+                .await
+                .map_err(internal)?
+                .into_stream();
+            let mut received = 0_u64;
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(internal)?;
+                received += chunk.len() as u64;
+                hash.update(chunk);
+            }
+            if received != end - start {
+                return Err(ApiError::Conflict(
+                    "stored ciphertext changed while completing",
+                ));
+            }
+        }
+    }
+    Ok(hash.finalize().to_vec())
+}
+
+struct CompletionClaim {
+    claim: Uuid,
+    size: u64,
+    parts: i32,
+    digest: Option<Vec<u8>>,
+}
+
+async fn clear_completion_claim(db: &PgPool, id: Uuid, claim: Uuid) {
+    if let Err(error) = sqlx::query(
+        "UPDATE blob_uploads SET completion_claim = NULL, completion_claimed_at = NULL
+         WHERE upload_id = $1 AND completion_claim = $2",
+    )
+    .bind(id)
+    .bind(claim)
+    .execute(db)
+    .await
+    {
+        tracing::warn!(error = ?error, "completion claim cleanup failed");
+    }
+}
+
+async fn claim_completion(
+    state: &AppState,
+    device: Uuid,
+    id: Uuid,
+) -> Result<Result<Uploaded, CompletionClaim>, ApiError> {
+    let database = db(state)?;
+    let mut tx = database.begin().await?;
+    // A completed transfer survives upload-session cleanup and is the stable
+    // answer for a lost completion response.
+    let transfer: Option<(String, Option<Uuid>, Vec<u8>)> = sqlx::query_as(
+        "SELECT state, blob_id, ciphertext_sha256 FROM blob_upload_transfers
+         WHERE upload_id = $1 AND device_id = $2 FOR UPDATE",
+    )
+    .bind(id)
+    .bind(device)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let digest = if let Some((transfer_state, blob_id, digest)) = transfer {
+        match (transfer_state.as_str(), blob_id) {
+            ("complete", Some(blob_id)) => {
+                tx.commit().await?;
+                return Ok(Ok(Uploaded {
+                    blob_id,
+                    expires_in_days: BLOB_TTL_DAYS,
+                }));
+            }
+            ("expired", _) => return Err(ApiError::Conflict("transfer expired")),
+            ("uploading", _) => Some(digest),
+            _ => return Err(ApiError::Conflict("transfer is unavailable")),
+        }
+    } else {
+        None
+    };
+    type CompletionStatusRow = (i64, i32, Vec<i32>, Option<Uuid>, Option<bool>);
+    let row: Option<CompletionStatusRow> = sqlx::query_as(
+        "SELECT size_bytes, parts, received, completion_claim,
+                completion_claimed_at > now() - make_interval(secs => $3) AS claim_live
+         FROM blob_uploads WHERE upload_id = $1 AND device_id = $2
+         AND NOT retiring AND expires_at > now() FOR UPDATE",
+    )
+    .bind(id)
+    .bind(device)
+    .bind(f64::from(COMPLETION_CLAIM_TTL_SECS))
+    .fetch_optional(&mut *tx)
+    .await?;
+    let (size, parts, received, existing_claim, claim_live) =
+        row.ok_or(ApiError::NotFound("no such upload, or it expired"))?;
+    if received.len() as i32 != parts {
+        return Err(ApiError::Conflict("some parts are missing"));
+    }
+    let (count, ready): (i64, i64) = sqlx::query_as(
+        "SELECT count(*), count(*) FILTER (WHERE state = 'ready') FROM storage_objects
+         WHERE object_key LIKE $1",
+    )
+    .bind(format!("blobs/{id}/%"))
+    .fetch_one(&mut *tx)
+    .await?;
+    if count != i64::from(parts) || ready != i64::from(parts) {
+        return Err(ApiError::Conflict("some parts are still being written"));
+    }
+    if existing_claim.is_some() && claim_live.unwrap_or(true) {
+        return Err(ApiError::Conflict("completion is already being verified"));
+    }
+    let claim = Uuid::new_v4();
+    // A stale claim only permits a new verification pass. It can never publish
+    // by age alone because promotion re-locks and compares this UUID.
+    sqlx::query(
+        "UPDATE blob_uploads SET completion_claim = $2, completion_claimed_at = now()
+         WHERE upload_id = $1",
+    )
+    .bind(id)
+    .bind(claim)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Err(CompletionClaim {
+        claim,
+        size: size as u64,
         parts,
-        expires_in_hours: UPLOAD_TTL_HOURS,
+        digest,
     }))
 }
 
@@ -305,16 +651,19 @@ pub async fn put_part(
     let mut tx = db.begin().await?;
     // A short claim transaction fences completion and expiry. Never hold a
     // database transaction while the object store receives the part.
-    let live: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT upload_id FROM blob_uploads
+    let live: Option<(Uuid, Option<Uuid>)> = sqlx::query_as(
+        "SELECT upload_id, completion_claim FROM blob_uploads
          WHERE upload_id = $1 AND device_id = $2 AND NOT retiring AND expires_at > now() FOR UPDATE",
     )
     .bind(id)
     .bind(device)
     .fetch_optional(&mut *tx)
     .await?;
-    if live.is_none() {
+    let Some((_, completion_claim)) = live else {
         return Err(ApiError::NotFound("no such upload, or it expired"));
+    };
+    if completion_claim.is_some() {
+        return Err(ApiError::Conflict("completion is already being verified"));
     }
     let claimed = sqlx::query(
         "UPDATE storage_objects SET state = 'writing'
@@ -373,22 +722,60 @@ pub async fn complete_upload(
     AuthDevice(device): AuthDevice,
     UrlPath(id): UrlPath<Uuid>,
 ) -> Result<Json<Uploaded>, ApiError> {
-    let mut tx = db(&state)?.begin().await?;
+    let claim = match claim_completion(&state, device, id).await? {
+        Ok(uploaded) => return Ok(Json(uploaded)),
+        Err(claim) => claim,
+    };
+    let actual_digest =
+        multipart_ciphertext_digest(store(&state)?, id, claim.size, claim.parts).await;
+    let actual_digest = match actual_digest {
+        Ok(digest) => digest,
+        Err(error) => {
+            clear_completion_claim(db(&state)?, id, claim.claim).await;
+            return Err(error);
+        }
+    };
+    if let Some(declared_digest) = &claim.digest
+        && actual_digest != *declared_digest
+    {
+        clear_completion_claim(db(&state)?, id, claim.claim).await;
+        return Err(ApiError::Conflict(
+            "ciphertext_sha256 does not match uploaded ciphertext",
+        ));
+    }
+    match publish_completion(&state, device, id, &claim).await {
+        Ok(uploaded) => Ok(Json(uploaded)),
+        Err(error) => {
+            clear_completion_claim(db(&state)?, id, claim.claim).await;
+            Err(error)
+        }
+    }
+}
+
+async fn publish_completion(
+    state: &AppState,
+    device: Uuid,
+    id: Uuid,
+    claim: &CompletionClaim,
+) -> Result<Uploaded, ApiError> {
+    let database = db(state)?;
+    let mut tx = database.begin().await?;
+    // Re-lock after object-store I/O. A stale claim can only be reclaimed for
+    // another full verification pass; it can never publish this hash result.
     let row: Option<(i64, i32, Vec<i32>)> = sqlx::query_as(
         "SELECT size_bytes, parts, received FROM blob_uploads
-         WHERE upload_id = $1 AND device_id = $2 AND NOT retiring AND expires_at > now() FOR UPDATE",
+         WHERE upload_id = $1 AND device_id = $2 AND NOT retiring
+         AND completion_claim = $3 FOR UPDATE",
     )
     .bind(id)
     .bind(device)
+    .bind(claim.claim)
     .fetch_optional(&mut *tx)
     .await?;
-    let (size, parts, received) = row.ok_or(ApiError::NotFound("no such upload, or it expired"))?;
-    if received.len() as i32 != parts {
-        return Err(ApiError::Conflict("some parts are missing"));
+    let (size, parts, received) = row.ok_or(ApiError::Conflict("completion claim was lost"))?;
+    if size as u64 != claim.size || parts != claim.parts || received.len() as i32 != parts {
+        return Err(ApiError::Conflict("upload changed while completing"));
     }
-    let account = account_of(db(&state)?, device).await?;
-    // Part writers lock the upload row before claiming a part. Completion
-    // keeps the existing ledger entries; it never reserves the size again.
     let (count, ready): (i64, i64) = sqlx::query_as(
         "SELECT count(*), count(*) FILTER (WHERE state = 'ready') FROM storage_objects
          WHERE object_key LIKE $1",
@@ -397,10 +784,12 @@ pub async fn complete_upload(
     .fetch_one(&mut *tx)
     .await?;
     if count != i64::from(parts) || ready != i64::from(parts) {
-        return Err(ApiError::Conflict("some parts are still being written"));
+        return Err(ApiError::Conflict("some parts changed while completing"));
     }
-    sqlx::query("DELETE FROM blob_uploads WHERE upload_id = $1")
+    let account = account_of_in(&mut tx, device).await?;
+    sqlx::query("DELETE FROM blob_uploads WHERE upload_id = $1 AND completion_claim = $2")
         .bind(id)
+        .bind(claim.claim)
         .execute(&mut *tx)
         .await?;
     sqlx::query(
@@ -418,11 +807,21 @@ pub async fn complete_upload(
         .bind(format!("blobs/{id}/%"))
         .execute(&mut *tx)
         .await?;
+    // The mapping and the blob become visible in this same transaction.
+    sqlx::query(
+        "UPDATE blob_upload_transfers SET state = 'complete', blob_id = $2
+         WHERE upload_id = $1 AND device_id = $3",
+    )
+    .bind(id)
+    .bind(id)
+    .bind(device)
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
-    Ok(Json(Uploaded {
+    Ok(Uploaded {
         blob_id: id,
         expires_in_days: BLOB_TTL_DAYS,
-    }))
+    })
 }
 
 /// A single `bytes=` range, clamped to `size`; `None` for the whole blob.
@@ -556,6 +955,16 @@ async fn delete_all(db: &PgPool, store: &Arc<dyn ObjectStore>, paths: Vec<Path>)
 /// Deletes expired blobs and abandoned uploads from the store and the
 /// tables (hourly).
 pub async fn expire(db: &sqlx::PgPool, store: &Arc<dyn ObjectStore>) -> anyhow::Result<()> {
+    // A crash can leave a completion claim. Clearing a stale claim never
+    // publishes it: any completer must re-lock the exact claim after rehashing.
+    sqlx::query(
+        "UPDATE blob_uploads SET completion_claim = NULL, completion_claimed_at = NULL
+         WHERE completion_claim IS NOT NULL
+         AND completion_claimed_at <= now() - make_interval(secs => $1)",
+    )
+    .bind(f64::from(COMPLETION_CLAIM_TTL_SECS))
+    .execute(db)
+    .await?;
     let expired: Vec<(Uuid, i32)> = sqlx::query_as(
         "SELECT blob_id, parts FROM blobs WHERE expires_at < now() ORDER BY expires_at LIMIT 1000",
     )
@@ -568,14 +977,26 @@ pub async fn expire(db: &sqlx::PgPool, store: &Arc<dyn ObjectStore>) -> anyhow::
             (0..parts).map(|n| part_path(id, n)).collect()
         };
         if delete_all(db, store, paths).await {
+            let mut tx = db.begin().await?;
+            // Retain the UUID and digest fence after object deletion, but do
+            // not report a deleted blob as complete to a recovering client.
+            sqlx::query(
+                "UPDATE blob_upload_transfers SET state = 'expired'
+                 WHERE blob_id = $1 AND state = 'complete'",
+            )
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
             sqlx::query("DELETE FROM blobs WHERE blob_id = $1")
                 .bind(id)
-                .execute(db)
+                .execute(&mut *tx)
                 .await?;
+            tx.commit().await?;
         }
     }
     let abandoned: Vec<(Uuid, i32)> = sqlx::query_as(
         "SELECT u.upload_id, u.parts FROM blob_uploads u WHERE u.expires_at < now()
+         AND u.completion_claim IS NULL
          AND NOT EXISTS (SELECT 1 FROM storage_objects s
                          WHERE s.object_key LIKE 'blobs/' || u.upload_id || '/%'
                            AND s.state = 'writing')
@@ -590,7 +1011,7 @@ pub async fn expire(db: &sqlx::PgPool, store: &Arc<dyn ObjectStore>) -> anyhow::
         // until an operator fences it and repairs the reservation.
         let expired: Option<(Uuid,)> = sqlx::query_as(
             "SELECT upload_id FROM blob_uploads WHERE upload_id = $1
-             AND expires_at < now() FOR UPDATE",
+             AND expires_at < now() AND completion_claim IS NULL FOR UPDATE",
         )
         .bind(id)
         .fetch_optional(&mut *tx)
@@ -613,10 +1034,19 @@ pub async fn expire(db: &sqlx::PgPool, store: &Arc<dyn ObjectStore>) -> anyhow::
             .await?;
         tx.commit().await?;
         if delete_all(db, store, (0..parts).map(|n| part_path(id, n)).collect()).await {
+            let mut tx = db.begin().await?;
+            sqlx::query(
+                "UPDATE blob_upload_transfers SET state = 'expired'
+                 WHERE upload_id = $1 AND state = 'uploading'",
+            )
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
             sqlx::query("DELETE FROM blob_uploads WHERE upload_id = $1")
                 .bind(id)
-                .execute(db)
+                .execute(&mut *tx)
                 .await?;
+            tx.commit().await?;
         }
     }
     Ok(())

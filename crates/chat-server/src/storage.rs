@@ -11,7 +11,7 @@ use std::sync::Arc;
 use axum::{Json, extract::State};
 use object_store::{ObjectStore, ObjectStoreExt, path::Path};
 use serde::Serialize;
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::{
@@ -72,15 +72,27 @@ pub async fn reserve(
     objects: &[(String, i64)],
 ) -> Result<(), ApiError> {
     let mut tx = db.begin().await?;
+    reserve_in(&mut tx, account, objects).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Reserve object keys inside a caller transaction. This lets an idempotency
+/// fence, the daily budget, the quota ledger, and its session row commit together.
+pub(crate) async fn reserve_in(
+    tx: &mut Transaction<'_, Postgres>,
+    account: Uuid,
+    objects: &[(String, i64)],
+) -> Result<(), ApiError> {
     let (server_limit, default_limit): (Option<i64>, Option<i64>) = sqlx::query_as(
         "SELECT server_bytes, account_bytes FROM storage_policy WHERE id = 1 FOR UPDATE",
     )
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut **tx)
     .await?;
     let override_limit: Option<(Option<i64>,)> =
         sqlx::query_as("SELECT limit_bytes FROM account_storage_policy WHERE account_id = $1")
             .bind(account)
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&mut **tx)
             .await?;
     let account_limit = override_limit.map_or(default_limit, |(limit,)| limit);
     let mut requested = 0_i64;
@@ -97,7 +109,7 @@ pub async fn reserve(
                 coalesce(sum(size_bytes) FILTER (WHERE account_id = $1), 0)::bigint FROM storage_objects",
     )
     .bind(account)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut **tx)
     .await?;
     if exceeds(server_used, requested, server_limit) {
         return Err(ApiError::TooManyRequests("server storage quota reached"));
@@ -112,10 +124,9 @@ pub async fn reserve(
         .bind(key)
         .bind(account)
         .bind(size)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     }
-    tx.commit().await?;
     Ok(())
 }
 
