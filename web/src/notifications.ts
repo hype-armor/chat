@@ -74,6 +74,18 @@ export async function reconnectNotifications(core: CoreClient, setup: PushSetup)
   await core.enablePush(subscription.toJSON())
 }
 
+/**
+ * Replaces the browser subscription even when Safari reports that its key
+ * matches. Use this after a lost server VAPID key caused provider rejection.
+ */
+export async function resetNotificationSubscription(core: CoreClient, setup: PushSetup): Promise<void> {
+  const { registration, applicationServerKey } = setup
+  const existing = await registration.pushManager.getSubscription()
+  await existing?.unsubscribe()
+  const subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey })
+  await core.enablePush(subscription.toJSON())
+}
+
 /** On start: keep a granted subscription registered, without prompting. */
 export async function refreshSubscription(core: CoreClient) {
   if (notificationState() !== 'granted') return
