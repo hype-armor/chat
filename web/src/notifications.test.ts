@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { base64UrlToBytes, notificationState, usesApplicationKey } from './notifications'
+import { base64UrlToBytes, notificationState, resetNotificationSubscription, usesApplicationKey } from './notifications'
 
 describe('base64UrlToBytes', () => {
   it('decodes unpadded base64url', () => {
@@ -19,6 +19,27 @@ describe('usesApplicationKey', () => {
     expect(usesApplicationKey(subscriptionWith(new Uint8Array([1, 2, 4])), key)).toBe(false)
     expect(usesApplicationKey(subscriptionWith(new Uint8Array([1, 2])), key)).toBe(false)
     expect(usesApplicationKey(subscriptionWith(null), key)).toBe(false)
+  })
+})
+
+describe('resetNotificationSubscription', () => {
+  it('replaces a browser subscription before uploading it', async () => {
+    const unsubscribe = vi.fn().mockResolvedValue(true)
+    const replacement = { toJSON: () => ({ endpoint: 'https://web.push.apple.com/new' }) }
+    const subscribe = vi.fn().mockResolvedValue(replacement)
+    const registration = {
+      pushManager: { getSubscription: vi.fn().mockResolvedValue({ unsubscribe }), subscribe },
+    } as unknown as ServiceWorkerRegistration
+    const enablePush = vi.fn().mockResolvedValue(undefined)
+
+    await resetNotificationSubscription(
+      { enablePush } as never,
+      { registration, applicationServerKey: new Uint8Array([1, 2, 3]) },
+    )
+
+    expect(unsubscribe).toHaveBeenCalledOnce()
+    expect(subscribe).toHaveBeenCalledWith({ userVisibleOnly: true, applicationServerKey: new Uint8Array([1, 2, 3]) })
+    expect(enablePush).toHaveBeenCalledWith({ endpoint: 'https://web.push.apple.com/new' })
   })
 })
 
