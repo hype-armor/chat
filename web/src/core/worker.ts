@@ -104,6 +104,9 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
       return { type: 'fileSent', ...await engine.sendFile(request.conversationId, request.file, request.caption, request.media, request.draftRevision) }
     case 'openAttachment':
       return { type: 'file', blob: await engine.openAttachment(request.conversationId, request.messageId) }
+    case 'setDisplayName':
+      await engine.setDisplayName(request.displayName)
+      return { type: 'ok' }
     case 'setAvatar':
       await engine.setAvatar(request.file)
       return { type: 'ok' }

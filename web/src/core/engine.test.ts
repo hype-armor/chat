@@ -71,7 +71,52 @@ describe('engine routing and group metadata', () => {
   })
 })
 
-describe('profile pictures', () => {
+describe('display names and profile pictures', () => {
+  it('updates the encrypted profile for conversations and linked devices', async () => {
+    const engine = new Engine(() => {})
+    const sendProfile = vi.fn(() => new Uint8Array([1]))
+    const sendDeviceSync = vi.fn(() => new Uint8Array([2]))
+    const store = { putJson: vi.fn(async () => {}), putBytes: vi.fn(async () => {}) }
+    engine['account'] = {
+      username: 'alice.01', displayName: 'Alice', accountId: account, deviceId: device, token: '',
+    }
+    engine['store'] = store as unknown as Engine['store']
+    engine['core'] = {
+      identity: () => me,
+      members: () => [me, sender],
+      sendProfile,
+      sendDeviceSync,
+      snapshot: () => new Uint8Array(),
+    } as unknown as NonNullable<Engine['core']>
+    engine['state'].blocked = [peer]
+    const directId = '77'.repeat(16)
+    const groupId = '88'.repeat(16)
+    const selfId = '99'.repeat(16)
+    engine['state'].conversations = {
+      [directId]: { id: directId, peers: [peer], lastAt: 0 },
+      [groupId]: { id: groupId, peers: [peer, account], name: 'Group', lastAt: 0 },
+      [selfId]: { id: selfId, peers: [], self: true, lastAt: 0 },
+    }
+
+    await engine.setDisplayName('  Alice Smith  ')
+
+    expect(engine['account']?.displayName).toBe('Alice Smith')
+    expect(store.putJson).toHaveBeenCalledWith('account', expect.objectContaining({ displayName: 'Alice Smith' }))
+    expect(sendProfile).toHaveBeenCalledTimes(1)
+    expect(sendProfile).toHaveBeenCalledWith(expect.any(Uint8Array), 'Alice Smith', expect.any(Uint8Array), expect.any(Number), expect.any(Uint8Array))
+    expect(sendDeviceSync).toHaveBeenCalledTimes(1)
+    expect(engine['state'].outbox).toHaveLength(2)
+  })
+
+  it('rejects an empty or oversized display name', async () => {
+    const engine = new Engine(() => {})
+    engine['account'] = { username: 'alice.01', displayName: 'Alice', accountId: account, deviceId: device, token: '' }
+    engine['core'] = {} as NonNullable<Engine['core']>
+
+    await expect(engine.setDisplayName(' \n ')).rejects.toThrow('Display name is required')
+    await expect(engine.setDisplayName('a'.repeat(65))).rejects.toThrow('Display name must be 64 characters or fewer')
+  })
+
   const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3])
   it('does not send profiles to blocked one-to-one peers', () => {
     const engine = new Engine(() => {})

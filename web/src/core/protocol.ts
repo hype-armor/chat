@@ -296,6 +296,7 @@ export type CoreRequest =
   | { type: 'mapInfo' }
   | { type: 'tile'; z: number; x: number; y: number }
   | { type: 'sendFile'; conversationId: string; file: File; caption: string; media?: MediaInfo; draftRevision?: number }
+  | { type: 'setDisplayName'; displayName: string }
   /** Sets this account's profile picture; no file removes it. */
   | { type: 'setAvatar'; file?: File }
   | { type: 'avatar'; account: string }
