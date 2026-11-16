@@ -236,6 +236,9 @@ pub struct EventView {
     pub typing_expires_at_ms: Option<f64>,
     #[wasm_bindgen(getter_with_clone, js_name = displayName)]
     pub display_name: Option<String>,
+    /// This encrypted profile asks the peer to return its current profile.
+    #[wasm_bindgen(js_name = profileRefresh)]
+    pub profile_refresh: bool,
     #[wasm_bindgen(getter_with_clone)]
     pub locality: Option<LocalityView>,
     /// A `Profile`'s photo (JPEG), if the sender has one.
@@ -349,6 +352,7 @@ impl EventView {
             typing_active: None,
             typing_expires_at_ms: None,
             display_name: None,
+            profile_refresh: false,
             locality: None,
             avatar: None,
             group_name: None,
@@ -993,6 +997,7 @@ impl CoreClient {
         conversation_id: &[u8],
         display_name: String,
         avatar: Vec<u8>,
+        refresh: bool,
         sent_at_ms: f64,
         message_id: Vec<u8>,
     ) -> Result<Vec<u8>, JsError> {
@@ -1002,6 +1007,7 @@ impl CoreClient {
             content::Body::Profile(Profile {
                 display_name,
                 avatar,
+                refresh,
             }),
             message_id,
         )
@@ -1096,6 +1102,7 @@ impl CoreClient {
                     Some(content::Body::Profile(p)) => {
                         view.display_name = Some(p.display_name);
                         view.avatar = Some(p.avatar).filter(|a| !a.is_empty());
+                        view.profile_refresh = p.refresh;
                     }
                     Some(content::Body::GroupInfo(g)) => {
                         view.group_name = Some(g.name);
