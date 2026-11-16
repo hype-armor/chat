@@ -33,6 +33,7 @@ import {
   preparePush,
   reconnectNotifications,
   resetNotificationSubscription,
+  resetNotificationWorker,
   refreshSubscription,
 } from '../notifications'
 import { useVisualViewport } from './useVisualViewport'
@@ -785,14 +786,25 @@ function NotificationToggle({ core }: { core: CoreClient }) {
             Reconnect notifications
           </button>
           {iosDevice && (
-            <button
-              type="button"
-              className="link"
-              disabled={busy}
-              onClick={() => run(async () => resetNotificationSubscription(core, await preparePush(core)))}
-            >
-              Reset notification subscription
-            </button>
+            <>
+              <button
+                type="button"
+                className="link"
+                disabled={busy}
+                onClick={() => run(async () => resetNotificationSubscription(core, await preparePush(core)))}
+              >
+                Reset notification subscription
+              </button>
+              <button
+                type="button"
+                className="link"
+                disabled={busy}
+                onClick={() => run(resetNotificationWorker)}
+              >
+                Reset notification service
+              </button>
+              <p className="muted small">This reloads Chat and keeps its encrypted local data.</p>
+            </>
           )}
         </>
       ) : state === 'unsupported' ? (
