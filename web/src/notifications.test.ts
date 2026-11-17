@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { base64UrlToBytes, notificationState, resetNotificationSubscription, usesApplicationKey } from './notifications'
+import { base64UrlToBytes, notificationState, resetNotificationSubscription, resetNotificationWorker, usesApplicationKey } from './notifications'
 
 describe('base64UrlToBytes', () => {
   it('decodes unpadded base64url', () => {
@@ -40,6 +40,85 @@ describe('resetNotificationSubscription', () => {
     expect(unsubscribe).toHaveBeenCalledOnce()
     expect(subscribe).toHaveBeenCalledWith({ userVisibleOnly: true, applicationServerKey: new Uint8Array([1, 2, 3]) })
     expect(enablePush).toHaveBeenCalledWith({ endpoint: 'https://web.push.apple.com/new' })
+  })
+})
+
+describe('resetNotificationWorker', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  const installWorker = () => {
+    const order: string[] = []
+    const unsubscribe = vi.fn(async () => { order.push('unsubscribe'); return true })
+    const unregister = vi.fn(async () => { order.push('unregister'); return true })
+    const getSubscription = vi.fn().mockResolvedValue({ unsubscribe })
+    const getRegistration = vi.fn().mockResolvedValue({ pushManager: { getSubscription }, unregister })
+    const reload = vi.fn(() => { order.push('reload') })
+    const clear = vi.fn(() => { throw new Error('Site storage must not be cleared') })
+    const removeItem = vi.fn(() => { throw new Error('Stored identity must not be removed') })
+    const deleteDatabase = vi.fn(() => { throw new Error('Encrypted databases must not be deleted') })
+    vi.stubGlobal('navigator', { serviceWorker: { getRegistration } })
+    vi.stubGlobal('window', {
+      location: { reload },
+      localStorage: { clear, removeItem },
+      sessionStorage: { clear, removeItem },
+      indexedDB: { deleteDatabase },
+    })
+    vi.stubGlobal('localStorage', { clear, removeItem })
+    vi.stubGlobal('sessionStorage', { clear, removeItem })
+    vi.stubGlobal('indexedDB', { deleteDatabase })
+    return { order, unsubscribe, unregister, getSubscription, getRegistration, reload, clear, removeItem, deleteDatabase }
+  }
+
+  it('unsubscribes, unregisters the current worker, and reloads without deleting local data', async () => {
+    const browser = installWorker()
+    await resetNotificationWorker()
+    expect(browser.order).toEqual(['unsubscribe', 'unregister', 'reload'])
+    expect(browser.getRegistration).toHaveBeenCalledWith()
+    expect(browser.clear).not.toHaveBeenCalled()
+    expect(browser.removeItem).not.toHaveBeenCalled()
+    expect(browser.deleteDatabase).not.toHaveBeenCalled()
+  })
+
+  it('can reset a worker that has no subscription', async () => {
+    const browser = installWorker()
+    browser.getSubscription.mockResolvedValue(null)
+    await resetNotificationWorker()
+    expect(browser.order).toEqual(['unregister', 'reload'])
+    expect(browser.unsubscribe).not.toHaveBeenCalled()
+  })
+
+  it('does not reload when the current worker is absent', async () => {
+    const browser = installWorker()
+    browser.getRegistration.mockResolvedValue(undefined)
+    await expect(resetNotificationWorker()).rejects.toThrow('Chat needs a service worker')
+    expect(browser.unregister).not.toHaveBeenCalled()
+    expect(browser.reload).not.toHaveBeenCalled()
+  })
+
+  it.each(['refused', 'rejected'] as const)('does not unregister or reload when unsubscribe is %s', async (failure) => {
+    const browser = installWorker()
+    if (failure === 'refused') browser.unsubscribe.mockResolvedValue(false)
+    else browser.unsubscribe.mockRejectedValue(new Error('unsubscribe failed'))
+    await expect(resetNotificationWorker()).rejects.toThrow()
+    expect(browser.unregister).not.toHaveBeenCalled()
+    expect(browser.reload).not.toHaveBeenCalled()
+  })
+
+  it.each(['refused', 'rejected'] as const)('does not reload when unregister is %s', async (failure) => {
+    const browser = installWorker()
+    if (failure === 'refused') browser.unregister.mockResolvedValue(false)
+    else browser.unregister.mockRejectedValue(new Error('unregister failed'))
+    await expect(resetNotificationWorker()).rejects.toThrow()
+    expect(browser.unsubscribe).toHaveBeenCalledOnce()
+    expect(browser.reload).not.toHaveBeenCalled()
+  })
+
+  it('does not unregister or reload when subscription lookup fails', async () => {
+    const browser = installWorker()
+    browser.getSubscription.mockRejectedValue(new Error('subscription lookup failed'))
+    await expect(resetNotificationWorker()).rejects.toThrow('subscription lookup failed')
+    expect(browser.unregister).not.toHaveBeenCalled()
+    expect(browser.reload).not.toHaveBeenCalled()
   })
 })
 

@@ -45,6 +45,11 @@ The server keeps its VAPID key stable and reuses each VAPID JWT for at least
   message text or sender identity.
 - The server sends more push requests. The 30 s coalescing window limits bursts.
 - Operators must keep a stable VAPID private key and set a valid contact.
+- The iOS notification settings provide a manual **Reset notification service**
+  action for a broken worker. It unsubscribes the current push subscription,
+  unregisters the current app worker, then reloads. It does not clear site storage,
+  encrypted local data, identities, or permission grants. Failed removal must stop
+  the reset and show an error instead of reloading.
 
 ## Validation
 
@@ -53,3 +58,6 @@ The server keeps its VAPID key stable and reuses each VAPID JWT for at least
 - A manual iOS test must install Chat from Safari, grant permission, lock the
   device, send a message, and verify Notification Center and Lock Screen.
 - Tapping the notification must open or focus Chat.
+- Unit tests cover worker-reset ordering, absent workers/subscriptions, failed
+  unsubscribe/unregister, and preservation of local storage. A real iOS test
+  must also confirm that reset reloads Chat without losing encrypted history.

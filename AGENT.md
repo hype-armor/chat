@@ -120,6 +120,8 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   keys over existing state or bypass bootstrap quotas. Run `scripts/test-update-with-bots.sh`
   with mock services after updater changes; keep bot config outside Git and build context.
 - Run browser tests against isolated test services, never a live deployment.
+- Notification service reset must remain a manual action for the current app worker.
+  Unsubscribe before unregistering and reload only after success. Never clear encrypted site data to repair push.
 - Browser and OS permission grants belong to the browser. Do not cache fake grants or keep
   idle camera/microphone streams to avoid prompts. Prevent duplicate capture requests and
   stop active or late-granted tracks when the requesting operation ends.
