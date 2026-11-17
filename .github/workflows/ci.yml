@@ -41,6 +41,10 @@ jobs:
       - name: Install the CI graph test dependency
         run: python3 -m pip install --disable-pip-version-check PyYAML==6.0.3
       - run: python3 scripts/test-ci-graph.py
+      - name: Validate persistent VAPID environment loading without services
+        run: |
+          bash -n scripts/repair-compose-vapid.sh
+          python3 scripts/test-vapid-environment.py
       - run: bash -n scripts/compose-build.sh scripts/test-compose-build.sh update-with-bots.sh scripts/test-update-with-bots.sh
       - run: scripts/test-compose-build.sh
       - name: Test the updater with standard and private caller permissions
