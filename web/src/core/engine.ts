@@ -4923,7 +4923,11 @@ export class Engine {
   }
 
   private group(conversationId: string): Conversation {
-    const conv = this.state.conversations[conversationId]
+    // Through `conv()`: a raw lookup of `__proto__` on a plain map returns
+    // `Object.prototype`, which is truthy, and every caller then writes
+    // into what it got back (leaveGroup sets `status`, acceptRequest clears
+    // `request`, the admin helpers set `admins`).
+    const conv = this.conv(conversationId)
     if (!conv) throw new Error('Unknown conversation')
     return conv
   }
