@@ -200,4 +200,19 @@ describe('one card per live share', () => {
     expect(stored()[0].live).toMatchObject({ ended: true })
     expect(stored()[0].live?.latest).toBeUndefined()
   })
+
+  it('refuses prototype keys instead of writing to Object.prototype (#87, #90)', async () => {
+    const { engine } = fixture('me')
+    const proto = Object.prototype as unknown as Record<string, unknown>
+    // `state.conversations` is a plain object, so a raw lookup of `__proto__`
+    // answers with Object.prototype: truthy, and every caller writes into it.
+    expect(engine['state'].conversations['__proto__']).toBe(Object.prototype)
+    for (const id of ['__proto__', 'constructor', 'prototype']) {
+      await expect(engine.leaveGroup(id)).rejects.toThrow('Unknown conversation')
+      await expect(engine.acceptRequest(id)).rejects.toThrow('Unknown conversation')
+    }
+    expect(proto.status).toBeUndefined()
+    expect(proto.request).toBeUndefined()
+    expect(proto.admins).toBeUndefined()
+  })
 })
