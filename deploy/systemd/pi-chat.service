@@ -20,8 +20,12 @@ RemainAfterExit=yes
 WorkingDirectory=/srv/chat
 Environment=HOME=/root
 Environment=DOCKER_CONFIG=/root/.docker
-ExecStart=/usr/bin/docker compose -f deploy/compose/docker-compose.yml up -d
-ExecStop=/usr/bin/docker compose -f deploy/compose/docker-compose.yml stop
+# The VAPID identity is a persistent host secret. Do not rely on Compose's
+# implicit .env lookup, which can be shadowed by an empty inherited variable.
+# Compose reads this file after systemd starts Docker, which avoids SELinux
+# restrictions on systemd reading files beneath an operator checkout.
+ExecStart=/usr/bin/docker compose --env-file /srv/chat/.env -f deploy/compose/docker-compose.yml up -d
+ExecStop=/usr/bin/docker compose --env-file /srv/chat/.env -f deploy/compose/docker-compose.yml stop
 TimeoutStartSec=900
 TimeoutStopSec=120
 # NoNewPrivileges is left off: the docker CLI needs it off to reach the daemon.

@@ -135,6 +135,9 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   Never restore older labels as fallback or reconstruct headers on history load, request acceptance, unblock, or restore.
   Clear old global consent/caches without migration broadcasts. Retain queued MLS ciphertext to avoid ratchet gaps.
   Keep derived caches account/conversation-scoped and outside backup/sync; preserve approximate wording and GeoNames attribution.
+- Compose startup and shutdown must load the persistent VAPID environment explicitly.
+  The repair command must unset inherited VAPID variables before Compose reads the file.
+  Run `python3 scripts/test-vapid-environment.py`; never test repair against live secrets or containers.
 - Rust Docker build stages must retain the shared BuildKit Cargo lock and CPU-sized
   job budget. Use `scripts/compose-build.sh` for sequential image builds and run
   `scripts/test-compose-build.sh` after changes to build controls.
