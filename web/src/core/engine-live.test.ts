@@ -78,6 +78,10 @@ describe('one card per live share', () => {
 
   it('renews the sender card with the same IDs after an 8-hour pause', async () => {
     const { engine, stored, sendLiveLocation } = fixture('me')
+    // Simulate the Native evidence retained by a pre-binding history row.
+    const original = stored()[0]
+    original.contentHash = 'aa'.repeat(32)
+    await engine['store'].putJson(`messages:${conversationId}`, [original])
     engine['connection'] = 'online'
     engine['state'].live.push({
       sessionId, conversationId, messageId, expiresAt: now - 1000, untilStopped: true,
@@ -93,6 +97,17 @@ describe('one card per live share', () => {
     expect(engine['state'].outbox).toHaveLength(1)
     expect(engine['state'].outbox[0].silent).toBe(true)
     expect(sendLiveLocation.mock.calls[0]?.[1]).toEqual(fromHex(sessionId))
+  })
+
+  it('stops a legacy producer without Native binding evidence instead of reconstructing a hash', async () => {
+    const { engine, sendLiveLocation } = fixture('me')
+    engine['state'].live.push({ sessionId, conversationId, messageId, expiresAt: now + MAX_LIVE_DURATION_MS, untilStopped: true, lastSentAt: 0 })
+    engine['connection'] = 'online'
+    await engine.liveUpdate(point)
+    expect(sendLiveLocation).not.toHaveBeenCalled()
+    expect(engine['state'].live).toEqual([])
+    const view = engine.view()
+    expect(view.phase === 'ready' && view.liveSharing).toEqual([])
   })
 
   it('encodes an until-stopped retry against its renewed lease timestamp', () => {
@@ -184,5 +199,20 @@ describe('one card per live share', () => {
     expect(engine['state'].liveSeen).toEqual([])
     expect(stored()[0].live).toMatchObject({ ended: true })
     expect(stored()[0].live?.latest).toBeUndefined()
+  })
+
+  it('refuses prototype keys instead of writing to Object.prototype (#87, #90)', async () => {
+    const { engine } = fixture('me')
+    const proto = Object.prototype as unknown as Record<string, unknown>
+    // `state.conversations` is a plain object, so a raw lookup of `__proto__`
+    // answers with Object.prototype: truthy, and every caller writes into it.
+    expect(engine['state'].conversations['__proto__']).toBe(Object.prototype)
+    for (const id of ['__proto__', 'constructor', 'prototype']) {
+      await expect(engine.leaveGroup(id)).rejects.toThrow('Unknown conversation')
+      await expect(engine.acceptRequest(id)).rejects.toThrow('Unknown conversation')
+    }
+    expect(proto.status).toBeUndefined()
+    expect(proto.request).toBeUndefined()
+    expect(proto.admins).toBeUndefined()
   })
 })

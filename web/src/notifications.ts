@@ -86,6 +86,21 @@ export async function resetNotificationSubscription(core: CoreClient, setup: Pus
   await core.enablePush(subscription.toJSON())
 }
 
+/**
+ * Removes the worker registration and its push subscription, then reloads.
+ * The page registers a new worker on load. This does not clear site storage.
+ */
+export async function resetNotificationWorker(): Promise<void> {
+  const registration = await navigator.serviceWorker.getRegistration()
+  if (!registration) throw new Error('Chat needs a service worker. Reload the installed app and try again.')
+  const subscription = await registration.pushManager.getSubscription()
+  if (subscription && !(await subscription.unsubscribe())) {
+    throw new Error('Safari could not remove the old notification subscription.')
+  }
+  if (!(await registration.unregister())) throw new Error('Safari could not reset the notification service.')
+  window.location.reload()
+}
+
 /** On start: keep a granted subscription registered, without prompting. */
 export async function refreshSubscription(core: CoreClient) {
   if (notificationState() !== 'granted') return

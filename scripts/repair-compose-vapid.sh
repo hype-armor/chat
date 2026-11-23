@@ -41,7 +41,9 @@ trap 'rm -f -- "$temporary"; unset key' EXIT
 mv -- "$temporary" "$env_file"
 chmod 600 "$env_file"
 
-"${compose[@]}" up -d --force-recreate server
+sudo env -u CHAT_VAPID_PRIVATE_KEY -u CHAT_VAPID_SUBJECT \
+  docker compose --env-file "$repo/$env_file" -f deploy/compose/docker-compose.yml \
+  up -d --force-recreate server
 printf 'Stored the VAPID key in %s and recreated the server.\n' "$env_file"
 if [[ -n $backup ]]; then
   printf 'Saved the previous environment file as %s.\n' "$backup"

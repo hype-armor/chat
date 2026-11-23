@@ -1040,6 +1040,7 @@ impl App {
             body: Some(content::Body::Profile(chat_proto::v1::Profile {
                 display_name: label,
                 avatar: Vec::new(),
+                refresh: false,
             })),
         };
         let envelope = client
@@ -1183,6 +1184,7 @@ impl App {
                 content::Body::Profile(chat_proto::v1::Profile {
                     display_name: label,
                     avatar: Vec::new(),
+                    refresh: false,
                 }),
             ),
             (

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CallIds } from '../ui/groupCall'
-import { type CallRecord, callNotice, formatCallDuration } from './calls'
+import { type CallRecord, callNotice, formatCallDuration, isMissedCallNotice } from './calls'
 
 const call = (over: Partial<CallRecord> = {}): CallRecord => ({
   conversationId: 'c',
@@ -11,6 +11,22 @@ const call = (over: Partial<CallRecord> = {}): CallRecord => ({
 })
 
 describe('call notices', () => {
+  it('recognizes only preview-eligible missed voice and video notices, including stored legacy text', () => {
+    for (const video of [false, true]) for (const outgoing of [false, true]) {
+      for (const end of ['hangup', 'decline', 'busy', 'timeout'] as const) for (const byMe of [false, true]) {
+        for (const answeredAt of [undefined, 0]) {
+          const notice = callNotice(call({ video, outgoing, answeredAt }), end, byMe, 10)
+          expect(isMissedCallNotice(notice.text)).toBe(notice.missed)
+        }
+      }
+    }
+    expect(isMissedCallNotice('📞 Missed voice call')).toBe(true)
+    expect(isMissedCallNotice('🎥 Missed video call')).toBe(true)
+    for (const text of ['', 'Missed voice call', '📞 Missed voice call extra', '📞 Declined voice call']) {
+      expect(isMissedCallNotice(text)).toBe(false)
+    }
+  })
+
   it('shows the length of answered calls', () => {
     expect(callNotice(call({ answeredAt: 1_000 }), 'hangup', false, 63_000)).toEqual({
       text: '📞 Voice call · 1:02',

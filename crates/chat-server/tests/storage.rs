@@ -553,6 +553,10 @@ async fn retirement_fences_a_part_writer_with_a_pre_expiry_transaction(pool: PgP
         .await;
     let id: Uuid = session["upload_id"].as_str().unwrap().parse().unwrap();
     let mut retire = pool.begin().await.unwrap();
+    let (retire_pid,): (i32,) = sqlx::query_as("SELECT pg_backend_pid()")
+        .fetch_one(&mut *retire)
+        .await
+        .unwrap();
     sqlx::query("SELECT upload_id FROM blob_uploads WHERE upload_id = $1 FOR UPDATE")
         .bind(id)
         .fetch_one(&mut *retire)
@@ -578,8 +582,11 @@ async fn retirement_fences_a_part_writer_with_a_pre_expiry_transaction(pool: PgP
                 "SELECT EXISTS(SELECT 1 FROM pg_stat_activity
                  WHERE datname = current_database() AND pid <> pg_backend_pid()
                    AND wait_event_type = 'Lock'
-                   AND query LIKE '%SELECT upload_id FROM blob_uploads%')",
+                   AND $1 = ANY(pg_blocking_pids(pid))
+                   AND query LIKE '%FROM blob_uploads%'
+                   AND query LIKE '%FOR UPDATE%')",
             )
+            .bind(retire_pid)
             .fetch_one(&pool)
             .await
             .unwrap();

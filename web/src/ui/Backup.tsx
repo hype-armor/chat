@@ -2,7 +2,15 @@ import { useState } from 'react'
 import type { CoreClient } from '../core/client'
 
 /** Encrypted backup under a recovery key (FR-MSG-13, ADR-0022). */
-export function Backup({ core, backup }: { core: CoreClient; backup?: { lastAt?: number } }) {
+export function Backup({
+  core,
+  backup,
+  username,
+}: {
+  core: CoreClient
+  backup?: { lastAt?: number }
+  username: string
+}) {
   const [recoveryKey, setRecoveryKey] = useState<string>()
   const [saved, setSaved] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -29,11 +37,26 @@ export function Backup({ core, backup }: { core: CoreClient; backup?: { lastAt?:
         </span>
       </summary>
       {recoveryKey ? (
-        <div className="recovery">
+        <form
+          className="recovery"
+          aria-label="Save recovery key"
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (saved) setRecoveryKey(undefined)
+          }}
+        >
           <p className="small">
-            Your recovery key. Write it down or keep it in a password manager: it's the only way to restore your
-            messages if you lose this device, and we can't show it again.
+            Your recovery key. Save this username and recovery key in a password manager, or write the key down. It is
+            the only way to restore your messages if you lose this device, and we cannot show it again.
           </p>
+          <label>
+            Username
+            <input name="username" value={username} readOnly autoComplete="username" />
+          </label>
+          <label>
+            Recovery key
+            <input name="password" type="password" value={recoveryKey} readOnly autoComplete="new-password" />
+          </label>
           <code className="link-code" data-testid="recovery-key">
             {recoveryKey}
           </code>
@@ -41,10 +64,10 @@ export function Backup({ core, backup }: { core: CoreClient; backup?: { lastAt?:
             <input type="checkbox" checked={saved} onChange={(e) => setSaved(e.target.checked)} />
             I've stored my recovery key somewhere safe
           </label>
-          <button type="button" disabled={!saved} onClick={() => setRecoveryKey(undefined)}>
+          <button type="submit" disabled={!saved}>
             Done
           </button>
-        </div>
+        </form>
       ) : backup ? (
         <>
           <p className="muted small" data-testid="backup-status">
