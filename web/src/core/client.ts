@@ -353,6 +353,10 @@ export class CoreClient {
     expect(await this.call({ type: 'restore', username, recoveryKey }), 'ok')
   }
 
+  async renameUsername(username: string) {
+    expect(await this.call({ type: 'renameUsername', username }), 'ok')
+  }
+
   /** Deletes the account and all its server data; `username` confirms it. */
   async deleteAccount(username: string) {
     expect(await this.call({ type: 'deleteAccount', username }), 'ok')

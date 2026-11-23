@@ -314,6 +314,7 @@ export type CoreRequest =
   | { type: 'dismissAlert'; id: string }
   | { type: 'acceptRequest'; conversationId: string }
   | { type: 'deleteAccount'; username: string }
+  | { type: 'renameUsername'; username: string }
   | { type: 'setupBackup' }
   | { type: 'backupNow' }
   | { type: 'turnOffBackup' }

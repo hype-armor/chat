@@ -146,7 +146,12 @@ export const api = {
   linkStatus: (token: string, code: string) => post<{ device_id: string | null }>('/v1/link/status', { code }, token),
   linkComplete: (code: string, identityKey: string) =>
     post<Registered>('/v1/link/complete', { code, identity_key: identityKey }),
-  deleteAccount: (token: string, username: string) => post<void>('/v1/account/delete', { username }, token),
+  currentAccount: (token: string) => get<{ account_id: string; username: string }>('/v1/account', token),
+  renameAccount: (token: string, username: string, requestId: string) =>
+    post<{ account_id: string; username: string }>('/v1/account/username', { username, request_id: requestId }, token),
+  prepareAccountDeletion: (token: string, username: string, authorization: string) =>
+    post<void>('/v1/account/delete/prepare', { username, authorization }, token),
+  deleteAccount: (token: string, authorization: string) => post<void>('/v1/account/delete', { authorization }, token),
   report: (token: string, report: ReportBody) => post<void>('/v1/reports', report, token),
   keyCount: (token: string) => get<{ available: number }>('/v1/keys/count', token),
   claim: (token: string, deviceIds: string[]) =>

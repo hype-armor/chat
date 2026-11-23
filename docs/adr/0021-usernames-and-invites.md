@@ -5,6 +5,10 @@
 - **Deciders:** project owner, Claude
 - **Related requirements:** FR-ID-1, FR-ID-1a, FR-ID-7, FR-SAF-2, NFR-LEG-5
 
+ADR-0050 adds username changes and permanent retirement of former names. Its
+[current-name deletion policy](0050-username-changes-and-account-deletion.md)
+retains the behavior below.
+
 ## Context
 ADR-0011 made the phone number the account identifier, verified by SMS.
 The owner no longer wants phone verification. Its costs were:
@@ -69,8 +73,7 @@ Options 1 and 2 together.
 - **Simpler and cheaper to run:** the SMS code, SMS provider, SMS-pumping
   limits and the phone column are removed. Roadmap item 16 (SMS provider)
   is gone.
-- Usernames are public handles once shared; people can pick a new
-  account if one leaks. (Changing usernames: a later addition.)
+- Usernames are public handles once shared. ADR-0050 adds username changes.
 
 ## Validation
 - **Server tests:**

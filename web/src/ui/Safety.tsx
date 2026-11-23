@@ -114,6 +114,32 @@ export function BlockedList({ core }: { core: CoreClient }) {
   )
 }
 
+export function RenameUsername({ core }: { core: CoreClient }) {
+  const [username, setUsername] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setMessage('')
+    try {
+      await core.renameUsername(username)
+      setMessage('Username updated. Use the current username for account recovery.')
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err))
+    } finally { setBusy(false) }
+  }
+  return <details className="devices">
+    <summary>Change username</summary>
+    <form className="report" onSubmit={submit}>
+      <p className="small">Your account and keys stay the same. Your old username remains reserved. Changes are rate-limited. If the response is lost, retry the same username.</p>
+      <label>New username<input value={username} onChange={(e) => setUsername(e.target.value)} required autoComplete="off" autoCapitalize="none" /></label>
+      <button type="submit" disabled={busy}>{busy ? 'Changing…' : 'Change username'}</button>
+      {message && <p role="status">{message}</p>}
+    </form>
+  </details>
+}
+
 /** Deleting the account and all its server data (FR-ID-9). */
 export function DeleteAccount({ core }: { core: CoreClient }) {
   const [username, setUsername] = useState('')
@@ -138,7 +164,7 @@ export function DeleteAccount({ core }: { core: CoreClient }) {
       <form className="report" onSubmit={submit}>
         <p className="small">
           This leaves all your chats and groups and deletes your account, devices and undelivered messages from our
-          server. Messages on this device are erased. This can't be undone.
+          server. Messages on this device are erased. This can't be undone. Leaving chats and deleting the account are separate steps. If deletion fails, you may already have left chats. A retry uses the username you first confirmed, even if it changed. The confirmation expires after 24 hours; then confirm the current username again. A lost final response can leave the outcome unknown. Cancellation or late sends can also leave changes incomplete.
         </p>
         <label>
           Type your username to confirm
