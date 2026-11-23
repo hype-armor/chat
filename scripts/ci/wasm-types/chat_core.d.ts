@@ -184,7 +184,7 @@ export class CoreClient {
      * Returns the encoded `Envelope`.
      */
     sendLocation(conversation_id: Uint8Array, latitude: number, longitude: number, accuracy_m: number, label: string, sent_at_ms: number, message_id: Uint8Array, reply_to?: Uint8Array | null, reply_to_hash?: Uint8Array | null): Uint8Array;
-    sendProfile(conversation_id: Uint8Array, display_name: string, avatar: Uint8Array, sent_at_ms: number, message_id: Uint8Array): Uint8Array;
+    sendProfile(conversation_id: Uint8Array, display_name: string, avatar: Uint8Array, refresh: boolean, sent_at_ms: number, message_id: Uint8Array): Uint8Array;
     /**
      * Durable reaction updates use the existing MLS envelope and sender authentication.
      */
@@ -268,6 +268,10 @@ export class EventView {
     set locality(value: LocalityView | null | undefined);
     get location(): LocationView | undefined;
     set location(value: LocationView | null | undefined);
+    /**
+     * This encrypted profile asks the peer to return its current profile.
+     */
+    profileRefresh: boolean;
     get reaction(): Uint8Array | undefined;
     set reaction(value: Uint8Array | null | undefined);
     /**
@@ -553,6 +557,7 @@ export interface InitOutput {
     readonly __wbg_get_eventview_live: (a: number) => number;
     readonly __wbg_get_eventview_locality: (a: number) => number;
     readonly __wbg_get_eventview_location: (a: number) => number;
+    readonly __wbg_get_eventview_profileRefresh: (a: number) => number;
     readonly __wbg_get_eventview_reaction: (a: number) => [number, number];
     readonly __wbg_get_eventview_receiptIds: (a: number) => [number, number];
     readonly __wbg_get_eventview_receiptKind: (a: number) => number;
@@ -643,6 +648,7 @@ export interface InitOutput {
     readonly __wbg_set_eventview_live: (a: number, b: number) => void;
     readonly __wbg_set_eventview_locality: (a: number, b: number) => void;
     readonly __wbg_set_eventview_location: (a: number, b: number) => void;
+    readonly __wbg_set_eventview_profileRefresh: (a: number, b: number) => void;
     readonly __wbg_set_eventview_reaction: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_receiptIds: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_receiptKind: (a: number, b: number) => void;
@@ -726,7 +732,7 @@ export interface InitOutput {
     readonly coreclient_sendLiveLocation: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => [number, number, number, number];
     readonly coreclient_sendLocality: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number, number, number];
     readonly coreclient_sendLocation: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number) => [number, number, number, number];
-    readonly coreclient_sendProfile: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+    readonly coreclient_sendProfile: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number, number, number];
     readonly coreclient_sendReaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => [number, number, number, number];
     readonly coreclient_sendReceipt: (a: number, b: number, c: number, d: number, e: any, f: number, g: number, h: number) => [number, number, number, number];
     readonly coreclient_sendText: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];

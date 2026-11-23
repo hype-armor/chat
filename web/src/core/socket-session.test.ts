@@ -142,6 +142,30 @@ describe('socket and account session isolation', () => {
     expect(engine['resumeTransfers']).not.toHaveBeenCalled()
   })
 
+  it('does not queue profile refreshes when authentication ends during pending-commit recovery', async () => {
+    const engine = setup()
+    let current = true
+    let entered!: () => void
+    let release!: () => void
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    engine['resolvePendingCommit'] = vi.fn(async () => { entered(); await gate })
+    const refresh = vi.fn()
+    const persist = vi.fn(async () => {})
+    engine['queueProfileRefreshes'] = refresh
+    engine['persist'] = persist
+    engine['onFrame']({ kind: 'auth', keyPackages: 0 } as Parameters<Engine['onFrame']>[0], () => current)
+    await started
+    current = false
+    release()
+    await engine['lock']
+    expect(refresh).not.toHaveBeenCalled()
+    expect(persist).not.toHaveBeenCalled()
+    expect(engine['commitDepartures']).not.toHaveBeenCalled()
+    expect(engine['scheduleSync']).not.toHaveBeenCalled()
+    expect(engine['resumeTransfers']).not.toHaveBeenCalled()
+  })
+
   it('does not process or acknowledge a queued delivery from an ended socket session', async () => {
     const engine = setup()
     engine['connect']()

@@ -50,6 +50,8 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   from history, UI, search, downloads, and backup. Rebuilt sidebar previews must
   preserve missed-call notices, exclude other notices/reaction controls, and honor
   deletion tombstones.
+- Profile refresh must retain current-socket and account-lifecycle fences after async waits.
+  Coalescing must never replace an in-flight send or bypass reaction/deletion acceptance gates.
 - Storage writes must reserve ciphertext bytes in the shared quota ledger before object-store I/O
   (ADR-0040). Release charges only after confirmed deletion and fenced writers. Account send
   limits must remain inside the authorized send transaction. Operator policy changes must use

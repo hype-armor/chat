@@ -103,9 +103,91 @@ describe('display names and profile pictures', () => {
     expect(engine['account']?.displayName).toBe('Alice Smith')
     expect(store.putJson).toHaveBeenCalledWith('account', expect.objectContaining({ displayName: 'Alice Smith' }))
     expect(sendProfile).toHaveBeenCalledTimes(1)
-    expect(sendProfile).toHaveBeenCalledWith(expect.any(Uint8Array), 'Alice Smith', expect.any(Uint8Array), expect.any(Number), expect.any(Uint8Array))
+    expect(sendProfile).toHaveBeenCalledWith(expect.any(Uint8Array), 'Alice Smith', expect.any(Uint8Array), false, expect.any(Number), expect.any(Uint8Array))
     expect(sendDeviceSync).toHaveBeenCalledTimes(1)
     expect(engine['state'].outbox).toHaveLength(2)
+  })
+
+  it('refreshes a changed profile once when an offline direct peer returns', async () => {
+    const engine = new Engine(() => {})
+    const sendProfile = vi.fn(() => new Uint8Array([1]))
+    const store = { putJson: vi.fn(async () => {}), putBytes: vi.fn(async () => {}) }
+    engine['account'] = {
+      username: 'alice.01', displayName: 'Alice', accountId: account, deviceId: device, token: '',
+    }
+    engine['store'] = store as unknown as Engine['store']
+    engine['core'] = {
+      identity: () => me,
+      members: () => [me, sender],
+      sendProfile,
+      snapshot: () => new Uint8Array(),
+    } as unknown as NonNullable<Engine['core']>
+    engine['state'].conversations[conversationId] = { id: conversationId, peers: [peer], lastAt: 0 }
+
+    await engine.setDisplayName('Alice Smith')
+    // Bob was offline and missed this first encrypted Profile.
+    engine['state'].outbox = []
+
+    // On return Bob sends one encrypted Profile refresh request in the same,
+    // otherwise unchanged direct conversation.
+    await engine['apply']({
+      kind: 'message', conversationId: fromHex(conversationId), sender, displayName: 'Bob', profileRefresh: true,
+    } as Parameters<Engine['apply']>[0], '77'.repeat(16))
+
+    expect(engine['state'].conversations[conversationId]).toEqual({ id: conversationId, peers: [peer], lastAt: 0 })
+    expect(sendProfile).toHaveBeenLastCalledWith(
+      fromHex(conversationId), 'Alice Smith', expect.any(Uint8Array), false, expect.any(Number), expect.any(Uint8Array),
+    )
+    expect(engine['state'].outbox).toHaveLength(1)
+
+    // Repeated reconnect frames cannot grow the outbox or trigger another reply.
+    engine['state'].outbox = []
+    await engine['apply']({
+      kind: 'message', conversationId: fromHex(conversationId), sender, displayName: 'Bob', profileRefresh: true,
+    } as Parameters<Engine['apply']>[0], '88'.repeat(16))
+    expect(sendProfile).toHaveBeenCalledTimes(2)
+    expect(engine['state'].outbox).toEqual([])
+  })
+
+  it('coalesces repeated reconnect refresh requests for an unchanged direct conversation', () => {
+    const engine = new Engine(() => {})
+    const sendProfile = vi.fn(() => new Uint8Array([1]))
+    engine['account'] = { username: 'alice.01', displayName: 'Alice', accountId: account, deviceId: device, token: '' }
+    engine['core'] = {
+      identity: () => me,
+      members: () => [me, sender],
+      sendProfile,
+    } as unknown as NonNullable<Engine['core']>
+    engine['state'].conversations[conversationId] = { id: conversationId, peers: [peer], lastAt: 0 }
+
+    engine['queueProfileRefreshes']()
+    engine['queueProfileRefreshes']()
+
+    expect(sendProfile).toHaveBeenLastCalledWith(
+      fromHex(conversationId), 'Alice', expect.any(Uint8Array), true, expect.any(Number), expect.any(Uint8Array),
+    )
+    expect(engine['state'].outbox).toHaveLength(1)
+  })
+
+  it('does not request or return profile refreshes for blocked direct contacts', async () => {
+    const engine = new Engine(() => {})
+    const sendProfile = vi.fn(() => new Uint8Array([1]))
+    engine['account'] = { username: 'alice.01', displayName: 'Alice', accountId: account, deviceId: device, token: '' }
+    engine['core'] = {
+      identity: () => me,
+      members: () => [me, sender],
+      sendProfile,
+    } as unknown as NonNullable<Engine['core']>
+    engine['state'].blocked = [peer]
+    engine['state'].conversations[conversationId] = { id: conversationId, peers: [peer], lastAt: 0 }
+
+    engine['queueProfileRefreshes']()
+    await engine['apply']({
+      kind: 'message', conversationId: fromHex(conversationId), sender, displayName: 'Bob', profileRefresh: true,
+    } as Parameters<Engine['apply']>[0], '77'.repeat(16))
+
+    expect(sendProfile).not.toHaveBeenCalled()
+    expect(engine['state'].outbox).toEqual([])
   })
 
   it('rejects an empty or oversized display name', async () => {

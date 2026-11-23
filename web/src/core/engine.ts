@@ -239,6 +239,8 @@ type Outgoing = {
   conversationId: string
   envelope: string
   recipients: string[]
+  /** A coalesced encrypted profile update or refresh request. */
+  profile?: boolean
   /** No Web Push for offline recipients (receipts). */
   silent?: boolean
   /** Transient failures so far (rate limits, server trouble). */
@@ -277,6 +279,10 @@ type State = {
   /** Account id (hex) → username number, for contacts this user looked up. */
   usernames: Record<string, string>
   outbox: Outgoing[]
+  /** Increments when this device learns a new own profile. */
+  profileRevision?: number
+  /** Direct conversation → own profile revision already returned to a refresh request. */
+  profileRefreshes?: Record<string, number>
   meDeletionBatches?: Record<string, { revision: number; failed: boolean }>
   pendingMeDeletions?: { conversationId: string; device: string; bindings: MeDeletionBinding[] }[]
   /** Device-local revision fences. Never include in backup or device sync. */
@@ -410,6 +416,8 @@ export class Engine {
   private reconnectMs = 1000
   private reconnectTimer?: ReturnType<typeof setTimeout>
   private flushing = false
+  /** The outbox entry currently being sent; it cannot safely be replaced. */
+  private sendingOutboxId?: string
   /** Timer for re-sending after a transient failure. */
   private retryTimer?: ReturnType<typeof setTimeout>
   private replenishing = false
@@ -715,6 +723,7 @@ export class Engine {
       if (this.state.pendingCommit) throw new Error('Still finishing an earlier group change; try again shortly')
       if (this.account!.displayName === name) return
       this.account!.displayName = name
+      this.noteProfileChanged()
       await this.store.putJson('account', this.account)
       for (const c of Object.values(this.state.conversations)) {
         if (!c.self && !c.status) this.queueProfile(c.id)
@@ -740,6 +749,7 @@ export class Engine {
     await this.exclusive(async () => {
       if (this.state.pendingCommit) throw new Error('Still finishing an earlier group change; try again shortly')
       this.account!.avatar = bytes ? toBase64(bytes) : undefined
+      this.noteProfileChanged()
       await this.store.putJson('account', this.account)
       for (const c of Object.values(this.state.conversations)) {
         if (!c.self && !c.status) this.queueProfile(c.id)
@@ -1405,16 +1415,20 @@ export class Engine {
     if (!sync || !conv) return
     conv.self = true
     conv.peers = []
-    if (sync.displayName && this.account) {
+    let profileChanged = false
+    if (sync.displayName && this.account && sync.displayName !== this.account.displayName) {
       this.account.displayName = sync.displayName
+      profileChanged = true
       await this.store.putJson('account', this.account)
     }
     // Older linked devices omitted `avatar`; only null explicitly removes it.
     if (this.account && sync.avatar !== undefined && (sync.avatar ?? undefined) !== this.account.avatar) {
       this.account.avatar = sync.avatar ?? undefined
+      profileChanged = true
       await this.store.putJson('account', this.account)
       this.emit({ type: 'avatar', account: this.myAccount() })
     }
+    if (profileChanged) this.noteProfileChanged()
     for (const [account, avatar] of Object.entries(sync.avatars ?? {})) {
       if (avatar !== this.state.avatars[account]) {
         this.state.avatars[account] = avatar
@@ -4217,9 +4231,14 @@ export class Engine {
         this.reconnectMs = 1000
         this.setConnection('online')
         void this.replenishKeyPackages(frame.keyPackages, currentSocket)
-        // Queued before any delivery handler, so it settles first.
+        // Queued before any delivery handler, so it settles first. A returning
+        // direct-contact device asks peers for one encrypted profile refresh.
         void this.exclusive(async () => {
-          if (currentSocket()) await this.resolvePendingCommit()
+          if (!currentSocket()) return
+          await this.resolvePendingCommit()
+          if (!currentSocket()) return
+          this.queueProfileRefreshes()
+          await this.persist()
         }).then(() => {
           if (!currentSocket()) return
           this.commitDepartures()
@@ -4548,6 +4567,7 @@ export class Engine {
         for (const c of Object.values(this.state.conversations)) {
           if (c.peers.includes(from)) this.emit({ type: 'messages', conversationId: c.id })
         }
+        if (event.profileRefresh) this.returnProfileRefresh(conversationId)
       }
       if (text !== undefined) {
         this.stopTypingForMessage(conversationId, from, toHex(splitIdentity(event.sender).device), event.sentAtMs)
@@ -4610,15 +4630,21 @@ export class Engine {
           continue
         }
         if (this.acceptingText.has(item.messageId) || this.acceptingReactions.has(item.messageId) || this.acceptingDeletions.has(item.messageId) || this.acceptingMeDeletionSync.has(item.messageId)) return
-        const result = await this.request((id) =>
-          encodeSend(
-            id,
-            fromBase64(item.envelope),
-            item.recipients.map(fromHex),
-            item.silent ?? false,
-            [],
-          ),
-        )
+        this.sendingOutboxId = item.messageId
+        let result: ServerFrameView | undefined
+        try {
+          result = await this.request((id) =>
+            encodeSend(
+              id,
+              fromBase64(item.envelope),
+              item.recipients.map(fromHex),
+              item.silent ?? false,
+              [],
+            ),
+          )
+        } finally {
+          if (this.sendingOutboxId === item.messageId) this.sendingOutboxId = undefined
+        }
         if (!currentSession() || !result) return // disconnected or invalidated: do not settle another session
         // A request sent before invalidation cannot be recalled.
         let outcome = sendOutcome(result)
@@ -4845,34 +4871,55 @@ export class Engine {
     })
   }
 
-  private queueProfile(conversationId: string) {
-    const conv = this.state.conversations[conversationId]
+  /** Records a local profile change without copying profile data to server-visible state. */
+  private noteProfileChanged() {
+    this.state.profileRevision = (this.state.profileRevision ?? 0) + 1
+  }
+
+  /** An active, accepted direct conversation that may use profile recovery. */
+  private profileRefreshConversation(conv: Conversation): boolean {
+    return !conv.self && !conv.status && !conv.request && conv.peers.length === 1 && !isGroupView(conv) && !this.state.blocked.includes(conv.peers[0])
+  }
+
+  /** A returning device asks every existing direct contact for its current encrypted profile. */
+  private queueProfileRefreshes() {
+    for (const conv of Object.values(this.state.conversations)) {
+      if (this.profileRefreshConversation(conv)) this.queueProfile(conv.id, true)
+    }
+  }
+
+  /** Returns each own profile revision once per direct conversation. */
+  private returnProfileRefresh(conversationId: string) {
+    const conv = this.conv(conversationId)
+    if (!conv || !this.profileRefreshConversation(conv)) return
+    const revision = this.state.profileRevision ?? 0
+    this.state.profileRefreshes ??= {}
+    if (this.state.profileRefreshes[conversationId] === revision) return
+    this.queueProfile(conversationId)
+    this.state.profileRefreshes[conversationId] = revision
+  }
+
+  /**
+   * Queues an encrypted profile update. Only one queued update per conversation
+   * is retained, plus one that may already be in flight. This bounds reconnect
+   * refreshes and keeps the most recent name and avatar.
+   */
+  private queueProfile(conversationId: string, refresh = false) {
+    const conv = this.conv(conversationId)
     if (!conv || (conv.peers.length === 1 && !isGroupView(conv) && this.state.blocked.includes(conv.peers[0]))) return
     if (!this.account!.displayName) return // linked device still waiting for its name
-    const conversation = this.state.conversations[conversationId]
-    if (
-      conversation &&
-      conversation.name === undefined &&
-      conversation.peers.length === 1 &&
-      this.state.blocked.includes(conversation.peers[0])
-    ) {
-      return
-    }
     const messageId = randomId()
     const avatar = this.account!.avatar ? fromBase64(this.account!.avatar) : new Uint8Array()
-    const envelope = this.core!.sendProfile(
-      fromHex(conversationId),
-      this.account!.displayName,
-      avatar,
-      Date.now(),
-      messageId,
-    )
-    this.state.outbox.push({
+    const queued: Outgoing = {
       messageId: toHex(messageId),
       conversationId,
-      envelope: toBase64(envelope),
+      envelope: toBase64(this.core!.sendProfile(fromHex(conversationId), this.account!.displayName, avatar, refresh, Date.now(), messageId)),
       recipients: this.recipients(conversationId),
-    })
+      profile: true,
+    }
+    const previous = this.state.outbox.find((item) => item.profile && item.conversationId === conversationId && item.messageId !== this.sendingOutboxId)
+    if (previous) Object.assign(previous, queued)
+    else this.state.outbox.push(queued)
   }
 
   /**
