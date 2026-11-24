@@ -904,15 +904,10 @@ button.link.danger {
   border: none;
   margin: 0;
   padding: 0;
-  display: grid;
-  gap: 0.25rem;
 }
 
-.report legend {
-  /* WebKit otherwise sizes the legend to its unwrapped intrinsic width. */
-  inline-size: 0;
-  min-inline-size: 100%;
-  max-inline-size: 100%;
+.report fieldset .choice + .choice {
+  margin-top: 0.25rem;
 }
 
 .report .choice,
