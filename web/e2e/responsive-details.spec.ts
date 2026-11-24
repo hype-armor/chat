@@ -18,10 +18,14 @@ async function open(page: Page, width: number, group = true) {
 }
 
 test('report form fits a narrow direct conversation', async ({ page }) => {
-  await open(page, 320, false)
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await page.route('**/v1/**', (route) => route.abort('blockedbyclient'))
+  const name = 'Bob with a long display name'
+  await page.goto(`/e2e/interactions-fixture.html?${new URLSearchParams({ title: name, group: '0' })}`)
+  await page.getByRole('button', { name: new RegExp(name) }).click()
+  await conversationAction(page, 'Report')
   await page.setViewportSize({ width: 320, height: 640 })
   await page.emulateMedia({ colorScheme: 'dark' })
-  await conversationAction(page, 'Report')
   const details = conversationDetails(page)
   await expect(details.getByRole('form')).toBeVisible()
   await expectLayout(page, 'narrow report form', true)

@@ -99,7 +99,24 @@ test.describe('signed-in layout lint', () => {
         await conversationAction(alice, action)
         if (action === 'Report') await expect(conversationDetails(alice).getByRole('form')).toBeVisible()
         else await expect(alice.getByTestId('safety-number')).toBeVisible()
-        await auditLayouts(alice, action)
+        try {
+          await auditLayouts(alice, action)
+        } catch (error) {
+          if (action === 'Report') {
+            const geometry = await conversationDetails(alice).locator('.details-content').evaluate((panel) => {
+              const right = panel.getBoundingClientRect().right
+              return [...panel.querySelectorAll('*')].map((element) => ({
+                element: `${element.tagName.toLowerCase()}.${element.className}`,
+                left: element.getBoundingClientRect().left,
+                right: element.getBoundingClientRect().right,
+                client: element.clientWidth,
+                scroll: element.scrollWidth,
+              })).filter((element) => element.right > right + 1 || element.scroll > element.client + 1)
+            })
+            console.error('Report overflow geometry:', JSON.stringify(geometry))
+          }
+          throw error
+        }
         await closeDetails(alice)
       }
 
