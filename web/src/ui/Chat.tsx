@@ -1464,8 +1464,23 @@ function Conversation({
     const input = composer.current
     if (!input || recording) return
     const resize = () => {
-      input.style.height = 'auto'
-      input.style.height = `${input.scrollHeight + input.offsetHeight - input.clientHeight}px`
+      // Measure away from the live control. Resetting its height on every input
+      // temporarily reflows the message list and can move the focused caret.
+      const mirror = input.cloneNode(false) as HTMLTextAreaElement
+      mirror.removeAttribute('id')
+      mirror.tabIndex = -1
+      mirror.setAttribute('aria-hidden', 'true')
+      mirror.value = input.value
+      Object.assign(mirror.style, {
+        position: 'absolute', visibility: 'hidden', pointerEvents: 'none',
+        boxSizing: 'border-box', width: `${input.offsetWidth}px`, height: 'auto',
+        minHeight: '0', maxHeight: 'none', overflow: 'hidden',
+      })
+      input.parentElement!.appendChild(mirror)
+      const height = mirror.scrollHeight + mirror.offsetHeight - mirror.clientHeight
+      mirror.remove()
+      const next = `${height}px`
+      if (input.style.height !== next) input.style.height = next
     }
     resize()
     let width = input.clientWidth
@@ -1659,7 +1674,8 @@ function Conversation({
                   className={`${m.from === 'me' ? 'mine' : 'theirs'}${first ? ' run-first' : ''}${last ? ' run-last' : ''}`}
                   title={new Date(m.sentAt).toLocaleString()}
                   author={m.from === 'me' ? 'You' : m.fromName ?? title}
-                  enabled={m.canDeleteForMe === true || m.canDeleteForEveryone === true || (active && !blocked && !request && !m.deleted && (m.canReply === true || m.canReact === true))}
+                  enabled={(!m.deleted && !!m.text) || m.canDeleteForMe === true || m.canDeleteForEveryone === true || (active && !blocked && !request && !m.deleted && (m.canReply === true || m.canReact === true))}
+                  copyText={!m.deleted && m.text ? m.text : undefined}
                   onDeleteForMe={m.canDeleteForMe === true ? () => beginDeletion(m, 'me') : undefined}
                   onDeleteForEveryone={!m.deleted && m.canDeleteForEveryone === true ? () => beginDeletion(m, 'everyone') : undefined}
                   deleteForEveryoneUntil={m.deleteForEveryoneUntil}
@@ -1869,8 +1885,10 @@ function Conversation({
             maxLength={4000}
           />
           {draft.length > 0 && !recording && (
-            <button type="submit" disabled={!draft.trim()} onMouseDown={(e) => e.preventDefault()}>
-              Send
+            <button type="submit" className="composer-send" aria-label="Send" disabled={!draft.trim()} onMouseDown={(e) => e.preventDefault()}>
+              <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 19V5M5 12l7-7 7 7" />
+              </svg>
             </button>
           )}
           <Recorder

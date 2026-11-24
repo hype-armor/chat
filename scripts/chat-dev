@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Shared caches for this repository. Use --isolated for worktree-local caches.
+set -euo pipefail
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+root="${CHAT_DEV_WORKTREE:-$root}"
+isolated=false
+if [[ ${1:-} == --isolated ]]; then isolated=true; shift; fi
+if (($# == 0)); then echo 'Usage: scripts/chat-dev [--isolated] command [args...]' >&2; exit 2; fi
+if [[ $isolated == true ]]; then
+  cache="$root/target/chat-dev-isolated"
+else
+  cache="${CHAT_DEV_CACHE_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/chat-dev}"
+fi
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$cache/target}"
+export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$cache/playwright}"
+export npm_config_store_dir="${npm_config_store_dir:-$cache/pnpm-store}"
+if [[ $isolated == true ]]; then
+  export CARGO_TARGET_DIR="$cache/target"
+  export CARGO_HOME="$cache/cargo-home"
+  export PLAYWRIGHT_BROWSERS_PATH="$cache/playwright"
+  export npm_config_store_dir="$cache/pnpm-store"
+fi
+# Native bot tools can otherwise assume a worktree-local target directory.
+export CHAT_BOT_BINARY="${CHAT_BOT_BINARY:-$CARGO_TARGET_DIR/debug/chat-bot}"
+export BOT_TEST_SERVER_BINARY="${BOT_TEST_SERVER_BINARY:-$CARGO_TARGET_DIR/debug/chat-server}"
+export BOT_TEST_CHAT_BOT_BINARY="${BOT_TEST_CHAT_BOT_BINARY:-$CARGO_TARGET_DIR/debug/chat-bot}"
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}"
+exec "$@"

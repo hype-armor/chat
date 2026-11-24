@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Pull and rebuild only changed server, web, and echo inputs.
-# First run establishes a baseline. --force rebuilds all three images.
+# Pull and rebuild changed server and web inputs before restarting.
+# Echo uses its existing images and is not rebuilt by this script.
+# First run establishes a baseline. --force rebuilds the app images.
 # --dry-run inspects the current checkout without pulling or deploying.
-# After success, prune unused builder cache older than 24h (builder-wide).
+# --build-only pulls and builds but does not stop or start services.
+# A supervisor may inherit the existing update lock via CHAT_UPDATE_LOCK_FD.
+# After deployment, prune unused builder cache older than 24h (builder-wide).
 # Override retention with CHAT_BUILD_CACHE_MAX_AGE, e.g. 72h.
 set -euo pipefail
 
@@ -15,7 +18,7 @@ import stat
 import subprocess
 import sys
 
-compose = ['docker', 'compose', '-f', 'deploy/compose/docker-compose.yml', '--profile', 'echo']
+compose = ['docker', 'compose', '--env-file', '.env', '-f', 'deploy/compose/docker-compose.yml', '--profile', 'echo']
 config = json.loads(subprocess.check_output(compose + ['config', '--format', 'json']))
 services = ['server', 'web', 'echo']
 hashes = {name: hashlib.sha256(b'chat-update-inputs-v1\0') for name in services}
@@ -93,17 +96,20 @@ for service in services:
                     binds.update(chunk)
         else:
             binds.update(b'not-a-regular-file\0')
-    print(service, hashes[service].hexdigest(), image, binds.hexdigest(), sep='\t')
+    invite = config['services']['echo-invite']
+    invite_image = invite.get('image') or config['name'] + '-echo-invite'
+    print(service, hashes[service].hexdigest(), image, binds.hexdigest(), invite_image, sep='\t')
 PY
 }
 
 main() {
-  local force=false dry_run=false
+  local force=false dry_run=false build_only=false
   while (($#)); do
     case "$1" in
       --force) force=true ;;
       --dry-run) dry_run=true ;;
-      --help|-h) printf 'Usage: %s [--force] [--dry-run]\n' "$0"; return ;;
+      --build-only) build_only=true ;;
+      --help|-h) printf 'Usage: %s [--force] [--dry-run] [--build-only]\n' "$0"; return ;;
       *) printf 'Unknown argument: %s\n' "$1" >&2; return 2 ;;
     esac
     shift
@@ -113,20 +119,64 @@ main() {
   cd -- "$(dirname -- "$script")"
   local state
   state=$(git rev-parse --git-path chat-update)
-  local -a compose=(docker compose -f deploy/compose/docker-compose.yml --profile echo)
+  local -a compose=(docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile echo)
   if [[ $dry_run == false ]]; then
     mkdir -p -- "$state"
-    exec 9>"$state/lock"
-    flock -n 9 || { printf 'Another update is running.\n' >&2; return 1; }
+    if [[ -n ${CHAT_UPDATE_LOCK_FD:-} ]]; then
+      # A maintenance supervisor can hold this exact lock across builds and
+      # deployment. A different or closed descriptor is never accepted.
+      local inherited=$CHAT_UPDATE_LOCK_FD inherited_id lock_id
+      [[ $inherited =~ ^[0-9]+$ && $inherited -ge 3 && $inherited -le 255 ]] || {
+        printf 'Invalid inherited update lock descriptor.\n' >&2; return 1;
+      }
+      inherited_id=$(stat -Lc '%d:%i' "/proc/self/fd/$inherited") || return 1
+      lock_id=$(stat -Lc '%d:%i' "$state/lock") || return 1
+      [[ $inherited_id == "$lock_id" ]] || {
+        printf 'Inherited descriptor is not the update lock.\n' >&2; return 1;
+      }
+      flock -n "$inherited" || { printf 'Another update is running.\n' >&2; return 1; }
+    else
+      exec 9>"$state/lock"
+      flock -n 9 || { printf 'Another update is running.\n' >&2; return 1; }
+    fi
+    # The supervisor creates $state/maintenance-in-progress under this same
+    # lock before a migration and removes it only after recovery is complete.
+    # The Git directory and state directory must be private to trusted operators;
+    # this presence gate is not protection against a writer that can remove it.
+    # Any object at this name blocks updates, including malformed files and links.
+    if ! python3 - "$state/maintenance-in-progress" <<'PY'
+import os
+import sys
+
+try:
+    os.lstat(sys.argv[1])
+except FileNotFoundError:
+    sys.exit(0)
+except OSError as error:
+    print(f'Cannot check maintenance marker: {error}', file=sys.stderr)
+    sys.exit(1)
+print('Maintenance marker exists; supervised recovery is required.', file=sys.stderr)
+sys.exit(1)
+PY
+    then
+      return 1
+    fi
     git pull --ff-only
   else
     printf 'Dry run: current checkout only; no pull, build, or deployment.\n'
   fi
 
-  local plan service digest image bind_digest previous previous_image previous_bind current
+  local plan service digest image bind_digest invite_image previous previous_image previous_bind current
+  local echo_image= echo_invite_image=
   local -a builds=() recreate=()
   plan=$(fingerprints)
-  while IFS=$'\t' read -r service digest image bind_digest; do
+  while IFS=$'\t' read -r service digest image bind_digest invite_image; do
+    if [[ $service == echo ]]; then
+      echo_image=$image
+      echo_invite_image=$invite_image
+      printf 'echo: reuse existing image; automatic builds are disabled\n'
+      continue
+    fi
     previous= previous_image= previous_bind=
     if [[ -f "$state/$service" ]]; then
       if ! read -r previous previous_image previous_bind < "$state/$service"; then
@@ -147,9 +197,20 @@ main() {
   done <<< "$plan"
   if [[ $dry_run == true ]]; then return; fi
 
+  # The echo profile still starts during deployment. Fail before stopping the
+  # stack if either of its existing images is unavailable; never build them here.
+  if [[ $build_only == false ]]; then
+    for image in "$echo_image" "$echo_invite_image"; do
+      if [[ -z $image ]] || ! docker image inspect "$image" >/dev/null 2>&1; then
+        printf 'Required existing echo image is missing: %s\n' "$image" >&2
+        return 1
+      fi
+    done
+  fi
+
   # Never call the wrapper with an empty list: its default builds all images.
   if ((${#builds[@]})); then
-    sudo env CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}" ./scripts/compose-build.sh "${builds[@]}"
+    sudo env CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-$(nproc)}" ./scripts/compose-build.sh "${builds[@]}"
   else
     printf 'No image builds needed.\n'
   fi
@@ -158,18 +219,27 @@ main() {
     printf 'Build inputs changed during the update. Run update.sh again.\n' >&2
     return 1
   fi
-  while IFS=$'\t' read -r service digest image bind_digest; do
-    local -a extra=()
-    local item
-    for item in "${recreate[@]}"; do
-      if [[ $item == "$service" ]]; then extra=(--force-recreate); fi
-    done
-    "${compose[@]}" up -d --no-deps --no-build "${extra[@]}" "$service"
-  done <<< "$plan"
+  if [[ $build_only == true ]]; then
+    printf 'Build complete; services were not changed.\n'
+    return
+  fi
+  # Remember whether the optional HTTPS profile is running. Compose down
+  # removes the project's containers, including dependencies and profiles.
+  local running
+  running=$("${compose[@]}" --profile https ps --status running --services)
+  local -a startup=("${compose[@]}")
+  if grep -Fxq https <<< "$running"; then
+    startup+=(--profile https)
+  fi
+  # Keep the existing stack online during the builds above. Do not pass -v:
+  # PostgreSQL, blobs, and other named volumes must survive the restart.
+  "${compose[@]}" down
+  "${startup[@]}" up -d --no-build
 
   # Advance state only after every build and deployment command succeeds.
   local temporary
-  while IFS=$'\t' read -r service digest image bind_digest; do
+  while IFS=$'\t' read -r service digest image bind_digest invite_image; do
+    [[ $service == echo ]] && continue
     current=$(docker image inspect --format '{{.Id}}' "$image")
     temporary=$(mktemp "$state/.next.XXXXXX")
     printf '%s %s %s\n' "$digest" "$current" "$bind_digest" > "$temporary"

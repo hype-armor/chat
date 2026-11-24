@@ -16,8 +16,10 @@ fi
 
 profile="${1:-release}"
 cargo build --profile "$profile" --target wasm32-unknown-unknown -p chat-core --features wasm
+# Cargo metadata resolves shared targets and explicit target-dir overrides.
+target_dir=$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
 wasm-bindgen --target web --out-dir web/src/core/pkg \
-  "target/wasm32-unknown-unknown/$profile/chat_core.wasm"
+  "$target_dir/wasm32-unknown-unknown/$profile/chat_core.wasm"
 
 # Optional size optimisation when binaryen's wasm-opt is installed.
 if command -v wasm-opt >/dev/null; then

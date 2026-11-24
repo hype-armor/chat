@@ -429,6 +429,39 @@ test('message actions stay hidden until keyboard invocation and restore focus on
   await expect(page.getByRole('button', { name: 'Cancel reply', exact: true })).toHaveCount(0)
 })
 
+test('message Copy writes only the exact message text and reports success and failure', async ({ page }) => {
+  await openFixture(page)
+  const text = 'Copy this link https://example.com/path\nand this line'
+  await page.getByRole('textbox', { name: 'Message', exact: true }).fill(text)
+  await page.getByRole('button', { name: 'Send', exact: true }).click()
+  const message = messages(page).filter({ hasText: 'and this line' }).last()
+  await expect(message).toBeVisible()
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: async (value: string) => { document.documentElement.dataset.copied = value } },
+    })
+  })
+  await message.focus()
+  await message.press('Shift+F10')
+  const menu = page.getByRole('menu', { name: 'Message actions', exact: true })
+  await menu.getByRole('menuitem', { name: 'Copy', exact: true }).click()
+  await expect(menu.getByRole('status')).toHaveText('Message copied')
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.copied)).toBe(text)
+  await menu.press('Escape')
+  await expect(message).toBeFocused()
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true, value: { writeText: async () => { throw new Error('private browser details') } },
+    })
+  })
+  await message.press('Shift+F10')
+  await menu.getByRole('menuitem', { name: 'Copy', exact: true }).click()
+  await expect(menu.getByRole('alert')).toHaveText('Could not copy message. Select the text to copy it manually.')
+  await expect(menu).not.toContainText('private browser details')
+  await expect(menu.getByRole('menuitem', { name: 'Copy', exact: true })).toBeVisible()
+})
+
 test('touch long press opens Reply and movement, scroll, release, and cancellation stop the gesture', async ({ page }) => {
   await openFixture(page)
   await fixtureSend(page, 'Touch action original')
@@ -454,6 +487,7 @@ test('touch long press opens Reply and movement, scroll, release, and cancellati
   await page.clock.runFor(600)
   await expect(page.getByRole('menu', { name: 'Conversation menu', exact: true })).toHaveCount(0)
   await expect(menu).toBeVisible()
+  await expect(menu.getByRole('menuitem', { name: 'Copy', exact: true })).toBeVisible()
   await message.dispatchEvent('pointerup', pointer)
   // Model mobile selection/contextmenu that arrives after the finger lifts.
   const delayed = await message.locator('.text').evaluate((element) => {
@@ -722,27 +756,26 @@ test(`messages with canReply=${eligibility} have no custom reply action and pres
   const menu = page.getByRole('menu', { name: 'Message actions', exact: true })
   await composer.fill('Preserve this draft')
   await legacy.click({ button: 'right' })
-  await expect(menu).toHaveCount(0)
+  await expect(menu.getByRole('menuitem', { name: 'Copy', exact: true })).toBeVisible()
+  await expect(menu.getByRole('menuitem', { name: 'Reply', exact: true })).toHaveCount(0)
   await page.keyboard.press('Escape')
   await expect(preview).toHaveCount(0)
   await expect(composer).toHaveValue('Preserve this draft')
   await expect(page.getByRole('alert')).toHaveCount(0)
-  await expect(legacy).not.toHaveAttribute('aria-haspopup', 'menu')
+  await expect(legacy).toHaveAttribute('aria-haspopup', 'menu')
   await page.clock.install()
   await legacy.dispatchEvent('pointerdown', { pointerId: 21, pointerType: 'touch', isPrimary: true, button: 0 })
   await page.clock.runFor(600)
-  await expect(menu).toHaveCount(0)
+  await expect(menu.getByRole('menuitem', { name: 'Copy', exact: true })).toBeVisible()
+  await expect(menu.getByRole('menuitem', { name: 'Reply', exact: true })).toHaveCount(0)
   await legacy.dispatchEvent('pointerup', { pointerId: 21, pointerType: 'touch', isPrimary: true, button: 0 })
-  expect(await legacy.evaluate((element) => {
-    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
-    element.dispatchEvent(event)
-    return event.defaultPrevented
-  })).toBe(false)
+  await page.keyboard.press('Escape')
 
   await replyToMessage(page, original)
   await expect(preview).toContainText('Verified new original')
   await legacy.click({ button: 'right' })
-  await expect(menu).toHaveCount(0)
+  await expect(menu.getByRole('menuitem', { name: 'Reply', exact: true })).toHaveCount(0)
+  await expect(menu.getByRole('menuitem', { name: 'Copy', exact: true })).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(composer).toHaveValue('Preserve this draft')
   await expect(preview).toContainText('Verified new original')

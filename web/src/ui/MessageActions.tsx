@@ -10,12 +10,13 @@ const MOVE_LIMIT_PX = 10
 const NATIVE_TARGET = 'a, button, summary, input, textarea, select, [contenteditable], audio, video, img, canvas, iframe, [role="button"], [role="link"], [role="menu"]'
 
 /** A message keeps native link/media gestures. Its own menu has no permanent trigger. */
-export function MessageActions({ children, className, title, author, enabled, onReply, onReact, onDeleteForMe, onDeleteForEveryone, deleteForEveryoneUntil }: {
+export function MessageActions({ children, className, title, author, enabled, copyText, onReply, onReact, onDeleteForMe, onDeleteForEveryone, deleteForEveryoneUntil }: {
   children: ReactNode
   className: string
   title: string
   author: string
   enabled: boolean
+  copyText?: string
   onReply?: () => void
   onReact?: (emoji: string) => void
   onDeleteForMe?: () => void
@@ -26,6 +27,7 @@ export function MessageActions({ children, className, title, author, enabled, on
   const menu = useRef<HTMLDivElement>(null)
   const reply = useRef<HTMLButtonElement>(null)
   const press = useRef<{ id: number; x: number; y: number; timer: ReturnType<typeof setTimeout> } | undefined>(undefined)
+  const actionGeneration = useRef(0)
   const suppressClick = useRef(false)
   const ownedTouch = useRef(false)
   const cancelledTouch = useRef(false)
@@ -33,6 +35,7 @@ export function MessageActions({ children, className, title, author, enabled, on
   const [pending, setPending] = useState(false)
   const [placed, setPlaced] = useState(false)
   const [selecting, setSelecting] = useState(false)
+  const [copyResult, setCopyResult] = useState<'success' | 'error'>()
   const now = useDeletionDeadline(deleteForEveryoneUntil)
   const everyoneAvailable = !!onDeleteForEveryone && deleteForEveryoneUntil !== undefined && now <= deleteForEveryoneUntil
 
@@ -47,6 +50,7 @@ export function MessageActions({ children, className, title, author, enabled, on
     cancelPress()
   }
   const close = (restore = false) => {
+    actionGeneration.current++
     cancelGesture()
     setPosition(undefined)
     setSelecting(false)
@@ -58,6 +62,8 @@ export function MessageActions({ children, className, title, author, enabled, on
     return !!selection && !selection.isCollapsed
   }
   const open = (x: number, y: number) => {
+    actionGeneration.current++
+    setCopyResult(undefined)
     cancelPress()
     setPlaced(false)
     setPosition({ x, y })
@@ -121,7 +127,20 @@ export function MessageActions({ children, className, title, author, enabled, on
     }
   }, [pending, position])
 
-  useEffect(() => () => { if (press.current) clearTimeout(press.current.timer) }, [])
+  useEffect(() => () => { actionGeneration.current++; if (press.current) clearTimeout(press.current.timer) }, [])
+
+  const copy = async () => {
+    if (copyText === undefined) return
+    const generation = ++actionGeneration.current
+    setCopyResult(undefined)
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable')
+      await navigator.clipboard.writeText(copyText)
+      if (generation === actionGeneration.current) setCopyResult('success')
+    } catch {
+      if (generation === actionGeneration.current) setCopyResult('error')
+    }
+  }
 
   useLayoutEffect(() => {
     if (!position || !menu.current) return
@@ -155,7 +174,7 @@ export function MessageActions({ children, className, title, author, enabled, on
       viewport?.removeEventListener('resize', fit)
       viewport?.removeEventListener('scroll', fit)
     }
-  }, [position, selecting, everyoneAvailable])
+  }, [position, selecting, everyoneAvailable, copyResult])
 
   useLayoutEffect(() => {
     if (position && placed) menu.current?.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true })
@@ -237,6 +256,9 @@ export function MessageActions({ children, className, title, author, enabled, on
         aria-label={reactionLabel(emoji)} onClick={() => { close(true); onReact?.(emoji) }}>{emoji} {reactionLabel(emoji)}</button>) : <>
         {onReply && <button ref={reply} type="button" role="menuitem" tabIndex={-1} onClick={() => { close(); onReply() }}>Reply</button>}
         {onReact && <button type="button" role="menuitem" tabIndex={-1} onClick={() => setSelecting(true)}>React</button>}
+        {copyText !== undefined && <button type="button" role="menuitem" tabIndex={-1} onClick={() => void copy()}>Copy</button>}
+        {copyResult === 'success' && <span role="status">Message copied</span>}
+        {copyResult === 'error' && <span role="alert">Could not copy message. Select the text to copy it manually.</span>}
         {onDeleteForMe && <button type="button" role="menuitem" tabIndex={-1} onClick={() => { close(true); onDeleteForMe() }}>Delete for me</button>}
         {everyoneAvailable && <button type="button" role="menuitem" tabIndex={-1} onClick={() => { close(true); onDeleteForEveryone?.() }}>Delete for everyone</button>}
       </>}
