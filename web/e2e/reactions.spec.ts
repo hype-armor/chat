@@ -1,7 +1,43 @@
+import type { Locator } from '@playwright/test'
 import { expect, test } from './fixtures'
 import { fixtureAction, fixtureSend } from './interaction-fixture-support'
 
 test.skip(!process.env.E2E_UI_FIXTURES, 'use playwright.fixtures.config.ts')
+
+async function settleReactionLayout(message: Locator) {
+  await expect(message).toBeVisible()
+  await message.evaluate(async (element) => {
+    await document.fonts.ready
+    const messages = element.closest('.messages-viewport')!
+    const viewport = window.visualViewport
+    let notifications = 0
+    const changed = () => { notifications++ }
+    document.addEventListener('scroll', changed, true)
+    viewport?.addEventListener('scroll', changed)
+    viewport?.addEventListener('resize', changed)
+    try {
+      let previous = ''
+      let quietFrames = 0
+      // Focus and reaction layout can queue scroll events after scrollTop settles.
+      while (quietFrames < 2) {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+        if (!element.isConnected) throw new Error('The message disappeared before layout settled')
+        const bounds = element.getBoundingClientRect()
+        const sample = JSON.stringify([
+          bounds.x, bounds.y, bounds.width, bounds.height,
+          messages.scrollTop, messages.scrollHeight, messages.clientWidth, messages.clientHeight,
+          viewport?.width, viewport?.height, viewport?.offsetLeft, viewport?.offsetTop, notifications,
+        ])
+        quietFrames = sample === previous ? quietFrames + 1 : 0
+        previous = sample
+      }
+    } finally {
+      document.removeEventListener('scroll', changed, true)
+      viewport?.removeEventListener('scroll', changed)
+      viewport?.removeEventListener('resize', changed)
+    }
+  })
+}
 
 test('reaction picker fits a 250px visual viewport and keeps its final item reachable', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
@@ -16,12 +52,8 @@ test('reaction picker fits a 250px visual viewport and keeps its final item reac
     Object.defineProperty(viewport, 'offsetTop', { configurable: true, value: 100 })
     viewport.dispatchEvent(new Event('resize'))
   })
-  // Let keyboard-induced conversation scrolling finish before opening the menu.
-  await expect.poll(() => page.locator('.messages-viewport').evaluate((el) => {
-    const top = el.scrollTop
-    return new Promise<boolean>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(el.scrollTop === top))))
-  })).toBe(true)
   await message.focus()
+  await settleReactionLayout(message)
   await message.press('Shift+F10')
   await page.getByRole('menuitem', { name: 'React', exact: true }).click()
   const picker = page.getByRole('menu', { name: 'Choose reaction', exact: true })
@@ -45,8 +77,10 @@ test('reaction picker fits a 250px visual viewport and keeps its final item reac
   await finalItem.press('Enter')
   await expect(message.getByRole('button', { name: 'Thanks, 1, remove your reaction', exact: true })).toBeVisible()
   await message.focus()
+  await settleReactionLayout(message)
   await message.press('Shift+F10')
   await page.getByRole('menuitem', { name: 'React', exact: true }).click()
+  await expect(picker).toBeVisible()
   await page.locator('.messages-viewport').evaluate((el) => el.dispatchEvent(new Event('scroll')))
   await expect(picker).toHaveCount(0)
 })
