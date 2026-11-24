@@ -909,6 +909,9 @@ button.link.danger {
 }
 
 .report legend {
+  /* WebKit otherwise sizes the legend to its unwrapped intrinsic width. */
+  inline-size: 0;
+  min-inline-size: 100%;
   max-inline-size: 100%;
 }
 
