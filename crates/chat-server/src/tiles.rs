@@ -140,7 +140,7 @@ impl Tiles {
         }
         let backend = HttpBackend::try_from(self.http.clone(), url.as_str())?;
         let reader = Arc::new(
-            AsyncPmTilesReader::try_from_cached_source(backend, HashMapCache::default()).await?,
+            AsyncPmTilesReader::try_from_source_and_cache(backend, HashMapCache::default()).await?,
         );
         *slot = Some((url, reader.clone()));
         Ok(reader)

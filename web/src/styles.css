@@ -1643,6 +1643,15 @@ button.conversation-title {
   border-radius: 1.25rem;
 }
 
+.composer-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0.5rem;
+}
+
 .composer .menu-items {
   top: auto;
   bottom: calc(100% + 0.5rem);

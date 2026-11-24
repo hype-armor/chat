@@ -194,6 +194,7 @@ impl Echo {
                 content::Body::Profile(Profile {
                     display_name: self.name.clone(),
                     avatar: Vec::new(),
+                    refresh: false,
                 }),
                 now_ms,
                 false,

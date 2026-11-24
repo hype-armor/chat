@@ -25,7 +25,7 @@ describe('profile pictures over MLS', () => {
 
   it('delivers the sender’s picture with the name', () => {
     const { alice, bob, conversationId } = pair()
-    const event = bob.receive(alice.sendProfile(conversationId, 'Alice', photo, Date.now(), randomId()))
+    const event = bob.receive(alice.sendProfile(conversationId, 'Alice', photo, false, Date.now(), randomId()))
     expect(event.kind).toBe('message')
     expect(event.displayName).toBe('Alice')
     expect(event.avatar).toEqual(photo)
@@ -33,8 +33,15 @@ describe('profile pictures over MLS', () => {
 
   it('reports no picture when the profile carries none', () => {
     const { alice, bob, conversationId } = pair()
-    const event = bob.receive(alice.sendProfile(conversationId, 'Alice', new Uint8Array(), Date.now(), randomId()))
+    const event = bob.receive(alice.sendProfile(conversationId, 'Alice', new Uint8Array(), false, Date.now(), randomId()))
     expect(event.displayName).toBe('Alice')
     expect(event.avatar).toBeUndefined()
+  })
+
+  it('carries a profile refresh request only inside MLS', () => {
+    const { alice, bob, conversationId } = pair()
+    const event = bob.receive(alice.sendProfile(conversationId, 'Alice', new Uint8Array(), true, Date.now(), randomId()))
+    expect(event.displayName).toBe('Alice')
+    expect(event.profileRefresh).toBe(true)
   })
 })
