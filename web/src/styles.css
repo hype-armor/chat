@@ -908,6 +908,10 @@ button.link.danger {
   gap: 0.25rem;
 }
 
+.report legend {
+  max-inline-size: 100%;
+}
+
 .report .choice,
 .devices .choice {
   display: grid;
