@@ -1537,7 +1537,8 @@ function Conversation({
                   className={`${m.from === 'me' ? 'mine' : 'theirs'}${first ? ' run-first' : ''}${last ? ' run-last' : ''}`}
                   title={new Date(m.sentAt).toLocaleString()}
                   author={m.from === 'me' ? 'You' : m.fromName ?? title}
-                  enabled={m.canDeleteForMe === true || m.canDeleteForEveryone === true || (active && !blocked && !request && !m.deleted && (m.canReply === true || m.canReact === true))}
+                  enabled={(!m.deleted && !!m.text) || m.canDeleteForMe === true || m.canDeleteForEveryone === true || (active && !blocked && !request && !m.deleted && (m.canReply === true || m.canReact === true))}
+                  copyText={!m.deleted && m.text ? m.text : undefined}
                   onDeleteForMe={m.canDeleteForMe === true ? () => beginDeletion(m, 'me') : undefined}
                   onDeleteForEveryone={!m.deleted && m.canDeleteForEveryone === true ? () => beginDeletion(m, 'everyone') : undefined}
                   deleteForEveryoneUntil={m.deleteForEveryoneUntil}
