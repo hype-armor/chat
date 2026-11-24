@@ -92,19 +92,12 @@ where
 mod tests {
     use super::*;
     use crate::storage_drain::DrainOutcome;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::task::{Wake, Waker};
+    use std::task::Waker;
     use std::time::Duration;
 
-    struct Noop;
-    impl Wake for Noop {
-        fn wake(self: Arc<Self>) {}
-    }
-
     fn poll<F: Future>(future: Pin<&mut F>) -> Poll<F::Output> {
-        let waker = Waker::from(Arc::new(Noop));
-        future.poll(&mut Context::from_waker(&waker))
+        future.poll(&mut Context::from_waker(Waker::noop()))
     }
 
     fn outcome(gate: &StorageDrain) -> DrainOutcome {
@@ -123,7 +116,7 @@ mod tests {
     #[test]
     fn pending_drop_is_uncertain() {
         let gate = StorageDrain::new();
-        let mut future = track(&gate, || std::future::pending::<Result<(), ()>>()).unwrap();
+        let mut future = track(&gate, std::future::pending::<Result<(), ()>>).unwrap();
         assert!(poll(Pin::new(&mut future)).is_pending());
         assert_eq!(outcome(&gate), DrainOutcome::TimedOut);
         drop(future);
