@@ -100,15 +100,21 @@ pub async fn register(
         limits::DAY,
     )
     .await?;
-    let created: Option<(Uuid,)> = sqlx::query_as(
-        "INSERT INTO accounts (account_id, username) VALUES ($1, $2)
-         ON CONFLICT (username) DO NOTHING RETURNING account_id",
+    let account_id = Uuid::new_v4();
+    let reserved: Option<(String,)> = sqlx::query_as(
+        "INSERT INTO username_reservations (username, account_id) VALUES ($1, $2)
+         ON CONFLICT (username) DO NOTHING RETURNING username",
     )
-    .bind(Uuid::new_v4())
     .bind(&username)
+    .bind(account_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (account_id,) = created.ok_or(ApiError::Conflict("that username is taken"))?;
+    reserved.ok_or(ApiError::Conflict("that username is taken"))?;
+    sqlx::query("INSERT INTO accounts (account_id, username) VALUES ($1, $2)")
+        .bind(account_id)
+        .bind(&username)
+        .execute(&mut *tx)
+        .await?;
     let registered = create_device(&mut tx, account_id, username, identity_key).await?;
     tx.commit().await?;
     Ok(Json(registered))
@@ -129,14 +135,15 @@ pub fn parse_identity_key(raw: &str) -> Result<Vec<u8>, ApiError> {
 pub async fn create_device(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     account_id: Uuid,
-    username: String,
+    _username: String,
     identity_key: Vec<u8>,
 ) -> Result<Registered, ApiError> {
-    // Serialise registrations per account so the limit holds.
-    sqlx::query("SELECT 1 FROM accounts WHERE account_id = $1 FOR UPDATE")
-        .bind(account_id)
-        .execute(&mut **tx)
-        .await?;
+    // Read the username under the same lock that serializes renames and links.
+    let (username,): (String,) =
+        sqlx::query_as("SELECT username FROM accounts WHERE account_id = $1 FOR UPDATE")
+            .bind(account_id)
+            .fetch_one(&mut **tx)
+            .await?;
     let (devices,): (i64,) = sqlx::query_as("SELECT count(*) FROM devices WHERE account_id = $1")
         .bind(account_id)
         .fetch_one(&mut **tx)

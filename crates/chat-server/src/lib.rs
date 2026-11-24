@@ -185,6 +185,12 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/backup/delete", post(backup::delete))
         .route("/v1/backup/restore", post(backup::restore))
         .route("/v1/reports", post(reports::create))
+        .route("/v1/account", get(account::current))
+        .route("/v1/account/username", post(account::rename))
+        .route(
+            "/v1/account/delete/prepare",
+            post(account::prepare_deletion),
+        )
         .route("/v1/account/delete", post(account::delete))
         .route("/v1/push/key", get(push::public_key))
         .route("/v1/push/subscription", post(push::subscribe))

@@ -169,6 +169,9 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
     case 'restore':
       await engine.restore(request.username, request.recoveryKey)
       return { type: 'ok' }
+    case 'renameUsername':
+      await engine.renameUsername(request.username)
+      return { type: 'ok' }
     case 'deleteAccount':
       await engine.deleteAccount(request.username)
       return { type: 'ok' }
