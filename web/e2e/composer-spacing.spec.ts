@@ -1,5 +1,5 @@
 import { type Locator, expect, test } from './fixtures'
-import { openFixture } from './interaction-fixture-support'
+import { fixtureAction, openFixture } from './interaction-fixture-support'
 
 test.skip(!process.env.E2E_UI_FIXTURES, 'use playwright.fixtures.config.ts; this suite requires the in-memory UI fixture')
 
@@ -24,6 +24,35 @@ async function expectCompact(composer: Locator) {
     }
   })).toEqual({ extraContentHeight: 0, spaceAboveRow: 0, spaceBelowRow: 0 })
 }
+
+test('draft edits do not render the message history again', async ({ page }) => {
+  await openFixture(page, 'Alice', 'composer-history-render')
+  await fixtureAction(page, 'seed', 100)
+  await expect(page.getByTestId('message')).toHaveCount(100)
+  const input = page.getByRole('textbox', { name: 'Message', exact: true })
+  // Message rows format their timestamps during render. Count those calls only
+  // after the seeded history is visible, and restore the browser API afterward.
+  await page.evaluate(() => {
+    const original = Date.prototype.toLocaleString
+    Object.assign(window, { __historyDateCalls: 0, __restoreHistoryDates: () => { Date.prototype.toLocaleString = original } })
+    Date.prototype.toLocaleString = function (...args) {
+      ;(window as unknown as { __historyDateCalls: number }).__historyDateCalls++
+      return Reflect.apply(original, this, args)
+    }
+  })
+  try {
+    await input.pressSequentially('Several edits')
+    await expect(input).toHaveValue('Several edits')
+    expect(await page.evaluate(() => (window as unknown as { __historyDateCalls: number }).__historyDateCalls)).toBe(0)
+    // A new message must still update the history and its rendered content.
+    await fixtureAction(page, 'incoming', 'New message after typing')
+    await expect(page.getByTestId('message')).toHaveCount(101)
+    await expect(page.getByTestId('message').last()).toContainText('New message after typing')
+    expect(await page.evaluate(() => (window as unknown as { __historyDateCalls: number }).__historyDateCalls)).toBeGreaterThan(0)
+  } finally {
+    await page.evaluate(() => (window as unknown as { __restoreHistoryDates: () => void }).__restoreHistoryDates())
+  }
+})
 
 // CSS and event-ordering coverage only. The synthetic visual viewport does not
 // emulate a real mobile keyboard, browser chrome, or physical safe-area insets.
