@@ -91,6 +91,48 @@ class InventoryTests(unittest.TestCase):
         with self.assertRaises(tree.TreeError):
             tree.inventory(path)
 
+    def test_limits_preserve_inventory(self):
+        expected = tree.inventory(self.src)
+        self.assertEqual(expected, tree.inventory(
+            self.src, max_entries=5, max_file_bytes=14, max_path_depth=1,
+            max_path_bytes=4, max_xattr_bytes=100000))
+
+    def test_entry_and_path_limits_reject_before_hash(self):
+        for limits in ({'max_entries': 4}, {'max_path_depth': 0},
+                       {'max_path_bytes': 3}):
+            with self.subTest(limits=limits), mock.patch.object(tree.os, 'open') as opened:
+                with self.assertRaises(tree.TreeError):
+                    tree.inventory(self.src, **limits)
+                opened.assert_not_called()
+
+    def test_nested_depth_limit(self):
+        with open(os.path.join(self.src, 'dir', 'nested'), 'wb') as f:
+            f.write(b'x')
+        with self.assertRaisesRegex(tree.TreeError, 'path depth'):
+            tree.inventory(self.src, max_path_depth=1)
+        tree.inventory(self.src, max_path_depth=2)
+
+    def test_file_size_limit_before_hash(self):
+        with mock.patch.object(tree.os, 'open') as opened:
+            with self.assertRaisesRegex(tree.TreeError, 'file byte'):
+                tree.inventory(self.src, max_file_bytes=6)
+            opened.assert_not_called()
+        with self.assertRaisesRegex(tree.TreeError, 'file byte'):
+            tree.inventory(self.src, max_file_bytes=13)
+
+    def test_xattr_limit_before_hash(self):
+        with mock.patch.object(tree.os, 'listxattr', return_value=['user.x']), \
+             mock.patch.object(tree.os, 'getxattr', return_value=b'123'), \
+             mock.patch.object(tree.os, 'open') as opened:
+            with self.assertRaisesRegex(tree.TreeError, 'xattr byte'):
+                tree.inventory(self.src, max_xattr_bytes=8)
+            opened.assert_not_called()
+
+    def test_invalid_limits(self):
+        for value in (-1, True, 1.5):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                tree.inventory(self.src, max_entries=value)
+
     def test_stat_change_rejected(self):
         original = tree.signature
         calls = 0

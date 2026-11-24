@@ -24,7 +24,7 @@ class FencedRestoreTest(unittest.TestCase):
         self.source.mkdir()
         (self.source / 'new').write_text('new')
         self.workspace = root / 'workspace'
-        self.workspace.mkdir()
+        self.workspace.mkdir(mode=0o700)
         self.archive = self.workspace / 'snapshot.tar'
         subprocess.run(['tar', '--create', '--file', str(self.archive), '--acls', '--xattrs',
                         '-C', str(self.source), '.'], check=True)
@@ -41,7 +41,8 @@ class FencedRestoreTest(unittest.TestCase):
                     expected_inventory=inventory(self.source), intent_path=self.workspace / 'intent',
                     inspect_fake_docker=lambda: copy.deepcopy(self.data),
                     verify_rollback_journal=journal or (lambda phase, name, identity: self.phases.append(phase) or True),
-                    interrupt=interrupt)
+                    max_archive_size=1024 * 1024, max_entries=100,
+                    max_depth=10, max_path_bytes=4096, interrupt=interrupt)
         args.update(kwargs)
         return restore_testonly(**args)
 
@@ -99,6 +100,23 @@ class FencedRestoreTest(unittest.TestCase):
         with self.assertRaises(RestoreError):
             self.run_restore(journal=replace)
         self.assertTrue((self.volumes / 'original' / 'old').exists())
+
+    def test_inspector_cannot_mutate_inventory_before_clear(self):
+        expected = inventory(self.source)
+        phase = [None]
+        def journal(current, name, identity):
+            phase[0] = current
+            return True
+        def inspect():
+            if phase[0] == 'clear':
+                expected['changed'] = True
+            return copy.deepcopy(self.data)
+        with self.assertRaisesRegex(RestoreError, 'inventory changed'):
+            self.run_restore(journal=journal, expected_inventory=expected,
+                             inspect_fake_docker=inspect)
+        self.assertTrue(expected['changed'])
+        self.assertEqual((self.dest / 'old').read_text(), 'old')
+        self.assertTrue((self.workspace / 'intent').exists())
 
     def test_source_workspace_overlap_rejected(self):
         with self.assertRaises(RestoreError):

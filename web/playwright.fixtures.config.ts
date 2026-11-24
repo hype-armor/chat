@@ -12,6 +12,7 @@ export default defineConfig({
     'deletion.spec.ts',
     'quality-of-life.spec.ts',
     'composer-spacing.spec.ts',
+    'composer-resize.spec.ts',
     'message-interactions.spec.ts',
     'link-actions.spec.ts',
     'draft-storage.spec.ts',

@@ -143,12 +143,16 @@ class RestartFence:
             raise FenceError("Fence operation failed") from None
 
     def restore(self, boundary, verify_boundary):
-        """Restore exact original settings after caller verifies its boundary."""
+        """Restore original settings only for verified old-ready rollback recovery.
+
+        Forward policy handling requires a separate reviewed protocol before
+        public ingress opens. This method must not restore after cutover.
+        """
         try:
             data = self._load()
             if data is None:
                 raise FenceError("Missing journal")
-            if boundary not in ("old_ready", "committed") or verify_boundary(boundary) is not True:
+            if boundary != "old_ready" or verify_boundary(boundary) is not True:
                 raise FenceError("Boundary verification failed")
             # A partially completed restore is safe to retry only after the
             # caller verifies compatibility again. Restore mask last.

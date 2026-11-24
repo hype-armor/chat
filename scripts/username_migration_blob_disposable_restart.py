@@ -1,14 +1,13 @@
-"""Restartable restore experiment for private, disposable directories only.
+"""Test-only restartable restore for disposable directories, never live volumes.
 
-Not a live adapter or an operational command. The caller must stop all writers,
-keep the fence held throughout each call, and supply a trusted GNU tar archive,
-its independent SHA-256 digest, and an independent blob-tree inventory. Archive
-contents must be trusted: tar extraction is not a sandbox. This helper does not
-provide a process lock, defend against hostile same-user processes, or prove
-crash durability of restored file data. ACLs, xattrs, and ownership require
-filesystem and privilege support. Any mismatch fails closed.
+The host and same-UID processes, all parent paths, fence, digest and inventory
+must be trusted. This is not an authorization mechanism, lock, sandbox, or
+proof of crash durability. The caller must keep writers stopped and the fence
+held continuously; callbacks do not establish a physical fence. Trusted administrators
+must continuously exclude mount and tree changes. Mount IDs can be reused and
+checks do not prevent races. Hardlink aliases are not excluded. Use synthetic
+data only. ACLs, xattrs and ownership depend on the host.
 """
-
 import hashlib
 import json
 import os
@@ -17,21 +16,13 @@ import stat
 import subprocess
 import tempfile
 
+from username_migration_blob_disk_snapshot import snapshot_and_validate
+from username_migration_blob_restore import RestoreError
 from username_migration_blob_tree import inventory
+from username_migration_blob_tree_sync_testonly import sync_synthetic_tree
+import username_migration_mount_check_testonly as mount_check
 
 operational = False
-
-
-class RestoreError(Exception):
-    pass
-
-
-def _digest(path):
-    h = hashlib.sha256()
-    with open(path, 'rb') as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def _identity(path):
@@ -41,10 +32,25 @@ def _identity(path):
     return [st.st_dev, st.st_ino]
 
 
-def _tar(snapshot, destination):
-    subprocess.run(['tar', '--extract', '--file', snapshot, '--directory', destination,
+def _tar(fd, destination):
+    os.lseek(fd, 0, os.SEEK_SET)
+    subprocess.run(['tar', '--extract', '--file', '-', '--directory', destination,
                     '--same-owner', '--same-permissions', '--acls', '--xattrs',
-                    '--xattrs-include=*', '--numeric-owner'], check=True)
+                    '--xattrs-include=*', '--numeric-owner'], stdin=fd, check=True)
+
+
+def _read_intent(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid() or st.st_mode & 0o077:
+            raise RestoreError('intent must be a private owned regular file')
+        with os.fdopen(fd, 'r', encoding='utf-8') as stream:
+            fd = None
+            return json.load(stream)
+    finally:
+        if fd is not None:
+            os.close(fd)
 
 
 def _persist(path, record):
@@ -56,87 +62,141 @@ def _persist(path, record):
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
-        dfd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+        dfd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             os.fsync(dfd)
         finally:
             os.close(dfd)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+    except BaseException:
+        # Keep any unpublished file, including partial writes, as failure evidence.
+        # Make its directory entry durable when possible without masking the error.
+        try:
+            dfd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+        except OSError:
+            pass
+        raise
 
 
 def restore(snapshot, snapshot_sha256, expected_inventory, destination, intent_path,
-            fence, interrupt=None):
-    """Restore into a disposable directory. `fence(phase)` must raise on failure.
+            fence, interrupt=None, *, workspace, max_archive_size, max_entries,
+            max_depth, max_path_bytes, on_intent_published=None):
+    """Restore synthetic data only; this function never authorizes a live volume.
 
-    `interrupt(step)` is a test hook after intent, each remove, clear, and extract. Retrying
-    always clears and restores again. Keep the intent outside the destination.
-    The destination and all parent paths must be private and stable.
+    The private workspace and stable, trusted parents must be outside destination.
+    Retrying always clears and restores again. The fence must return exactly True.
     """
     if not callable(fence):
         raise RestoreError('a fence callback is required')
-    snapshot = os.path.abspath(os.fspath(snapshot))
-    destination = os.path.abspath(os.fspath(destination))
-    intent_path = os.path.abspath(os.fspath(intent_path))
-    if os.path.commonpath([destination, intent_path]) == destination:
-        raise RestoreError('intent must be outside destination')
-    if os.path.commonpath([destination, snapshot]) == destination:
-        raise RestoreError('snapshot must be outside destination')
+    snapshot, destination, intent_path, workspace = map(
+        lambda p: os.path.abspath(os.fspath(p)),
+        (snapshot, destination, intent_path, workspace))
+    for path in (snapshot, intent_path, workspace):
+        # realpath catches aliases through existing symlinked parent paths.
+        if os.path.commonpath([os.path.realpath(destination), os.path.realpath(path)]) == os.path.realpath(destination):
+            raise RestoreError('snapshot, intent and workspace must be outside destination')
     identity = _identity(destination)
     inventory_hash = hashlib.sha256(json.dumps(expected_inventory, sort_keys=True,
                                                separators=(',', ':')).encode()).hexdigest()
-    record = {'version': 1, 'destination': destination, 'identity': identity,
-              'snapshot_sha256': snapshot_sha256, 'inventory_sha256': inventory_hash}
+    def open_root():
+        fd = os.open(destination, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        st = os.fstat(fd)
+        if [st.st_dev, st.st_ino] != identity:
+            os.close(fd)
+            raise RestoreError('destination identity changed')
+        return fd
+
+    if fence('validate') is not True or _identity(destination) != identity:
+        raise RestoreError('fence or destination identity changed')
+    rootfd = open_root()
+    try:
+        root_mount = mount_check.mount_id(rootfd)
+    finally:
+        os.close(rootfd)
+    record = {'version': 2, 'destination': destination, 'identity': identity,
+              'root_mount_id': root_mount, 'snapshot_sha256': snapshot_sha256,
+              'inventory_sha256': inventory_hash}
 
     def check(phase):
-        fence(phase)
+        if fence(phase) is not True:
+            raise RestoreError('fence did not verify')
         if _identity(destination) != identity:
             raise RestoreError('destination identity changed')
+        rootfd = open_root()
+        try:
+            if mount_check.mount_id(rootfd) != root_mount:
+                raise RestoreError('destination mount ID changed')
+        finally:
+            os.close(rootfd)
+
+    def check_mount_tree(phase):
+        check(phase)
+        rootfd = open_root()
+        try:
+            if mount_check.mount_id(rootfd) != root_mount:
+                raise RestoreError('destination mount ID changed')
+            mount_check.check_tree(rootfd, max_entries=max_entries, max_depth=max_depth,
+                                   max_path_bytes=max_path_bytes,
+                                   fence=lambda: (check(phase) or True))
+            check(phase)
+        finally:
+            os.close(rootfd)
 
     def injected(step):
         if interrupt is not None:
             interrupt(step)
 
     check('validate')
-    if _digest(snapshot) != snapshot_sha256:
-        raise RestoreError('snapshot digest mismatch')
-    if os.path.lexists(intent_path):
-        with open(intent_path, encoding='utf-8') as stream:
-            if json.load(stream) != record:
-                raise RestoreError('intent does not match this restore')
-    # Verify the archive on disk, not a newly generated source inventory.
-    with tempfile.TemporaryDirectory(prefix='blob-restore-check-') as verified:
-        _tar(snapshot, verified)
-        if inventory(verified) != expected_inventory:
-            raise RestoreError('snapshot inventory mismatch')
-    check('intent')
-    _persist(intent_path, record)
-    injected('intent')
-    check('clear')
-    fd = os.open(destination, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    fd = snapshot_and_validate(snapshot, snapshot_sha256, workspace,
+                               max_archive_size=max_archive_size, max_entries=max_entries)
     try:
-        st = os.fstat(fd)
-        if [st.st_dev, st.st_ino] != identity:
-            raise RestoreError('destination identity changed')
-        for name in os.listdir(fd):
-            st = os.stat(name, dir_fd=fd, follow_symlinks=False)
-            if stat.S_ISDIR(st.st_mode):
-                shutil.rmtree(name, dir_fd=fd)
-            else:
-                os.unlink(name, dir_fd=fd)
-            os.fsync(fd)
-            injected('remove')
-        os.fsync(fd)
+        if os.path.lexists(intent_path) and _read_intent(intent_path) != record:
+            raise RestoreError('intent does not match this restore')
+        with tempfile.TemporaryDirectory(prefix='blob-restore-check-', dir=workspace) as verified:
+            _tar(fd, verified)
+            if inventory(verified) != expected_inventory:
+                raise RestoreError('snapshot inventory mismatch')
+        check('intent')
+        # Recheck after the fence callback and before replacing the intent.
+        if os.path.lexists(intent_path) and _read_intent(intent_path) != record:
+            raise RestoreError('intent does not match this restore')
+        _persist(intent_path, record)
+        if on_intent_published is not None:
+            on_intent_published()
+        injected('intent')
+        check_mount_tree('clear')
+        destfd = os.open(destination, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            st = os.fstat(destfd)
+            if [st.st_dev, st.st_ino] != identity:
+                raise RestoreError('destination identity changed')
+            for name in os.listdir(destfd):
+                check('remove')
+                st = os.stat(name, dir_fd=destfd, follow_symlinks=False)
+                if stat.S_ISDIR(st.st_mode):
+                    shutil.rmtree(name, dir_fd=destfd)
+                else:
+                    os.unlink(name, dir_fd=destfd)
+                os.fsync(destfd)
+                check('remove-complete')
+                injected('remove')
+            os.fsync(destfd)
+        finally:
+            os.close(destfd)
+        injected('clear')
+        check_mount_tree('extract')
+        _tar(fd, destination)
+        injected('extract')
+        check('verify')
+        if inventory(destination) != expected_inventory:
+            raise RestoreError('restored inventory mismatch')
+        check_mount_tree('sync')
+        sync_synthetic_tree(destination, lambda: check('sync'),
+                            root_mount_id=root_mount, max_entries=max_entries, max_depth=max_depth,
+                            max_path_bytes=max_path_bytes)
+        check('complete')
     finally:
         os.close(fd)
-    injected('clear')
-    check('extract')
-    if _digest(snapshot) != snapshot_sha256:
-        raise RestoreError('snapshot digest changed')
-    _tar(snapshot, destination)
-    injected('extract')
-    check('verify')
-    if inventory(destination) != expected_inventory:
-        raise RestoreError('restored inventory mismatch')
-    check('complete')

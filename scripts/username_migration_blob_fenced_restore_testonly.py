@@ -5,9 +5,12 @@ caller must hold an uninterrupted exclusion fence and independently verify the
 rollback journal on every callback. The fake inspector must return a complete,
 consistent snapshot of *all* containers. Neither callback is a security boundary.
 This experiment does not protect against concurrent host or Docker administrators,
-mount namespaces, filesystem races, or untrusted tar archives.
+mount namespaces, concurrent mount changes, filesystem races, or untrusted tar
+archives. Trusted administrators must continuously exclude mount and tree changes.
+The callbacks cannot provide a physical fence. Live restore remains disabled.
 """
 
+import json
 import os
 import re
 import stat
@@ -36,7 +39,9 @@ def _overlap(a, b):
 
 def restore_testonly(*, synthetic_volume_root, volume_name, source, workspace,
                      snapshot, snapshot_sha256, expected_inventory, intent_path,
-                     inspect_fake_docker, verify_rollback_journal, interrupt=None):
+                     inspect_fake_docker, verify_rollback_journal, max_archive_size,
+                     max_entries, max_depth, max_path_bytes, interrupt=None,
+                     on_intent_published=None):
     """Restore a fake local volume, under a caller-held fence, for tests only.
 
     The inspector returns exactly {"volume": {...}, "containers": [...]}; volume
@@ -69,13 +74,31 @@ def restore_testonly(*, synthetic_volume_root, volume_name, source, workspace,
     if os.path.realpath(snapshot) != snapshot or os.path.realpath(intent_path) != intent_path:
         raise RestoreError('workspace paths must not use symlinks')
 
-    def fence(phase):
+    def inventory_bytes():
+        try:
+            return json.dumps(expected_inventory, sort_keys=True, separators=(',', ':'),
+                              allow_nan=False).encode()
+        except (TypeError, ValueError, RecursionError):
+            raise RestoreError('invalid or changed inventory') from None
+
+    pinned_inventory = inventory_bytes()
+
+    def check_inventory():
+        if inventory_bytes() != pinned_inventory:
+            raise RestoreError('inventory changed')
+
+    def verify_gate(phase):
+        check_inventory()
         if verify_rollback_journal(phase, volume_name, identity) is not True:
             raise RestoreError('rollback journal verification failed')
         if _directory(root)[1] != root_id or _directory(destination)[1] != identity:
             raise RestoreError('volume identity changed')
         if _directory(source)[1] != source_id or _directory(workspace)[1] != workspace_id:
             raise RestoreError('fixture identity changed')
+        check_inventory()
+
+    def fence(phase):
+        verify_gate(phase)
         data = inspect_fake_docker()
         if not isinstance(data, dict) or set(data) != {'volume', 'containers'}:
             raise RestoreError('invalid inspection')
@@ -124,5 +147,12 @@ def restore_testonly(*, synthetic_volume_root, volume_name, source, workspace,
             if uses_volume and (state not in ('created', 'exited', 'dead') or name != 'no'):
                 raise RestoreError('volume consumer is active or may restart')
 
+        # The synthetic inspector can change evidence or replace fixture paths.
+        # Recheck after it returns; continuous external exclusion is still required.
+        verify_gate(phase)
+        return True
+
     _restore(snapshot, snapshot_sha256, expected_inventory, destination, intent_path,
-             fence, interrupt)
+             fence, interrupt, workspace=workspace, max_archive_size=max_archive_size,
+             max_entries=max_entries, max_depth=max_depth, max_path_bytes=max_path_bytes,
+             on_intent_published=on_intent_published)

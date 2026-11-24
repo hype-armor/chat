@@ -73,8 +73,17 @@ class Tests(unittest.TestCase):
     def test_existing_mask_preserved(self):
         self.adapter.unit["masked"] = True
         self.fence.engage([CID])
-        self.fence.restore("committed", lambda _: True)
+        self.fence.restore("old_ready", lambda _: True)
         self.assertTrue(self.adapter.unit["masked"])
+
+    def test_committed_never_restores_or_verifies(self):
+        self.fence.engage([CID])
+        def unexpected_verification(_):
+            self.fail("Committed boundary must not be verified")
+        with self.assertRaises(FenceError):
+            self.fence.restore("committed", unexpected_verification)
+        self.assertEqual(self.adapter.policy(CID), NO)
+        self.assertEqual(self.adapter.unit, {"enabled": True, "masked": True})
 
     def test_unsupported_policy_fails_before_effect(self):
         self.adapter.policies[CID] = {"Name": "bad", "MaximumRetryCount": 0}
@@ -106,7 +115,7 @@ RestartFence(fd, "crash", Fake()).engage(["a" * 64])
         other = RestartFence(self.fd, "crash", self.adapter)
         try:
             other.engage([CID])
-            other.restore("committed", lambda _: True)
+            other.restore("old_ready", lambda _: True)
             self.assertEqual(self.adapter.policy(CID), ALWAYS)
         finally:
             other.close()

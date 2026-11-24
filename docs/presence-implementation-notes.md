@@ -31,9 +31,11 @@ timing, but not the encrypted state or its encrypted expiry. Database
 transactions must order authorization with audience changes and device removal.
 Revocation stops requests authorized after the revocation transaction; a
 response authorized before revocation can arrive afterward. Recipients must
-obtain current authorization and reject old generations. No such transport or
-authority is implemented yet. Limits, cleanup, concurrent replicas, failures,
-and an independent security review remain required before activation.
+obtain current authorization and reject old generations. Experimental server
+routes and authority models exist, but they are incomplete and not integrated
+end to end. Presence remains disabled by default. Ratchet coordination,
+replacement authority, recovery, consent UI, and independent security review
+remain blockers before activation.
 
 ## Requirements for integration
 
