@@ -67,6 +67,21 @@ test('changes the current display name', async ({ browser }) => {
   await expect(settings.getByText('Patricia', { exact: true })).toBeVisible()
 })
 
+test('changes the username and retains it after reload', async ({ browser }) => {
+  const initial = randomUsername()
+  const updated = randomUsername()
+  const page = await signUp(browser, 'Pat', initial)
+  await openSettings(page)
+  const section = await openSetting(page, 'Change username')
+  await section.getByLabel('New username').fill(updated)
+  await section.getByRole('button', { name: 'Change username', exact: true }).click()
+  await expect(section.getByRole('status')).toContainText('Username updated')
+  await expect(page.getByText(`Your username: ${updated}`, { exact: true })).toBeVisible()
+  await page.reload()
+  await openSettings(page)
+  await expect(page.getByText(`Your username: ${updated}`, { exact: true })).toBeVisible()
+})
+
 test('solid danger buttons have white text and AA contrast in both themes', async ({ browser }) => {
   const page = await signUp(browser, 'Pat', randomUsername())
   await openSetting(page, 'Delete account')

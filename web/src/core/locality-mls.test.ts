@@ -55,6 +55,10 @@ function setup(withSecondSenderDevice = false) {
       getJson: async (key: string) => structuredClone(values.get(key)),
       putJson: async (key: string, value: unknown) => { values.set(key, structuredClone(value)) },
       putBytes: async () => {},
+      putBatch: async (entries: readonly (readonly [string, Uint8Array])[]) => {
+        const staged = entries.map(([key, value]) => [key, key === 'app' ? JSON.parse(new TextDecoder().decode(value)) : value.slice()] as const)
+        for (const [key, value] of staged) values.set(key, value)
+      },
       clear: async () => values.clear(),
     } as unknown as Engine['store']
     engine['account'] = { accountId, deviceId: accountId === aliceId ? aliceDevice : '44'.repeat(16), username: 'test.00', displayName: 'Test', token: 'synthetic' }

@@ -23,7 +23,7 @@ function setup() {
   const engine = new Engine(() => {})
   engine['account'] = account('11')
   engine['core'] = { snapshot: () => new Uint8Array([1]) } as unknown as NonNullable<Engine['core']>
-  engine['store'] = { getJson: async () => undefined, putJson: vi.fn(async () => {}), putBytes: vi.fn(async () => {}), clear: vi.fn(async () => {}) } as unknown as Engine['store']
+  engine['store'] = { getJson: async () => undefined, putJson: vi.fn(async () => {}), putBytes: vi.fn(async () => {}), putBatch: vi.fn(async () => {}), clear: vi.fn(async () => {}) } as unknown as Engine['store']
   engine['replenishKeyPackages'] = vi.fn(async () => {})
   engine['resolvePendingCommit'] = vi.fn(async () => {})
   engine['commitDepartures'] = vi.fn()

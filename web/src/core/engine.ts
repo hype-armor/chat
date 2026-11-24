@@ -188,6 +188,8 @@ type Account = {
   accountId: string
   deviceId: string
   token: string
+  pendingUsername?: { username: string; requestId: string }
+  pendingDeletion?: { username: string; authorization: string; departuresComplete: boolean }
 }
 
 type Conversation = {
@@ -374,6 +376,8 @@ export class Engine {
   private state: State = emptyState()
   private recent = new RecentIds()
   private ws?: WebSocket
+  // A failed delivery can leave the in-memory MLS and application state changed.
+  private deliveryFenced = false
   private connection: ConnectionState = 'offline'
   /** A link code this device is approving (ADR-0019), until the new device is known. */
   private approving?: string
@@ -454,6 +458,9 @@ export class Engine {
   private deletionKnown = new Map<string, DeletionOriginal[]>()
   private draftEpoch = 0
   private endingSession = false
+  private usernameRefresh: Promise<void> = Promise.resolve()
+  private usernameBackgroundSync?: Promise<void>
+  private deletionInProgress = false
   private draftChanges = new Map<string, Draft>()
   /** A concurrent flush must not transmit a text action before local acceptance. */
   private acceptingText = new Set<string>()
@@ -468,6 +475,7 @@ export class Engine {
       if (this.starting || this.ws || !this.account) return
       clearTimeout(this.reconnectTimer)
       this.reconnectMs = 1000
+      this.syncUsername()
       this.connect()
     })
     await init()
@@ -493,6 +501,7 @@ export class Engine {
       if (this.state.live.length > 0 || this.state.liveSeen.length > 0) this.scheduleLiveSweep()
       await this.reconcileHiddenSends().catch(() => this.scheduleHiddenSendCleanup())
       this.starting = false
+      this.syncUsername()
       this.connect()
     }
     this.starting = false
@@ -1032,15 +1041,158 @@ export class Engine {
     await this.syncOwnDevices()
   }
 
+  /** Retry uncertain changes and refresh other devices' changes in the background. */
+  private syncUsername(): void {
+    if (!this.account || this.usernameBackgroundSync) return
+    const pending = this.account.pendingUsername
+    const run = (pending ? this.renameUsername(pending.username) : this.refreshUsername()).catch(() => undefined)
+    this.usernameBackgroundSync = run
+    void run.then(() => {
+      if (this.usernameBackgroundSync === run) this.usernameBackgroundSync = undefined
+    })
+  }
+
+  /** Fetch the account name in order, and reject results from an ended session. */
+  private refreshUsername(): Promise<void> {
+    const { account } = this.ready()
+    const epoch = this.draftEpoch
+    const run = this.usernameRefresh.then(async () => {
+      const current = () => !this.endingSession && this.account === account && this.draftEpoch === epoch
+      if (!current()) throw new Error('The account session ended')
+      const result = await api.currentAccount(account.token)
+      await this.exclusive(async () => {
+        if (!current()) throw new Error('The account session ended')
+        if (typeof result.account_id !== 'string' || result.account_id.replaceAll('-', '').toLowerCase() !== account.accountId.replaceAll('-', '').toLowerCase() ||
+            typeof result.username !== 'string' || !/^[a-z][a-z0-9_]{2,19}\.[0-9]{2,4}$/.test(result.username)) {
+          throw new Error('Invalid current account response')
+        }
+        if (account.username !== result.username) {
+          const updated = { ...account, username: result.username }
+          await this.store.putJson('account', updated)
+          if (!current()) throw new Error('The account session ended')
+          account.username = result.username
+          this.emitView()
+        }
+      })
+    })
+    this.usernameRefresh = run.catch(() => undefined)
+    return run
+  }
+
+  /** Persist the retry identity before sending. Never replace an uncertain request. */
+  async renameUsername(input: string): Promise<void> {
+    const { account } = this.ready()
+    const epoch = this.draftEpoch
+    const username = input.trim().toLowerCase()
+    if (!/^[a-z][a-z0-9_]{2,19}\.[0-9]{2,4}$/.test(username)) throw new Error('Enter a username like name.42')
+    const current = () => !this.endingSession && this.account === account && this.draftEpoch === epoch
+    const run = this.usernameRefresh.then(async () => {
+      if (!current()) throw new Error('The account session ended')
+      let pending = account.pendingUsername
+      if (pending && pending.username !== username) throw new Error(`Retry the pending username change to ${pending.username} first`)
+      if (!pending) {
+        pending = { username, requestId: crypto.randomUUID() }
+        await this.exclusive(async () => {
+          if (!current()) throw new Error('The account session ended')
+          await this.store.putJson('account', { ...account, pendingUsername: pending })
+          if (!current()) throw new Error('The account session ended')
+          account.pendingUsername = pending
+        })
+      }
+      try {
+        const result = await api.renameAccount(account.token, pending.username, pending.requestId)
+        if (!current()) throw new Error('The account session ended')
+        if (result.account_id.replaceAll('-', '').toLowerCase() !== account.accountId.replaceAll('-', '').toLowerCase() ||
+            !/^[a-z][a-z0-9_]{2,19}\.[0-9]{2,4}$/.test(result.username)) throw new Error('Invalid current account response')
+        await this.exclusive(async () => {
+          if (!current()) throw new Error('The account session ended')
+          const updated = { ...account, username: result.username, pendingUsername: undefined }
+          await this.store.putJson('account', updated)
+          if (!current()) throw new Error('The account session ended')
+          account.username = result.username
+          delete account.pendingUsername
+          this.emitView()
+        })
+      } catch (error) {
+        // A definitive client rejection cannot have committed this request.
+        // A rate limit can reject a retry of an already committed request.
+        // Keep its ID until a later retry can determine the outcome.
+        if (error instanceof ApiError && [400, 404, 409, 422].includes(error.status) && current()) {
+          await this.exclusive(async () => {
+            if (!current()) return
+            await this.store.putJson('account', { ...account, pendingUsername: undefined })
+            if (current()) delete account.pendingUsername
+          })
+        }
+        if (error instanceof ApiError && error.status === 404) {
+          throw new Error('This server does not support username changes. Update the server before trying again.')
+        }
+        throw error
+      }
+    })
+    this.usernameRefresh = run.catch(() => undefined)
+    await run
+    // The rename is already committed. A later refresh failure must not make
+    // the UI report that the change failed or spend another rename request.
+    void this.refreshUsername().catch(() => undefined)
+  }
+
   /**
    * Deletes the account and everything the server holds for it (FR-ID-9),
    * after leaving every group so other members' groups don't keep it.
    */
   async deleteAccount(username: string) {
+    if (this.deletionInProgress) throw new Error('Account deletion is already in progress')
+    this.deletionInProgress = true
+    try { await this.deleteAccountOnce(username) } finally { this.deletionInProgress = false }
+  }
+
+  private async deleteAccountOnce(username: string) {
     const { account, core } = this.ready()
-    if (username.trim().toLowerCase() !== account.username) throw new Error("That isn't this account's username")
+    const current = () => !this.endingSession && this.account === account && this.core === core
     if (this.connection !== 'online') throw new Error('You need to be online to delete your account')
-    await this.exclusive(async () => {
+    let pending = account.pendingDeletion
+    if (!pending) {
+      try {
+        await this.refreshUsername()
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) {
+          throw new Error('This server does not support safe account deletion. Update the server before deleting your account.')
+        }
+        throw error
+      }
+      if (!current()) throw new Error('The account session ended')
+      if (account.pendingUsername) throw new Error(`Retry the pending username change to ${account.pendingUsername.username} before deleting the account`)
+      if (username.trim().toLowerCase() !== account.username) throw new Error("That isn't this account's current username")
+      const bytes = crypto.getRandomValues(new Uint8Array(32))
+      pending = { username: account.username, authorization: Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join(''), departuresComplete: false }
+      await this.exclusive(async () => {
+        if (!current()) throw new Error('The account session ended')
+        await this.store.putJson('account', { ...account, pendingDeletion: pending })
+        if (!current()) throw new Error('The account session ended')
+        account.pendingDeletion = pending
+      })
+    } else if (username.trim().toLowerCase() !== pending.username) {
+      throw new Error('Retry deletion with the username used for the pending confirmation')
+    }
+    try {
+      if (!pending.departuresComplete) await api.prepareAccountDeletion(account.token, pending.username, pending.authorization)
+    } catch (error) {
+      if (error instanceof ApiError && [400, 409].includes(error.status) && current()) {
+        await this.exclusive(async () => {
+          if (!current()) return
+          await this.store.putJson('account', { ...account, pendingDeletion: undefined })
+          if (current()) delete account.pendingDeletion
+        })
+      }
+      if (error instanceof ApiError && error.status === 404) {
+        throw new Error('This server does not support safe account deletion. Update the server before deleting your account.')
+      }
+      throw error
+    }
+    if (!current()) throw new Error('The account session ended')
+    if (!pending.departuresComplete) await this.exclusive(async () => {
+      if (this.endingSession || this.account !== account || this.core !== core) throw new Error('The account session ended')
       for (const conv of Object.values(this.state.conversations)) {
         const recipients = conv.status ? [] : this.recipients(conv.id)
         if (conv.self || recipients.length === 0) continue
@@ -1056,8 +1208,30 @@ export class Engine {
       }
       await this.persist()
       await this.flushOutbox(true)
+      if (!current()) throw new Error('The account session ended')
+      pending = { ...pending!, departuresComplete: true }
+      await this.store.putJson('account', { ...account, pendingDeletion: pending })
+      if (!current()) throw new Error('The account session ended')
+      account.pendingDeletion = pending
     })
-    await api.deleteAccount(account.token, account.username)
+    if (!current()) throw new Error('The account session ended')
+    try {
+      await api.deleteAccount(account.token, pending.authorization)
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409 && current()) {
+        await this.exclusive(async () => {
+          if (!current()) return
+          await this.store.putJson('account', { ...account, pendingDeletion: undefined })
+          if (current()) delete account.pendingDeletion
+        })
+        throw new Error('Deletion authorization expired. You may already have left chats. Confirm your current username and try again.')
+      }
+      if (error instanceof ApiError && error.status === 401) {
+        throw new Error('Deletion may have succeeded, or this device may have been revoked. Check another device. You may already have left chats.')
+      }
+      throw error
+    }
+    if (this.endingSession || this.account !== account || this.core !== core) throw new Error('The account session ended')
     await this.signOut('Your account was deleted.')
   }
 
@@ -1066,6 +1240,10 @@ export class Engine {
     // Invalidate queued RPCs and transport now, then clear after an in-flight write ends.
     this.endingSession = true
     this.draftEpoch++
+    // A fetch for the old account can remain pending indefinitely. Do not
+    // let it hold the next account's username synchronization queue.
+    this.usernameRefresh = Promise.resolve()
+    this.usernameBackgroundSync = undefined
     this.localityEpoch++
     clearTimeout(this.localityTimer)
     clearTimeout(this.meDeletionSyncTimer)
@@ -1100,7 +1278,7 @@ export class Engine {
       this.setConnection('offline')
       this.typingClock = new TypingClock()
       this.typingSentAt = 0
-    })
+    }, true)
   }
 
   /** Runs `syncOwnDevices` soon, coalescing bursts (e.g. many joins). */
@@ -1825,7 +2003,8 @@ export class Engine {
     const username = name.trim().toLowerCase()
     if (username === account.username) throw new Error("You can't start a chat with yourself")
     const found = await api.lookup(account.token, username)
-    const peer = found.account_id.replaceAll('-', '')
+    const peer = found.account_id.replaceAll('-', '').toLowerCase()
+    if (peer === account.accountId.replaceAll('-', '').toLowerCase()) throw new Error("You can't start a chat with yourself")
     const existing = Object.values(this.state.conversations).find((c) => c.peers.length === 1 && c.peers[0] === peer)
     if (existing) return existing.id
 
@@ -4169,7 +4348,7 @@ export class Engine {
   // ---- WebSocket -------------------------------------------------------------
 
   private connect() {
-    if (!this.account || this.ws || this.endingSession) return
+    if (!this.account || this.ws || this.endingSession || this.deliveryFenced) return
     const session = this.draftSession()
     const url = new URL('/v1/ws', self.location.href)
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -4193,7 +4372,10 @@ export class Engine {
     }, BACKUP_INTERVAL_MS)
     // Members' devices change without telling us (restores, deletions).
     this.memberCheckTimer ??= setInterval(() => {
-      if (this.connection === 'online') this.scheduleSync()
+      if (this.connection === 'online') {
+        this.scheduleSync()
+        this.syncUsername()
+      }
     }, MEMBER_CHECK_MS)
     ws.onmessage = (event) => {
       // Stale callbacks must not decode frames or touch a replacement session.
@@ -4216,6 +4398,7 @@ export class Engine {
       case 'auth':
         this.reconnectMs = 1000
         this.setConnection('online')
+        this.syncUsername()
         void this.replenishKeyPackages(frame.keyPackages, currentSocket)
         // Queued before any delivery handler, so it settles first.
         void this.exclusive(async () => {
@@ -4229,7 +4412,9 @@ export class Engine {
         })
         return
       case 'deliver':
-        void this.onDeliver(frame, currentSocket)
+        void this.onDeliver(frame, currentSocket).catch((error) => {
+          console.warn('delivery failed', error)
+        })
         return
       case 'devices_changed':
         // A member restored, linked or lost a device (ADR-0022).
@@ -4252,30 +4437,41 @@ export class Engine {
 
   private async onDeliver(frame: ServerFrameView, currentSocket: () => boolean = () => true) {
     const { envelope, messageId } = frame
+    const epoch = this.draftEpoch
+    const account = this.account
+    const sameSession = () => !this.endingSession && this.draftEpoch === epoch && this.account === account
     await this.exclusive(async () => {
-      if (!currentSocket()) return
-      const id = toHex(messageId)
-      if (!this.recent.has(id)) {
-        const conversationId = toHex(frame.conversationId)
-        if (!frame.welcome && !this.state.conversations[conversationId]) {
-          // When someone adds us, other members can react to the commit
-          // (e.g. send their profile) before the adder's welcome reaches the
-          // server. Hold such envelopes until we join.
-          this.state.early.push({ conversationId, messageId: id, envelope: toBase64(envelope) })
-          if (this.state.early.length > MAX_EARLY) this.state.early.shift()
-        } else {
-          await this.process(envelope, id)
+      if (!currentSocket() || this.deliveryFenced) return
+      try {
+        const id = toHex(messageId)
+        if (!this.recent.has(id)) {
+          const conversationId = toHex(frame.conversationId)
+          if (!frame.welcome && !this.state.conversations[conversationId]) {
+            // When someone adds us, other members can react to the commit
+            // (e.g. send their profile) before the adder's welcome reaches the
+            // server. Hold such envelopes until we join.
+            this.state.early.push({ conversationId, messageId: id, envelope: toBase64(envelope) })
+            if (this.state.early.length > MAX_EARLY) this.state.early.shift()
+          } else {
+            await this.process(envelope, id)
+          }
+          this.recent.add(id)
         }
-        this.recent.add(id)
+        await this.persist()
+        // Ack only after storage, and only on the socket that delivered the frame.
+        if (!currentSocket() || this.deliveryFenced) return
+        this.ws?.send(plain(encodeAck(0, messageId)))
+      } catch (error) {
+        // A replaced socket in the same session shares the potentially partial state.
+        // A replacement session must not be closed or fenced by this failure.
+        if (sameSession()) {
+          this.deliveryFenced = true
+          try { this.ws?.close() } catch { /* Preserve the delivery failure. */ }
+        }
+        throw error
       }
-      // A previous write can fail after this in-memory ID was marked as seen.
-      // Retry that durable commit before acknowledging a duplicate delivery.
-      await this.persist()
-    })
-    // Never acknowledge an old socket delivery on a replacement connection.
-    if (!currentSocket()) return
-    // Ack only after the result is stored (docs/11-api.md).
-    this.ws?.send(plain(encodeAck(0, messageId)))
+    }, true)
+    if (!currentSocket() || this.deliveryFenced) return
     this.commitDepartures()
     void this.flushOutbox()
   }
@@ -4316,17 +4512,16 @@ export class Engine {
   }
 
   private async process(envelope: Uint8Array, messageId: string) {
-    try {
-      await this.apply(this.core!.receive(envelope), messageId)
-    } catch (e) {
-      // Undecryptable input must not block the queue forever.
-      console.warn('dropping envelope that could not be processed', e)
-    }
+    await this.apply(this.core!.receive(envelope), messageId)
   }
 
   private async apply(event: ReturnType<CoreClient['receive']>, messageId: string) {
     const conversationId = toHex(event.conversationId)
-    if (event.kind === 'joined') {
+    if (event.kind === 'groupTopic') {
+      // Consume the authenticated MLS event without accepting state. Persistence,
+      // epoch membership checks, recovery and compatibility are not ready yet.
+      return
+    } else if (event.kind === 'joined') {
       const restored = this.state.conversations[conversationId]
       if (restored?.status === 'restoring') {
         // Re-added after a restore: keep the history and group details.
@@ -4818,11 +5013,15 @@ export class Engine {
         }
       }),
     )
+    // A linked device may have renamed this account since our last refresh.
+    // Exclude it by stable account ID before claiming any key packages.
+    const others = found.filter((f) => f.account_id.replaceAll('-', '').toLowerCase() !== account.accountId.replaceAll('-', '').toLowerCase())
+    if (others.length === 0) return []
     const claimed = await api.claim(
       account.token,
-      found.flatMap((f) => f.device_ids),
+      others.flatMap((f) => f.device_ids),
     )
-    return found.map((f) => {
+    return others.map((f) => {
       const devices = f.device_ids.filter((d) => claimed.key_packages[d])
       if (devices.length === 0) throw new Error(`${f.username} has no keys available right now; try again later`)
       const account = f.account_id.replaceAll('-', '')
@@ -5043,21 +5242,28 @@ export class Engine {
   }
 
   private async persist() {
+    if (this.deliveryFenced) throw new Error('Delivery failed; create a fresh engine')
     this.backupDirty = true
     this.state.seen = this.recent.toJSON()
     // Retain already decrypted own-device input before persisting a consumed MLS ratchet.
     // If both ledger and app writes fail, replay must not lose the only normalized input.
     if (this.state.pendingMeDeletions) await this.store.putJson('me-deletion-inbox:' + this.ready().account.accountId, this.state.pendingMeDeletions)
     this.state.localityTimeFloor = Math.floor(this.localityClock.now())
-    await this.store.putBytes('core', this.core!.snapshot())
-    await this.store.putJson('app', this.state)
+    // Capture both values before encryption yields.
+    const core = this.core!.snapshot()
+    const app = new TextEncoder().encode(JSON.stringify(this.state))
+    await this.store.putBatch([['core', core], ['app', app]])
     this.acceptingMeDeletionSync.clear()
     for (const [conversationId, draft] of this.draftChanges) this.emit({ type: 'draft', conversationId, draft })
     this.draftChanges.clear()
   }
 
-  private exclusive<T>(fn: () => Promise<T>): Promise<T> {
-    const run = this.lock.then(fn, fn)
+  private exclusive<T>(fn: () => Promise<T>, allowFenced = false): Promise<T> {
+    const guarded = () => {
+      if (this.deliveryFenced && !allowFenced) throw new Error('Delivery failed; create a fresh engine')
+      return fn()
+    }
+    const run = this.lock.then(guarded, guarded)
     this.lock = run.catch(() => undefined)
     return run
   }

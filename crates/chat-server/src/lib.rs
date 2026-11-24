@@ -6,6 +6,12 @@
 extern crate self as chat_server;
 #[cfg(test)]
 mod account_send_limits_tests;
+#[cfg(test)]
+mod storage_drain;
+#[cfg(test)]
+mod storage_tracked_future;
+#[cfg(test)]
+mod storage_multipart_test;
 
 mod account;
 mod auth;
@@ -22,6 +28,10 @@ pub mod invites;
 pub mod keys;
 pub mod limits;
 pub mod metrics;
+/// Experimental presence storage primitives.
+pub mod presence;
+mod presence_replacement;
+mod presence_routes;
 pub mod push;
 mod reports;
 mod stats;
@@ -54,6 +64,8 @@ pub struct AppState {
     pub metrics: Arc<metrics::Metrics>,
     /// Sign-up without an invite (ADR-0021); off in production.
     pub open_registration: bool,
+    /// Experimental presence transport; disabled by default.
+    pub experimental_presence: bool,
     /// Encrypted attachments (ADR-0023); `None` turns them off.
     pub blobs: Option<Arc<dyn object_store::ObjectStore>>,
     /// STUN/TURN servers handed to calling clients (ADR-0028).
@@ -71,6 +83,7 @@ impl AppState {
         Self {
             db,
             open_registration: false,
+            experimental_presence: false,
             blobs: None,
             turn: Arc::default(),
             livekit: Arc::default(),
@@ -113,6 +126,11 @@ impl AppState {
         self
     }
 
+    pub fn with_experimental_presence(mut self, enabled: bool) -> Self {
+        self.experimental_presence = enabled;
+        self
+    }
+
     pub fn with_limits(mut self, limits: limits::Limits) -> Self {
         self.limits = limits;
         self
@@ -131,8 +149,33 @@ impl Default for AppState {
 }
 
 pub fn router(state: AppState) -> Router {
-    Router::new()
-        .route("/healthz", get(|| async { "ok" }))
+    let mut app = Router::new();
+    if state.experimental_presence {
+        let presence = Router::new()
+            .route(
+                "/v1/experimental/presence/consent",
+                post(presence_routes::consent),
+            )
+            .route(
+                "/v1/experimental/presence/generation",
+                post(presence_routes::generation),
+            )
+            .route(
+                "/v1/experimental/presence/grant",
+                post(presence_routes::grant),
+            )
+            .route(
+                "/v1/experimental/presence/lease",
+                post(presence_routes::lease),
+            )
+            .route(
+                "/v1/experimental/presence/poll",
+                post(presence_routes::poll),
+            )
+            .layer(axum::middleware::map_response(presence_routes::no_store));
+        app = app.merge(presence);
+    }
+    app.route("/healthz", get(|| async { "ok" }))
         .route("/readyz", get(readyz))
         .route("/v1/register", post(auth::register))
         .route("/v1/invites", post(invites::create))
@@ -185,6 +228,12 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/backup/delete", post(backup::delete))
         .route("/v1/backup/restore", post(backup::restore))
         .route("/v1/reports", post(reports::create))
+        .route("/v1/account", get(account::current))
+        .route("/v1/account/username", post(account::rename))
+        .route(
+            "/v1/account/delete/prepare",
+            post(account::prepare_deletion),
+        )
         .route("/v1/account/delete", post(account::delete))
         .route("/v1/push/key", get(push::public_key))
         .route("/v1/push/subscription", post(push::subscribe))

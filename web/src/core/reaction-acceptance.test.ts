@@ -13,7 +13,7 @@ function setup() {
   engine['account'] = { accountId: me, deviceId: device, username: 'me', displayName: 'Me', token: '' }
   engine['core'] = { identity: () => makeIdentity(me, device), members: () => [makeIdentity(me, device), makeIdentity(peer, '44'.repeat(16))], sendReaction, snapshot: () => new Uint8Array([2]) } as unknown as NonNullable<Engine['core']>
   engine['state'].conversations[id] = { id, peers: [peer], lastAt: 1 }
-  engine['store'] = { getJson: async (key: string) => structuredClone(values.get(key)), putJson: vi.fn(async (key: string, value: unknown) => { values.set(key, structuredClone(value)) }), putBytes: vi.fn(async () => {}), clear: vi.fn(async () => { values.clear() }) } as unknown as Engine['store']
+  engine['store'] = { getJson: async (key: string) => structuredClone(values.get(key)), putJson: vi.fn(async (key: string, value: unknown) => { values.set(key, structuredClone(value)) }), putBatch: vi.fn(async (entries: readonly (readonly [string, Uint8Array])[]) => { for (const [key, value] of entries) values.set(key, key === 'app' ? JSON.parse(new TextDecoder().decode(value)) : value.slice()) }), clear: vi.fn(async () => { values.clear() }) } as unknown as Engine['store']
   engine['flushOutbox'] = vi.fn(async () => {})
   const request = vi.fn<Engine['request']>(async () => undefined)
   engine['request'] = request
@@ -36,9 +36,11 @@ describe('reaction durable acceptance', () => {
     const started = deferred(), gate = deferred()
     const put = vi.mocked(engine['store'].putJson).getMockImplementation()!
     vi.mocked(engine['store'].putJson).mockImplementation(async (key, value) => {
-      if (key === (stage === 'history' ? 'messages:' + id : 'app')) { started.resolve(); await gate.promise }
+      if (stage === 'history' && key === 'messages:' + id) { started.resolve(); await gate.promise }
       await put(key, value)
     })
+    const batch = vi.mocked(engine['store'].putBatch).getMockImplementation()!
+    if (stage === 'app') vi.mocked(engine['store'].putBatch).mockImplementation(async (entries) => { started.resolve(); await gate.promise; await batch(entries) })
     const sending = engine.react(id, target, '👍')
     await started.promise
     expect(engine['state'].outbox).toHaveLength(1)
@@ -52,19 +54,19 @@ describe('reaction durable acceptance', () => {
     expect(engine['acceptingReactions'].size).toBe(0)
   })
 
-  it.each(['history', 'app', 'core'] as const)('never sends a rejected update after failed %s persistence or a later successful persist', async (stage) => {
+  it.each(['history', 'batch'] as const)('never sends a rejected update after failed %s persistence or a later successful persist', async (stage) => {
     const { engine, values, request, flush, sendReaction, message } = setup()
     const core = engine['core']
     const started = deferred(), gate = deferred()
     const put = vi.mocked(engine['store'].putJson).getMockImplementation()!
     vi.mocked(engine['store'].putJson).mockImplementation(async (key, value) => {
-      if (key === (stage === 'history' ? 'messages:' + id : stage === 'app' ? 'app' : 'never')) {
+      if (stage === 'history' && key === 'messages:' + id) {
         started.resolve(); await gate.promise; throw new Error('quota')
       }
       await put(key, value)
     })
-    const putBytes = vi.mocked(engine['store'].putBytes).getMockImplementation()!
-    if (stage === 'core') vi.mocked(engine['store'].putBytes).mockImplementation(async () => { started.resolve(); await gate.promise; throw new Error('quota') })
+    const batch = vi.mocked(engine['store'].putBatch).getMockImplementation()!
+    if (stage === 'batch') vi.mocked(engine['store'].putBatch).mockImplementation(async () => { started.resolve(); await gate.promise; throw new Error('quota') })
     const sending = engine.react(id, target, '👍').then(() => undefined, (error: unknown) => error)
     await started.promise
     await flush()
@@ -74,9 +76,13 @@ describe('reaction durable acceptance', () => {
     expect(engine['state'].outbox).toEqual([])
     expect(engine['core']).toBe(core)
     expect(sendReaction).toHaveBeenCalledTimes(1)
-    expect(engine['store'].putBytes).toHaveBeenCalledWith('core', new Uint8Array([2]))
+    expect(engine['store'].putBatch).toHaveBeenCalledWith([['core', new Uint8Array([2])], ['app', expect.any(Uint8Array)]])
+    if (stage === 'batch') {
+      expect(values.has('core')).toBe(false)
+      expect(values.has('app')).toBe(false)
+    }
     vi.mocked(engine['store'].putJson).mockImplementation(put)
-    vi.mocked(engine['store'].putBytes).mockImplementation(putBytes)
+    vi.mocked(engine['store'].putBatch).mockImplementation(batch)
     await engine['exclusive'](() => engine['persist']())
     await flush()
     expect(request).not.toHaveBeenCalled()
@@ -230,7 +236,7 @@ describe('reaction durable acceptance', () => {
     expect(request).not.toHaveBeenCalled()
   })
 
-  it.each([['react', 'history'], ['react', 'app'], ['react', 'core'], ['retry', 'history'], ['retry', 'app'], ['retry', 'core']] as const)('rejects in-flight %s %s acceptance after sign-out and never transports its advanced ratchet', async (action, stage) => {
+  it.each([['react', 'history'], ['react', 'batch'], ['retry', 'history'], ['retry', 'batch']] as const)('rejects in-flight %s %s acceptance after sign-out and never transports its advanced ratchet', async (action, stage) => {
     const { engine, sendReaction, request, flush } = setup()
     let failedId = ''
     if (action === 'retry') {
@@ -243,10 +249,11 @@ describe('reaction durable acceptance', () => {
     const started = deferred(), gate = deferred()
     const put = vi.mocked(engine['store'].putJson).getMockImplementation()!
     vi.mocked(engine['store'].putJson).mockImplementation(async (key, value) => {
-      if (key === (stage === 'history' ? 'messages:' + id : stage === 'app' ? 'app' : 'never')) { started.resolve(); await gate.promise }
+      if (stage === 'history' && key === 'messages:' + id) { started.resolve(); await gate.promise }
       await put(key, value)
     })
-    if (stage === 'core') vi.mocked(engine['store'].putBytes).mockImplementation(async () => { started.resolve(); await gate.promise })
+    const batch = vi.mocked(engine['store'].putBatch).getMockImplementation()!
+    if (stage === 'batch') vi.mocked(engine['store'].putBatch).mockImplementation(async (entries) => { started.resolve(); await gate.promise; await batch(entries) })
     const rpc = action === 'react' ? engine.react(id, target, '👍') : engine.retryMessage(id, failedId)
     const rejected = expect(rpc).rejects.toThrow('session ended')
     await started.promise
@@ -257,7 +264,7 @@ describe('reaction durable acceptance', () => {
     await rejected
     await reset
     expect(sendReaction).toHaveBeenCalledTimes(1)
-    expect(engine['store'].putBytes).toHaveBeenCalledWith('core', new Uint8Array([2]))
+    expect(engine['store'].putBatch).toHaveBeenCalledWith([['core', new Uint8Array([2])], ['app', expect.any(Uint8Array)]])
     expect(engine['state'].outbox).toEqual([])
     expect(engine['acceptingReactions'].size).toBe(0)
     expect(request).not.toHaveBeenCalled()

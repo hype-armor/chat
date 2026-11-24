@@ -172,6 +172,11 @@ export class CoreClient {
      */
     sendGroupInfo(conversation_id: Uint8Array, name: string, admins: Array<any>, sent_at_ms: number, message_id: Uint8Array): Uint8Array;
     /**
+     * Encodes an encrypted topic update. The worker must not enable sending until
+     * state persistence, recovery, and compatibility are implemented and reviewed.
+     */
+    sendGroupTopic(conversation_id: Uint8Array, text: string, clock: number, sent_at_ms: number, message_id: Uint8Array): Uint8Array;
+    /**
      * A live-location start or update (`point` true) or stop. Until-stopped
      * sessions renew their 8-hour lease. Returns the encoded `Envelope`.
      */
@@ -261,6 +266,16 @@ export class EventView {
     groupAdmins: Uint8Array;
     get groupName(): string | undefined;
     set groupName(value: string | null | undefined);
+    get groupTopicClock(): number | undefined;
+    set groupTopicClock(value: number | null | undefined);
+    /**
+     * Topic content is authenticated by MLS, but is not yet accepted as state.
+     */
+    get groupTopicText(): string | undefined;
+    /**
+     * Topic content is authenticated by MLS, but is not yet accepted as state.
+     */
+    set groupTopicText(value: string | null | undefined);
     kind: string;
     get live(): LiveLocationView | undefined;
     set live(value: LiveLocationView | null | undefined);
@@ -549,6 +564,8 @@ export interface InitOutput {
     readonly __wbg_get_eventview_displayName: (a: number) => [number, number];
     readonly __wbg_get_eventview_groupAdmins: (a: number) => [number, number];
     readonly __wbg_get_eventview_groupName: (a: number) => [number, number];
+    readonly __wbg_get_eventview_groupTopicClock: (a: number) => [number, number];
+    readonly __wbg_get_eventview_groupTopicText: (a: number) => [number, number];
     readonly __wbg_get_eventview_kind: (a: number) => [number, number];
     readonly __wbg_get_eventview_live: (a: number) => number;
     readonly __wbg_get_eventview_locality: (a: number) => number;
@@ -639,6 +656,8 @@ export interface InitOutput {
     readonly __wbg_set_eventview_displayName: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_groupAdmins: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_groupName: (a: number, b: number, c: number) => void;
+    readonly __wbg_set_eventview_groupTopicClock: (a: number, b: number, c: number) => void;
+    readonly __wbg_set_eventview_groupTopicText: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_kind: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_live: (a: number, b: number) => void;
     readonly __wbg_set_eventview_locality: (a: number, b: number) => void;
@@ -723,6 +742,7 @@ export interface InitOutput {
     readonly coreclient_sendDeletion: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
     readonly coreclient_sendDeviceSync: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly coreclient_sendGroupInfo: (a: number, b: number, c: number, d: number, e: number, f: any, g: number, h: number, i: number) => [number, number, number, number];
+    readonly coreclient_sendGroupTopic: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number, number, number];
     readonly coreclient_sendLiveLocation: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => [number, number, number, number];
     readonly coreclient_sendLocality: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number, number, number];
     readonly coreclient_sendLocation: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number) => [number, number, number, number];

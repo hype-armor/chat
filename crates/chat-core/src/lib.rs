@@ -9,7 +9,9 @@ pub mod client;
 pub mod envelope;
 pub mod mls;
 pub mod padding;
+pub mod presence;
 pub mod qr;
+pub mod restricted_channel_binding;
 pub mod safety;
 #[cfg(feature = "wasm")]
 pub mod wasm;

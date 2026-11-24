@@ -17,7 +17,7 @@ test('deleting an account signs out and frees the username (FR-ID-9)', async ({ 
   await openSetting(alice, 'Delete account')
   await alice.getByLabel('Type your username to confirm').fill('someone.else.00')
   await alice.getByRole('button', { name: 'Delete my account' }).click()
-  await expect(alice.getByRole('alert')).toContainText("isn't this account's username")
+  await expect(alice.getByRole('alert')).toContainText("isn't this account's current username")
   await alice.getByLabel('Type your username to confirm').fill(aliceUsername)
   await alice.getByRole('button', { name: 'Delete my account' }).click()
   await expect(alice.getByText('Your account was deleted.')).toBeVisible()

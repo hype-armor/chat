@@ -56,3 +56,4 @@ revisited; do it with a new ADR that supersedes the old one.
 | [0047](0047-encrypted-message-reactions.md) | Verified encrypted message reactions with deterministic account ordering and durable tombstones | Accepted |
 | [0048](0048-encrypted-message-deletion.md) | Own-device deletion synchronization and authenticated 1-hour everyone-deletion requests with durable tombstones | Accepted for implementation |
 | [0049](0049-recoverable-blob-upload-creation.md) | Device-scoped recoverable multipart upload creation | Accepted |
+| [0050](0050-invite-only-groups-and-presence.md) | Invite-only group features, presence, and username changes | Proposed |

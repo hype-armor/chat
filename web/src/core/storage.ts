@@ -33,6 +33,20 @@ function openDb(): Promise<IDBDatabase> {
   return request(req)
 }
 
+async function readRevision(keys: IDBObjectStore, name: string): Promise<number> {
+  const key: IDBValidKey = ['atomic-revision', name]
+  // Queue both requests while the transaction is active. get alone cannot
+  // distinguish a missing record from a record containing undefined.
+  const [value, presentKey] = await Promise.all([request(keys.get(key)), request(keys.getKey(key))])
+  if (presentKey === undefined) return 0
+  if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error('Invalid storage revision')
+  return value as number
+}
+
+export type AtomicStorageMutation =
+  | { store: 'kv'; name: string; value: Uint8Array | undefined }
+  | { store: 'files'; name: string; value: Blob | undefined }
+
 export class SecureStore {
   private reconnecting?: Promise<IDBDatabase>
 
@@ -94,15 +108,34 @@ export class SecureStore {
 
   static async open(): Promise<SecureStore> {
     const db = await openDb()
-    const tx = db.transaction('keys', 'readonly')
-    let key = (await request(tx.objectStore('keys').get('storage'))) as CryptoKey | undefined
-    if (!key) {
-      key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'])
-      const creating = db.transaction('keys', 'readwrite')
-      const done = committed(creating)
-      await Promise.all([request(creating.objectStore('keys').put(key, 'storage')), done])
+    try {
+      const tx = db.transaction('keys', 'readonly')
+      let key = (await request(tx.objectStore('keys').get('storage'))) as CryptoKey | undefined
+      if (!key) {
+        // Key generation must finish before the transaction starts. Concurrent
+        // openers serialize their read and conditional add in this transaction.
+        const candidate = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'])
+        const creating = db.transaction('keys', 'readwrite')
+        const done = committed(creating)
+        try {
+          const keys = creating.objectStore('keys')
+          key = (await request(keys.get('storage'))) as CryptoKey | undefined
+          if (!key) {
+            await request(keys.add(candidate, 'storage'))
+            key = candidate
+          }
+          await done
+        } catch (error) {
+          try { creating.abort() } catch { /* Already finished or aborted. */ }
+          await done.catch(() => undefined)
+          throw error
+        }
+      }
+      return new SecureStore(db, key)
+    } catch (error) {
+      db.close()
+      throw error
     }
-    return new SecureStore(db, key)
   }
 
   async getBytes(name: string): Promise<Uint8Array | undefined> {
@@ -114,12 +147,105 @@ export class SecureStore {
     return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, this.key, sealed.slice(12)))
   }
 
-  async putBytes(name: string, value: Uint8Array): Promise<void> {
+  /** Seal all values before opening one transaction. A completed batch is all-or-nothing. */
+  async putBatch(entries: readonly (readonly [string, Uint8Array])[]): Promise<void> {
+    return this.updateBatch(entries)
+  }
+
+  /** Atomically replace and delete encrypted records, such as a completed journal and its snapshots. */
+  async updateBatch(entries: readonly (readonly [string, Uint8Array | undefined])[]): Promise<void> {
+    if (new Set(entries.map(([name]) => name)).size !== entries.length) throw new Error('Duplicate storage key in batch')
+    if (!entries.length) return
+    const sealed = await Promise.all(entries.map(async ([name, value]) => [name, value === undefined ? undefined : await this.seal(value)] as const))
+    const tx = await this.transaction('kv', 'readwrite')
+    const done = committed(tx)
+    try {
+      const store = tx.objectStore('kv')
+      const writes: Promise<unknown>[] = []
+      for (const [name, value] of sealed) {
+        const write = value === undefined ? request(store.delete(name)) : request(store.put(value, name))
+        // A later put can throw before Promise.all attaches its handlers.
+        void write.catch(() => undefined)
+        writes.push(write)
+      }
+      await Promise.all([...writes, done])
+    } catch (error) {
+      // A synchronous put failure must not commit earlier requests in the batch.
+      try { tx.abort() } catch { /* The transaction already finished or aborted. */ }
+      await done.catch(() => undefined)
+      throw error
+    }
+  }
+
+  /** Read the device-local fence for a cooperative atomic writer. Missing fences start at 0. */
+  async atomicRevision(name: string): Promise<number> {
+    if (typeof name !== 'string' || !name) throw new Error('Invalid storage revision')
+    const tx = await this.transaction('keys', 'readonly')
+    return readRevision(tx.objectStore('keys'), name)
+  }
+
+  /**
+   * Apply cooperative revision-fenced writes. KV values are encrypted here; file
+   * values must already be sealed, as with putFile. File bytes are stored as an
+   * ArrayBuffer, so Blob MIME types are not preserved. Other writers must use the
+   * same fence; ordinary SecureStore methods do not participate in this CAS.
+   */
+  async atomicUpdate(name: string, expectedRevision: number, mutations: readonly AtomicStorageMutation[]): Promise<void> {
+    if (typeof name !== 'string' || !name || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0 || expectedRevision >= Number.MAX_SAFE_INTEGER) {
+      throw new Error('Invalid storage revision')
+    }
+    const seen = new Set<string>()
+    for (const mutation of mutations) {
+      if (!mutation || (mutation.store !== 'kv' && mutation.store !== 'files') || typeof mutation.name !== 'string' ||
+          (mutation.value !== undefined && !(mutation.store === 'kv' ? mutation.value instanceof Uint8Array : mutation.value instanceof Blob))) {
+        throw new Error('Unsupported storage mutation')
+      }
+      const identity = JSON.stringify([mutation.store, mutation.name])
+      if (seen.has(identity)) throw new Error('Duplicate storage key in batch')
+      seen.add(identity)
+    }
+    // Snapshot and prepare everything before opening the transaction.
+    const prepared = await Promise.all(mutations.map(async mutation => ({
+      store: mutation.store, name: mutation.name,
+      value: mutation.value === undefined ? undefined : mutation.store === 'kv'
+        ? await this.seal(new Uint8Array(mutation.value as Uint8Array))
+        : await (mutation.value as Blob).arrayBuffer(),
+    })))
+    const stores = Array.from(new Set(['keys', ...prepared.map(mutation => mutation.store)]))
+    const tx = await this.transaction(stores, 'readwrite')
+    const done = committed(tx)
+    try {
+      const keys = tx.objectStore('keys')
+      const current = await readRevision(keys, name)
+      if (current !== expectedRevision) throw new Error('Stale storage revision')
+      const writes: Promise<unknown>[] = []
+      for (const mutation of prepared) {
+        const store = tx.objectStore(mutation.store)
+        const write = mutation.value === undefined ? request(store.delete(mutation.name)) : request(store.put(mutation.value, mutation.name))
+        void write.catch(() => undefined)
+        writes.push(write)
+      }
+      const fence = request(keys.put(expectedRevision + 1, ['atomic-revision', name]))
+      void fence.catch(() => undefined)
+      await Promise.all([...writes, fence, done])
+    } catch (error) {
+      try { tx.abort() } catch { /* Already finished or aborted. */ }
+      await done.catch(() => undefined)
+      throw error
+    }
+  }
+
+  private async seal(value: Uint8Array): Promise<Uint8Array> {
     const iv = crypto.getRandomValues(new Uint8Array(12))
     const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, this.key, plain(value)))
     const sealed = new Uint8Array(12 + ct.length)
     sealed.set(iv)
     sealed.set(ct, 12)
+    return sealed
+  }
+
+  async putBytes(name: string, value: Uint8Array): Promise<void> {
+    const sealed = await this.seal(value)
     const tx = await this.transaction('kv', 'readwrite')
     const done = committed(tx)
     // Request success is not acceptance: the transaction can still abort.

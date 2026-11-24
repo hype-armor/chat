@@ -31,6 +31,10 @@ function fixture(from: string) {
     getJson: async (key: string) => structuredClone(values.get(key)),
     putJson: async (key: string, value: unknown) => { values.set(key, structuredClone(value)) },
     putBytes: async () => {},
+    putBatch: async (entries: readonly (readonly [string, Uint8Array])[]) => {
+      const staged = entries.map(([key, value]) => [key, key === 'app' ? JSON.parse(new TextDecoder().decode(value)) : value.slice()] as const)
+      for (const [key, value] of staged) values.set(key, value)
+    },
   } as unknown as Engine['store']
   const sendLiveLocation = vi.fn((..._args: unknown[]) => new Uint8Array([1]))
   engine['core'] = { sendLiveLocation, snapshot: () => new Uint8Array() } as unknown as Engine['core']
@@ -61,7 +65,7 @@ describe('one card per live share', () => {
       sessionId, conversationId, messageId, expiresAt: now - 1000, untilStopped: true,
       lastSentAt: now - MAX_LIVE_DURATION_MS - 1000,
     })
-    const writes = vi.spyOn(engine['store'], 'putBytes')
+    const writes = vi.spyOn(engine['store'], 'putBatch')
     const views = vi.fn()
     engine['emitView'] = views
     await engine['endExpiredLive']()
