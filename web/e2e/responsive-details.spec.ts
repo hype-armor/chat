@@ -17,6 +17,16 @@ async function open(page: Page, width: number, group = true) {
   await expect(page.getByTestId('message')).toHaveCount(30)
 }
 
+test('report form fits a narrow direct conversation', async ({ page }) => {
+  await open(page, 320, false)
+  await page.setViewportSize({ width: 320, height: 640 })
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await conversationAction(page, 'Report')
+  const details = conversationDetails(page)
+  await expect(details.getByRole('form')).toBeVisible()
+  await expectLayout(page, 'narrow report form', true)
+})
+
 for (const width of [768, 1024, 1100, 1280]) {
   test(`details preserve the conversation and composer at ${width}px`, async ({ page }, testInfo) => {
     await open(page, width)

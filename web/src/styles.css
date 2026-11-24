@@ -900,6 +900,7 @@ button.link.danger {
 }
 
 .report fieldset {
+  min-inline-size: 0;
   border: none;
   margin: 0;
   padding: 0;
