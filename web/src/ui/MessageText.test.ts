@@ -34,13 +34,28 @@ describe('MessageText', () => {
     expect(html).not.toContain('href="https://user:pass@example.test"')
   })
 
-  it('keeps unsupported automatic and reference links as literal text', () => {
+  it('renders safe reference links and GFM web autolinks', () => {
     const html = render('www.example.test\n\n[Safe][reference]\n\n[reference]: https://example.test')
 
+    expect(html).toContain('<a href="http://www.example.test"')
+    expect(html).toContain('<a href="https://example.test"')
+    expect(html).toContain('>Safe</a>')
+    expect(html).not.toContain('[reference]:')
+  })
+
+  it('renders headings, aligned tables, and disabled task items', () => {
+    const html = render('# Heading\n\n| Left | Right |\n| :--- | ---: |\n| **bold** | value |\n\n- [x] Done\n- [ ] Open')
+    expect(html).toContain('<h1>Heading</h1>')
+    expect(html).toContain('<th style="text-align:left">Left</th>')
+    expect(html).toContain('<td style="text-align:left"><strong>bold</strong></td>')
+    expect(html).toContain('type="checkbox" disabled="" readOnly="" checked=""')
+    expect(html).toContain('type="checkbox" disabled="" readOnly=""')
+  })
+
+  it('does not activate unsafe reference links', () => {
+    const html = render('[bad][x]\n\n[x]: javascript:alert(1)')
     expect(html).not.toContain('<a ')
-    expect(html).toContain('www.example.test')
-    expect(html).toContain('[Safe][reference]')
-    expect(html).toContain('[reference]: https://example.test')
+    expect(html).toContain('[bad][x]')
   })
 
   it('shows raw HTML and images as text without creating untrusted elements', () => {

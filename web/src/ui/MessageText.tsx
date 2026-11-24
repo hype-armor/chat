@@ -18,7 +18,7 @@ function childTokens(token: Token): Token[] {
 }
 
 function isExplicitMarkdownLink(token: Tokens.Link): boolean {
-  return /^https?:\/\//i.test(token.raw) || /^\[[\s\S]*\]\(\s*<?https?:\/\//i.test(token.raw)
+  return /^(?:https?:\/\/|www\.)/i.test(token.raw) || token.raw.startsWith('[') || /^<https?:\/\//i.test(token.raw)
 }
 
 function inline(tokens: Token[], key: string): ReactNode[] {
@@ -61,8 +61,20 @@ function blocks(tokens: Token[], key: string): ReactNode[] {
     const tokenKey = `${key}-${index}`
     switch (token.type) {
       case 'space': return []
-      // Reference links are outside the basic Markdown scope, so keep them literal.
-      case 'def': return plainText(token.raw, tokenKey, false)
+      case 'def': return []
+      case 'heading': {
+        const heading = token as Tokens.Heading
+        const Heading = `h${heading.depth}` as 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6'
+        return [<Heading key={tokenKey}>{inline(heading.tokens, tokenKey)}</Heading>]
+      }
+      case 'table': {
+        const table = token as Tokens.Table
+        return [<div key={tokenKey} className="message-table"><table><thead><tr>{table.header.map((cell, i) =>
+          <th key={i} style={{ textAlign: cell.align ?? undefined }}>{inline(cell.tokens, `${tokenKey}-h-${i}`)}</th>)}</tr></thead>
+          <tbody>{table.rows.map((row, r) => <tr key={r}>{row.map((cell, c) =>
+            <td key={c} style={{ textAlign: cell.align ?? undefined }}>{inline(cell.tokens, `${tokenKey}-${r}-${c}`)}</td>)}</tr>)}</tbody></table></div>]
+      }
+      case 'checkbox': return [<input key={tokenKey} type="checkbox" checked={(token as Tokens.Checkbox).checked} disabled readOnly />]
       case 'text': return childTokens(token).length ? inline(childTokens(token), tokenKey) : plainText(token.text, tokenKey)
       case 'paragraph': return [<span key={tokenKey} className="message-paragraph">{inline(childTokens(token), tokenKey)}</span>]
       case 'blockquote': return [<blockquote key={tokenKey}>{blocks(childTokens(token), tokenKey)}</blockquote>]
@@ -75,13 +87,12 @@ function blocks(tokens: Token[], key: string): ReactNode[] {
       }
       case 'code': return [<pre key={tokenKey}><code>{token.text}</code></pre>]
       case 'hr': return [<hr key={tokenKey} />]
-      // Basic chat Markdown intentionally does not add headings, tables, or images.
       default: return [<span key={tokenKey}>{plainText(token.raw, tokenKey)}</span>]
     }
   })
 }
 
-/** Renders a safe, basic Markdown subset. Raw HTML is always visible text. */
+/** Renders Markdown without injecting HTML or loading remote images. */
 export function MessageText({ text }: { text: string }) {
   const tokens = marked.lexer(text, { breaks: true, gfm: true })
   // Keep plain paragraphs in one text flow. This preserves native selection behavior and blank lines.
