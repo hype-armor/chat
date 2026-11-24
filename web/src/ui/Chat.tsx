@@ -1319,11 +1319,11 @@ function Conversation({
   const deletingRef = useRef(deleting)
   deletingRef.current = deleting
   useEffect(() => { if (callOpen) setDeleting(undefined) }, [callOpen])
-  const beginDeletion = (message: ChatMessage, scope: 'me' | 'everyone') => {
+  const beginDeletion = useCallback((message: ChatMessage, scope: 'me' | 'everyone') => {
     const row = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const rows = [...(content.current?.querySelectorAll<HTMLElement>('[data-testid="message"]') ?? [])]
     setDeleting({ message, scope, row, index: rows.indexOf(row!) })
-  }
+  }, [])
   const finishDeletion = (selection: NonNullable<typeof deleting>) => {
     if (deletingRef.current !== selection) return
     setDeleting(undefined)
@@ -1343,7 +1343,7 @@ function Conversation({
   const draftState = useConversationDraft(drafts, id)
   const { text: draft, quote: replyTo, failed: failedDrafts } = draftState
   const editDraft = (text: string) => drafts.edit(id, text)
-  const editReply = (quote: ReplyQuote | undefined) => drafts.reply(id, quote)
+  const editReply = useCallback((quote: ReplyQuote | undefined) => drafts.reply(id, quote), [drafts, id])
   const typingEnabled = typingIndicators
   const [composerFocused, setComposerFocused] = useState(false)
   const [typingError, setTypingError] = useState('')
@@ -1539,6 +1539,107 @@ function Conversation({
     }
   }
 
+  // Keep history work out of draft edits, but refresh day labels after midnight.
+  const today = new Date().toDateString()
+  const messageRows = useMemo(() => messageLayout(messages, Date.now()).map(({ message: m, day, first, last }) => (
+            <Fragment key={m.id}>
+              {day && <li role="separator" aria-label={day} className="day-separator small" data-scroll-key={`day:${m.id}`}>{day}</li>}
+              {m.kind === 'notice' ? (
+                <li className="notice-msg small" data-testid="notice" data-scroll-key={m.id}>
+                  {m.text}
+                </li>
+              ) : (
+                <MessageActions
+                  className={`${m.from === 'me' ? 'mine' : 'theirs'}${first ? ' run-first' : ''}${last ? ' run-last' : ''}`}
+                  title={new Date(m.sentAt).toLocaleString()}
+                  author={m.from === 'me' ? 'You' : m.fromName ?? title}
+                  enabled={(!m.deleted && !!m.text) || m.canDeleteForMe === true || m.canDeleteForEveryone === true || (active && !blocked && !request && !m.deleted && (m.canReply === true || m.canReact === true))}
+                  copyText={!m.deleted && m.text ? m.text : undefined}
+                  onDeleteForMe={m.canDeleteForMe === true ? () => beginDeletion(m, 'me') : undefined}
+                  onDeleteForEveryone={!m.deleted && m.canDeleteForEveryone === true ? () => beginDeletion(m, 'everyone') : undefined}
+                  deleteForEveryoneUntil={m.deleteForEveryoneUntil}
+                  onReact={active && !blocked && !request && !m.deleted && m.canReact === true ? (emoji) => {
+                    void core.react(id, m.id, emoji).catch((error: unknown) => setAttachError(error instanceof Error ? error.message : 'Reaction failed'))
+                  } : undefined}
+                  onReply={active && !blocked && !request && !m.deleted && m.canReply === true ? () => {
+                    setAttachError(undefined)
+                    editReply(quoteMessage(m))
+                    composer.current?.focus({ preventScroll: true })
+                  } : undefined}
+                >
+                  <span data-scroll-key={m.id} className={isGroup && m.from !== 'me' && first ? 'sender small' : 'visually-hidden'}>
+                    {m.from === 'me' ? 'You' : m.fromName ?? (isGroup ? m.from : title)}
+                  </span>
+                  {m.deleted ? <p className="deleted-message">Message deleted</p> : <>
+                  {m.file && (
+                    <Attachment
+                      core={core}
+                      conversationId={id}
+                      messageId={m.id}
+                      file={m.file}
+                      sending={m.status === 'sending'}
+                    />
+                  )}
+                  {m.location && <LocationCard core={core} location={m.location} />}
+                  {m.live && <LiveCard core={core} conversationId={id} message={m} live={m.live} />}
+                  {m.reply && <ReplyPreview quote={m.reply} />}
+                  {m.text && <MessageText text={m.text} />}
+                  {m.reactionStatus && <div className="reaction-delivery small" role={m.reactionStatus.status === 'failed' ? 'alert' : 'status'}>
+                    {m.reactionStatus.status === 'sending' ? 'Sending reaction…' : <>
+                      Reaction not sent{m.reactionStatus.error ? ': ' + m.reactionStatus.error : ''}
+                      <button type="button" className="link small" disabled={!active || blocked || !!request}
+                        onClick={() => void core.retryMessage(id, m.reactionStatus!.id).catch((error: unknown) => setAttachError(error instanceof Error ? error.message : 'Reaction retry failed'))}>Retry reaction</button>
+                    </>}
+                  </div>}
+                  {!!m.reactions?.length && <div className="reaction-chips" role="group" aria-label="Message reactions">
+                    {m.reactions.map((reaction) => <button key={reaction.emoji} type="button"
+                      aria-pressed={reaction.own}
+                      aria-label={reactionLabel(reaction.emoji) + ', ' + reaction.count + (reaction.own ? ', remove your reaction' : ', react')}
+                      disabled={!active || blocked || !!request || (!reaction.own && m.canReact !== true)}
+                      onClick={() => void core.react(id, m.id, reaction.emoji).catch((error: unknown) => setAttachError(error instanceof Error ? error.message : 'Reaction failed'))}
+                    >{reaction.emoji} <span>{reaction.count}</span></button>)}
+                  </div>}
+                  <span className={last || m.status === 'failed' ? 'meta small' : 'visually-hidden'}>
+                    <time
+                      className={last ? undefined : 'visually-hidden'}
+                      dateTime={messageDateTime(m.sentAt)}
+                      title={new Date(m.sentAt).toLocaleString()}
+                      aria-label={new Date(m.sentAt).toLocaleString()}
+                    >
+                      {new Date(m.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </time>
+                    {m.status === 'failed' ? (
+                      <span className="message-failure">
+                        {STATUS_LABEL[m.status]}{m.error && `: ${m.error}`}
+                      </span>
+                    ) : (
+                      <span
+                        className={m.from === 'me' && last ? `message-status ${m.status}` : 'visually-hidden'}
+                        role="img"
+                        aria-label={STATUS_LABEL[m.status]}
+                      >
+                        {STATUS_ICON[m.status]}
+                      </span>
+                    )}
+                  </span>
+                  {m.status === 'failed' && active && (
+                    <button type="button" className="link small" onClick={() => void core.retryMessage(id, m.id)}>
+                      Retry
+                    </button>
+                  )}
+                  </>}
+                  {m.deletionStatus && <div className="deletion-delivery small" role={m.deletionStatus.status === 'failed' ? 'alert' : 'status'}>
+                    {m.deletionStatus.status === 'sending' ? 'Deletion accepted on this device. Requesting deletion on other devices…' : <>
+                      Deletion accepted on this device. Deletion delivery unconfirmed{m.deletionStatus.error ? ': ' + m.deletionStatus.error : ''}.
+                      <button type="button" className="link small" disabled={!active}
+                        onClick={() => void core.retryDeletion(id, m.deletionStatus!.id).catch((error: unknown) => setAttachError(error instanceof Error ? error.message : 'Deletion retry failed'))}>Retry deletion</button>
+                    </>}
+                  </div>}
+                </MessageActions>
+              )}
+            </Fragment>
+          )), [messages, title, active, blocked, request, isGroup, core, id, beginDeletion, editReply, today])
+
   return (
     <div ref={shell} className={`conversation-shell${panelOpen ? ' details-open' : ''}${overlay ? ' details-overlay' : ''}`}>
     {deleting && !callOpen && <DeletionConfirmation
@@ -1663,104 +1764,7 @@ function Conversation({
       <div className="issue132-messages-area">
       <div className="messages-viewport" ref={viewport} onScroll={onScroll}>
         <ol className="messages" ref={content}>
-          {messageLayout(messages, Date.now()).map(({ message: m, day, first, last }) => (
-            <Fragment key={m.id}>
-              {day && <li role="separator" aria-label={day} className="day-separator small" data-scroll-key={`day:${m.id}`}>{day}</li>}
-              {m.kind === 'notice' ? (
-                <li className="notice-msg small" data-testid="notice" data-scroll-key={m.id}>
-                  {m.text}
-                </li>
-              ) : (
-                <MessageActions
-                  className={`${m.from === 'me' ? 'mine' : 'theirs'}${first ? ' run-first' : ''}${last ? ' run-last' : ''}`}
-                  title={new Date(m.sentAt).toLocaleString()}
-                  author={m.from === 'me' ? 'You' : m.fromName ?? title}
-                  enabled={(!m.deleted && !!m.text) || m.canDeleteForMe === true || m.canDeleteForEveryone === true || (active && !blocked && !request && !m.deleted && (m.canReply === true || m.canReact === true))}
-                  copyText={!m.deleted && m.text ? m.text : undefined}
-                  onDeleteForMe={m.canDeleteForMe === true ? () => beginDeletion(m, 'me') : undefined}
-                  onDeleteForEveryone={!m.deleted && m.canDeleteForEveryone === true ? () => beginDeletion(m, 'everyone') : undefined}
-                  deleteForEveryoneUntil={m.deleteForEveryoneUntil}
-                  onReact={active && !blocked && !request && !m.deleted && m.canReact === true ? (emoji) => {
-                    void core.react(id, m.id, emoji).catch((error: unknown) => setAttachError(error instanceof Error ? error.message : 'Reaction failed'))
-                  } : undefined}
-                  onReply={active && !blocked && !request && !m.deleted && m.canReply === true ? () => {
-                    setAttachError(undefined)
-                    editReply(quoteMessage(m))
-                    composer.current?.focus({ preventScroll: true })
-                  } : undefined}
-                >
-                  <span data-scroll-key={m.id} className={isGroup && m.from !== 'me' && first ? 'sender small' : 'visually-hidden'}>
-                    {m.from === 'me' ? 'You' : m.fromName ?? (isGroup ? m.from : title)}
-                  </span>
-                  {m.deleted ? <p className="deleted-message">Message deleted</p> : <>
-                  {m.file && (
-                    <Attachment
-                      core={core}
-                      conversationId={id}
-                      messageId={m.id}
-                      file={m.file}
-                      sending={m.status === 'sending'}
-                    />
-                  )}
-                  {m.location && <LocationCard core={core} location={m.location} />}
-                  {m.live && <LiveCard core={core} conversationId={id} message={m} live={m.live} />}
-                  {m.reply && <ReplyPreview quote={m.reply} />}
-                  {m.text && <MessageText text={m.text} />}
-                  {m.reactionStatus && <div className="reaction-delivery small" role={m.reactionStatus.status === 'failed' ? 'alert' : 'status'}>
-                    {m.reactionStatus.status === 'sending' ? 'Sending reaction…' : <>
-                      Reaction not sent{m.reactionStatus.error ? ': ' + m.reactionStatus.error : ''}
-                      <button type="button" className="link small" disabled={!active || blocked || !!request}
-                        onClick={() => void core.retryMessage(id, m.reactionStatus!.id).catch((error: unknown) => setAttachError(error instanceof Error ? error.message : 'Reaction retry failed'))}>Retry reaction</button>
-                    </>}
-                  </div>}
-                  {!!m.reactions?.length && <div className="reaction-chips" role="group" aria-label="Message reactions">
-                    {m.reactions.map((reaction) => <button key={reaction.emoji} type="button"
-                      aria-pressed={reaction.own}
-                      aria-label={reactionLabel(reaction.emoji) + ', ' + reaction.count + (reaction.own ? ', remove your reaction' : ', react')}
-                      disabled={!active || blocked || !!request || (!reaction.own && m.canReact !== true)}
-                      onClick={() => void core.react(id, m.id, reaction.emoji).catch((error: unknown) => setAttachError(error instanceof Error ? error.message : 'Reaction failed'))}
-                    >{reaction.emoji} <span>{reaction.count}</span></button>)}
-                  </div>}
-                  <span className={last || m.status === 'failed' ? 'meta small' : 'visually-hidden'}>
-                    <time
-                      className={last ? undefined : 'visually-hidden'}
-                      dateTime={messageDateTime(m.sentAt)}
-                      title={new Date(m.sentAt).toLocaleString()}
-                      aria-label={new Date(m.sentAt).toLocaleString()}
-                    >
-                      {new Date(m.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </time>
-                    {m.status === 'failed' ? (
-                      <span className="message-failure">
-                        {STATUS_LABEL[m.status]}{m.error && `: ${m.error}`}
-                      </span>
-                    ) : (
-                      <span
-                        className={m.from === 'me' && last ? `message-status ${m.status}` : 'visually-hidden'}
-                        role="img"
-                        aria-label={STATUS_LABEL[m.status]}
-                      >
-                        {STATUS_ICON[m.status]}
-                      </span>
-                    )}
-                  </span>
-                  {m.status === 'failed' && active && (
-                    <button type="button" className="link small" onClick={() => void core.retryMessage(id, m.id)}>
-                      Retry
-                    </button>
-                  )}
-                  </>}
-                  {m.deletionStatus && <div className="deletion-delivery small" role={m.deletionStatus.status === 'failed' ? 'alert' : 'status'}>
-                    {m.deletionStatus.status === 'sending' ? 'Deletion accepted on this device. Requesting deletion on other devices…' : <>
-                      Deletion accepted on this device. Deletion delivery unconfirmed{m.deletionStatus.error ? ': ' + m.deletionStatus.error : ''}.
-                      <button type="button" className="link small" disabled={!active}
-                        onClick={() => void core.retryDeletion(id, m.deletionStatus!.id).catch((error: unknown) => setAttachError(error instanceof Error ? error.message : 'Deletion retry failed'))}>Retry deletion</button>
-                    </>}
-                  </div>}
-                </MessageActions>
-              )}
-            </Fragment>
-          ))}
+          {messageRows}
         </ol>
       </div>
       {showScrollToBottom && <button
