@@ -80,7 +80,7 @@ bots_dockerfile="$root/deploy/docker/bots.Dockerfile"
 grep -Fqx 'FROM rust:1.99-bookworm AS build' "$bots_dockerfile"
 grep -Fqx 'FROM node:24-bookworm-slim' "$bots_dockerfile"
 grep -Fq 'ca-certificates util-linux' "$bots_dockerfile"
-grep -Fqx 'COPY --from=build /src/target/release/chat-bot /opt/chat/bin/chat-bot' "$bots_dockerfile"
+grep -Fqx 'COPY --from=build /out/chat-bot /opt/chat/bin/chat-bot' "$bots_dockerfile"
 grep -Fqx 'COPY --from=build /src/scripts/bot-world /opt/chat/scripts/bot-world' "$bots_dockerfile"
 grep -Fqx 'COPY --from=build /src/fixtures/bot-world /opt/chat/fixtures/bot-world' "$bots_dockerfile"
 if grep -Eq '(^|/)(bots[.]env|invites[.]json)([[:space:]]|$)' "$bots_dockerfile"; then

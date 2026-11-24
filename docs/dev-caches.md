@@ -18,7 +18,8 @@ The default cache is `${XDG_CACHE_HOME:-$HOME/.cache}/chat-dev`:
 
 Cargo registry and Git downloads retain the user's existing CARGO_HOME. Do not
 share writable caches across mutually untrusted users. Docker BuildKit caches
-are separate and are not configured by this setup.
+are separate from these host caches. The Dockerfiles configure their own shared
+cache mounts, as described below.
 
 Use `scripts/chat-dev --isolated command ...` for worktree-local caches, including
 Cargo downloads. The `target/chat-dev-isolated` directory is ignored. Existing CARGO_TARGET_DIR,
@@ -40,3 +41,30 @@ checking that their worktree has no running jobs. This setup does not impose a
 cache retention limit.
 
 Checks: `python3 scripts/test-dev-caches.py` uses temporary caches and fake tools.
+
+## Docker builds
+
+The Dockerfiles share BuildKit caches within the selected builder. Cargo shares
+registry downloads, Git downloads, and compiled targets across server, echo, bots,
+and WASM builds. Target cache IDs include the Rust version, base distribution,
+and target OS, CPU architecture, and platform variant. The WASM stage also caches
+its installed wasm-bindgen tool.
+The Node stage shares a pnpm store.
+
+The common Cargo lock and CPU-sized job budget remain in place. Native stages
+copy runtime binaries out of the target cache before their RUN ends. Final images
+therefore do not depend on mutable cache contents. The pnpm install copies
+packages into the image layer because mounts and layers cannot reliably share
+hard links. Generated WASM bindings remain in the stage layer.
+
+The first build still downloads and compiles dependencies. Warm builds can be
+faster, but retained caches consume disk and do not guarantee lower peak usage.
+BuildKit can discard cache mounts; builds must work with empty caches. Mounts
+are builder-local, not automatically shared across machines or different builders.
+The updater keeps its existing builder-wide cleanup policy. It does not prune
+between stages. Docker's --no-cache option does not empty cache mounts. Only
+trusted builds must use these shared writable cache IDs.
+
+Run `python3 scripts/test-docker-caches.py` and `bash scripts/test-compose-build.sh`
+for cache-layout and build-wrapper checks without a Docker daemon. These checks
+do not prove a cold or warm Docker build succeeds.

@@ -13,6 +13,11 @@ cd "$(dirname "$0")/.."
 if [[ -n "${HOME:-}" && -x "$HOME/.cargo/bin/rustup" ]]; then
   export PATH="$HOME/.cargo/bin:$PATH"
 fi
+# Keep the installed cache shim ahead of rustup proxies. The shim selects
+# rustup Cargo itself and passes unrelated repositories through unchanged.
+if [[ -n "${HOME:-}" && -x "$HOME/.local/share/chat-dev/bin/cargo" ]]; then
+  export PATH="$HOME/.local/share/chat-dev/bin:$PATH"
+fi
 
 profile="${1:-release}"
 cargo build --profile "$profile" --target wasm32-unknown-unknown -p chat-core --features wasm
