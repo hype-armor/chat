@@ -30,7 +30,7 @@ Architecture Decision Records (ADRs) under [`adr/`](adr/).
 | — | [ADR index](adr/README.md) | Decision log |
 
 Invite-only group features, presence, and username changes are proposed in
-[ADR-0050](adr/0050-invite-only-groups-and-presence.md). Its privacy and security
+[ADR-0051](adr/0051-invite-only-groups-and-presence.md). Its privacy and security
 questions must be resolved before stronger group moderation ships.
 
 Message reactions use [ADR-0047](adr/0047-encrypted-message-reactions.md): verified

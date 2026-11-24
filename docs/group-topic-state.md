@@ -1,6 +1,6 @@
 # Encrypted group topic state: implementation foundation
 
-This document specifies a candidate client-side topic rule for ADR-0050. The
+This document specifies a candidate client-side topic rule for ADR-0051. The
 pure rules in `web/src/core/groupTopic.ts` include snapshot merging and safe
 clock advancement, but are not connected to storage, snapshot delivery, or the
 user interface. They do not provide a working group topic feature. Integration and independent security review remain necessary. The WASM

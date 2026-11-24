@@ -1,6 +1,6 @@
 # Presence implementation notes
 
-ADR-0050 defines the privacy boundary. Presence is not implemented end to end.
+ADR-0051 defines the privacy boundary. Presence is not implemented end to end.
 `web/src/core/presence.ts` contains only an unused recipient-side lease
 aggregator. It does not enable presence or authorize anyone to see it.
 

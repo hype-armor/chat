@@ -1,4 +1,4 @@
-# ADR-0050: Invite-only group features and presence
+# ADR-0051: Invite-only group features and presence
 
 - **Status:** Proposed; implementation and security review required
 - **Date:** 2026-11-22
