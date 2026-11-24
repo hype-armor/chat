@@ -9,9 +9,9 @@ mod account_send_limits_tests;
 #[cfg(test)]
 mod storage_drain;
 #[cfg(test)]
-mod storage_tracked_future;
-#[cfg(test)]
 mod storage_multipart_test;
+#[cfg(test)]
+mod storage_tracked_future;
 
 mod account;
 mod auth;
