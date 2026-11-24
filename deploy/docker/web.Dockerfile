@@ -6,10 +6,18 @@ FROM rust:1.99-bookworm AS wasm
 WORKDIR /src
 COPY . .
 ARG CARGO_BUILD_JOBS
+ARG TARGETOS
+ARG TARGETARCH
+ARG TARGETVARIANT
 # One CPU-sized Cargo build at a time, even when Compose builds images in parallel.
 RUN --mount=type=cache,id=chat-cargo-build-slot,target=/var/lock/chat-cargo-build,sharing=locked \
-    export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-$(nproc)}" \
- && cargo install wasm-bindgen-cli --locked --version "$(scripts/wasm-bindgen-version.sh)" \
+    --mount=type=cache,id=chat-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=chat-cargo-git,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,id=chat-cargo-target-rust1.99-bookworm-${TARGETOS}-${TARGETARCH}-${TARGETVARIANT},target=/src/target,sharing=locked \
+    --mount=type=cache,id=chat-wasm-bindgen-tools-rust1.99-bookworm-${TARGETOS}-${TARGETARCH}-${TARGETVARIANT},target=/opt/chat-wasm-tools,sharing=locked \
+    export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-$(nproc)}" CARGO_TARGET_DIR=/src/target \
+ && export PATH="/opt/chat-wasm-tools/bin:$PATH" \
+ && cargo install wasm-bindgen-cli --locked --version "$(scripts/wasm-bindgen-version.sh)" --root /opt/chat-wasm-tools \
  && scripts/build-wasm.sh
 
 # 2. TypeScript/React app
@@ -18,7 +26,11 @@ WORKDIR /src
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY web/package.json web/
-RUN pnpm install --frozen-lockfile
+ARG TARGETOS
+ARG TARGETARCH
+ARG TARGETVARIANT
+RUN --mount=type=cache,id=chat-pnpm-v10-${TARGETOS}-${TARGETARCH}-${TARGETVARIANT},target=/pnpm/store,sharing=locked \
+    pnpm install --frozen-lockfile --store-dir /pnpm/store --package-import-method=copy
 COPY web web
 COPY deploy/docker/security-headers.inc.template deploy/docker/
 COPY --from=wasm /src/web/src/core/pkg web/src/core/pkg
