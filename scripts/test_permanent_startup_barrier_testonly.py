@@ -17,8 +17,8 @@ class Fake:
         self.on_migrate = lambda: None
         self.migrations = 0
         self.claimed = set()
-        self.runtime_proofs = {('op1', 'old_ready', 'old'), ('op1', 'committed', 'new')}
-        self.release_proofs = {('op1', 'old_ready', 'old', 'boundary'),
+        self.runtime_proofs = {('op1', 'pre_migration_old_runtime', 'old'), ('op1', 'committed', 'new')}
+        self.release_proofs = {('op1', 'pre_migration_old_runtime', 'old', 'boundary'),
                                ('op1', 'committed', 'new', 'boundary_committed')}
         self.effect_started = self.capture_started = False
         self.on_remove = lambda: None
@@ -53,13 +53,13 @@ class Fake:
                 and self.proofs == {writer: op for writer in inventory})
     def migrate(self, op, runtime):
         self.effect_started = True
-        self.runtime_proofs.discard((op, 'old_ready', runtime))
+        self.runtime_proofs.discard((op, 'pre_migration_old_runtime', runtime))
         self.migrations += 1
         self.on_migrate()
         if self.fail == 'migrate': raise OSError('uncertain migration')
     def rollback(self, op, runtime):
         if self.fail == 'rollback': raise OSError('uncertain rollback')
-        self.runtime_proofs.add((op, 'old_ready', runtime))
+        self.runtime_proofs.add((op, 'pre_migration_old_runtime', runtime))
     def verify_runtime(self, op, boundary, runtime):
         return (op, boundary, runtime) in self.runtime_proofs
     def verify_release_safe(self, op, boundary, runtime, phase):
@@ -95,7 +95,7 @@ def crash_at(target):
 
 
 class BarrierTests(unittest.TestCase):
-    def ready(self, boundary='old_ready', runtime='old'):
+    def ready(self, boundary='pre_migration_old_runtime', runtime='old'):
         fake = Fake()
         barrier = PermanentBarrier(fake)
         barrier.provision()
@@ -108,30 +108,40 @@ class BarrierTests(unittest.TestCase):
         barrier = PermanentBarrier(fake)
         with self.assertRaises(BarrierError): barrier.acquire('op1', ['app'])
         fake, barrier = self.ready()
-        barrier.release('op1', 'old_ready', 'old')
+        barrier.release('op1', 'pre_migration_old_runtime', 'old')
         self.assertTrue(fake.dropin)
         self.assertIsNone(fake.marker)
 
+    def test_real_journal_old_ready_is_not_a_synthetic_boundary(self):
+        fake = Fake()
+        barrier = PermanentBarrier(fake)
+        barrier.provision()
+        barrier.acquire('op1', ['app', 'worker'])
+        fake.runtime_proofs.add(('op1', 'old_ready', 'old'))
+        with self.assertRaises(BarrierError):
+            barrier.persist_boundary('op1', 'old_ready', 'old')
+        self.assertEqual(fake.journal['phase'], 'fenced')
+
     def test_migration_requires_operation_boundary_and_runtime(self):
-        for args in [('old', 'old_ready', 'old'), ('op1', 'committed', 'old'),
-                     ('op1', 'old_ready', 'new')]:
+        for args in [('old', 'pre_migration_old_runtime', 'old'), ('op1', 'committed', 'old'),
+                     ('op1', 'pre_migration_old_runtime', 'new')]:
             fake, barrier = self.ready()
             with self.assertRaises(BarrierError): barrier.migrate(*args)
             self.assertEqual(fake.migrations, 0)
         fake, barrier = self.ready()
         with self.assertRaises(BarrierError): barrier.finish_migration('op1', 'new')
-        barrier.migrate('op1', 'old_ready', 'old')
+        barrier.migrate('op1', 'pre_migration_old_runtime', 'old')
         barrier.finish_migration('op1', 'new')
         barrier.release('op1', 'committed', 'new')
 
     def test_release_requires_exact_safe_runtime(self):
         fake, barrier = self.ready()
-        for args in [('op2', 'old_ready', 'old'), ('op1', 'committed', 'new'),
-                     ('op1', 'old_ready', 'new')]:
+        for args in [('op2', 'pre_migration_old_runtime', 'old'), ('op1', 'committed', 'new'),
+                     ('op1', 'pre_migration_old_runtime', 'new')]:
             with self.assertRaises(BarrierError): barrier.release(*args)
         self.assertEqual(fake.marker, 'op1')
-        barrier.migrate('op1', 'old_ready', 'old')
-        with self.assertRaises(BarrierError): barrier.release('op1', 'old_ready', 'old')
+        barrier.migrate('op1', 'pre_migration_old_runtime', 'old')
+        with self.assertRaises(BarrierError): barrier.release('op1', 'pre_migration_old_runtime', 'old')
 
     def test_inventory_and_stale_proofs_fail_closed(self):
         for change in ('missing', 'new', 'changed', 'stale', 'lease', 'external'):
@@ -143,14 +153,14 @@ class BarrierTests(unittest.TestCase):
             if change == 'lease': fake.lease = 'op0'
             if change == 'external': fake.external = False
             with self.subTest(change=change), self.assertRaises(BarrierError):
-                barrier.migrate('op1', 'old_ready', 'old')
+                barrier.migrate('op1', 'pre_migration_old_runtime', 'old')
             self.assertEqual(fake.migrations, 0)
 
     def test_reboot_does_not_restore_volatile_lease(self):
         fake, _ = self.ready()
         rebooted = fake.reboot()
         with self.assertRaises(BarrierError):
-            PermanentBarrier(rebooted).migrate('op1', 'old_ready', 'old')
+            PermanentBarrier(rebooted).migrate('op1', 'pre_migration_old_runtime', 'old')
         self.assertEqual(rebooted.marker, 'op1')
         self.assertEqual(rebooted.journal['phase'], 'boundary')
 
@@ -161,7 +171,7 @@ class BarrierTests(unittest.TestCase):
             barrier.provision()
             with self.assertRaises(Crash): barrier.acquire('op1', ['app', 'worker'])
             resumed = PermanentBarrier(fake.reboot())
-            with self.assertRaises(BarrierError): resumed.migrate('op1', 'old_ready', 'old')
+            with self.assertRaises(BarrierError): resumed.migrate('op1', 'pre_migration_old_runtime', 'old')
             with self.assertRaises(BarrierError): resumed.acquire('op1', ['app', 'worker'])
 
     def test_uncertain_effects_and_removal_crash_require_reconciliation(self):
@@ -176,24 +186,24 @@ class BarrierTests(unittest.TestCase):
                 fake, barrier = self.ready()
                 fake.fail = failure
                 with self.assertRaises(BarrierError):
-                    (barrier.migrate if failure == 'migrate' else barrier.release)('op1', 'old_ready', 'old')
+                    (barrier.migrate if failure == 'migrate' else barrier.release)('op1', 'pre_migration_old_runtime', 'old')
             self.assertTrue(fake.uncertain)
             with self.assertRaises(BarrierError): PermanentBarrier(fake.reboot()).acquire('op2', ['app'])
         fake, _ = self.ready()
         with self.assertRaises(Crash):
-            PermanentBarrier(fake, crash_at('marker_released')).release('op1', 'old_ready', 'old')
+            PermanentBarrier(fake, crash_at('marker_released')).release('op1', 'pre_migration_old_runtime', 'old')
         with self.assertRaises(BarrierError):
-            PermanentBarrier(fake.reboot()).release('op1', 'old_ready', 'old')
+            PermanentBarrier(fake.reboot()).release('op1', 'pre_migration_old_runtime', 'old')
         self.assertEqual(fake.journal['phase'], 'releasing')
 
     def test_rollback_and_committed_recovery_boundaries(self):
         fake, barrier = self.ready()
-        barrier.migrate('op1', 'old_ready', 'old')
+        barrier.migrate('op1', 'pre_migration_old_runtime', 'old')
         barrier.rollback('op1', 'old')
-        barrier.release('op1', 'old_ready', 'old')
+        barrier.release('op1', 'pre_migration_old_runtime', 'old')
         self.assertIsNone(fake.marker)
         fake, barrier = self.ready()
-        barrier.migrate('op1', 'old_ready', 'old')
+        barrier.migrate('op1', 'pre_migration_old_runtime', 'old')
         barrier.finish_migration('op1', 'new')
         barrier.release('op1', 'committed', 'new')
         self.assertIsNone(fake.marker)
@@ -215,14 +225,14 @@ class BarrierTests(unittest.TestCase):
 
     def test_operation_unique_and_stale_runtime_release_proofs(self):
         fake, barrier = self.ready()
-        barrier.release('op1', 'old_ready', 'old')
+        barrier.release('op1', 'pre_migration_old_runtime', 'old')
         fake.journal = None  # Simulate external journal archival, not ID reuse.
         with self.assertRaises(BarrierError): barrier.acquire('op1', ['app', 'worker'])
         for proof in ('runtime_proofs', 'release_proofs'):
             fake, barrier = self.ready()
-            setattr(fake, proof, {('op0', 'old_ready', 'old', 'boundary')} if proof == 'release_proofs'
-                    else {('op0', 'old_ready', 'old')})
-            with self.assertRaises(BarrierError): barrier.release('op1', 'old_ready', 'old')
+            setattr(fake, proof, {('op0', 'pre_migration_old_runtime', 'old', 'boundary')} if proof == 'release_proofs'
+                    else {('op0', 'pre_migration_old_runtime', 'old')})
+            with self.assertRaises(BarrierError): barrier.release('op1', 'pre_migration_old_runtime', 'old')
             self.assertEqual(fake.marker, 'op1')
 
     def test_atomic_removal_detects_drift_and_ambiguity(self):
@@ -235,19 +245,19 @@ class BarrierTests(unittest.TestCase):
                 if change == 'inventory': fake.inventory.add('new')
             fake.on_remove = drift
             with self.subTest(change=change), self.assertRaises(BarrierError):
-                barrier.release('op1', 'old_ready', 'old')
+                barrier.release('op1', 'pre_migration_old_runtime', 'old')
             self.assertEqual(fake.marker, 'op1')
             self.assertTrue(fake.uncertain)
         fake, barrier = self.ready()
         fake.absence_verified = False
-        with self.assertRaises(BarrierError): barrier.release('op1', 'old_ready', 'old')
+        with self.assertRaises(BarrierError): barrier.release('op1', 'pre_migration_old_runtime', 'old')
         self.assertTrue(fake.uncertain)
         self.assertEqual(fake.journal['phase'], 'releasing')
 
     def test_fence_loss_during_migration_is_detected(self):
         fake, barrier = self.ready()
         fake.on_migrate = lambda: setattr(fake, 'lease', None)
-        with self.assertRaises(BarrierError): barrier.migrate('op1', 'old_ready', 'old')
+        with self.assertRaises(BarrierError): barrier.migrate('op1', 'pre_migration_old_runtime', 'old')
         self.assertEqual(fake.journal['phase'], 'migrating')
         self.assertEqual(fake.marker, 'op1')
 

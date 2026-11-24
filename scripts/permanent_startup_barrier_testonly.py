@@ -3,6 +3,10 @@
 The backend must provide atomic, durable journal and marker observations, and a
 continuous exclusive fence lease. An uncertain write or removal requires external
 reconciliation. This model does not implement systemd, Docker, or a real fence.
+
+The synthetic pre_migration_old_runtime boundary is not the real journal's
+old_ready phase. The latter is an irreversible post-restore boundary: restore
+must never run after it. This model does not represent that journal phase.
 """
 
 
@@ -94,7 +98,7 @@ class PermanentBarrier:
 
     def persist_boundary(self, op, boundary, runtime):
         record = self._record(op, {'fenced'})
-        if (boundary != 'old_ready' or not runtime or
+        if (boundary != 'pre_migration_old_runtime' or not runtime or
                 not self.backend.verify_runtime(op, boundary, runtime)):
             raise BarrierError('boundary and compatible runtime identity required')
         inventory = record['inventory']
@@ -104,9 +108,9 @@ class PermanentBarrier:
 
     def migrate(self, op, boundary, runtime):
         record = self._record(op, {'boundary'})
-        if (boundary != 'old_ready' or record['boundary'] != boundary or
+        if (boundary != 'pre_migration_old_runtime' or record['boundary'] != boundary or
                 record['runtime'] != runtime or not self.backend.verify_runtime(op, boundary, runtime)):
-            raise BarrierError('migration requires matching old_ready runtime')
+            raise BarrierError('migration requires matching pre_migration_old_runtime runtime')
         inventory = record['inventory']
         self._verify(op, inventory)
         self._journal(op, 'migrating', inventory=inventory, boundary=boundary, runtime=runtime)
@@ -132,14 +136,14 @@ class PermanentBarrier:
         self._verify(op, inventory)
         self._write(lambda: self.backend.rollback(op, runtime))
         self._verify(op, inventory)
-        if not self.backend.verify_runtime(op, 'old_ready', runtime):
+        if not self.backend.verify_runtime(op, 'pre_migration_old_runtime', runtime):
             raise BarrierError('rollback runtime proof required')
-        self._journal(op, 'boundary', inventory=inventory, boundary='old_ready', runtime=runtime)
+        self._journal(op, 'boundary', inventory=inventory, boundary='pre_migration_old_runtime', runtime=runtime)
 
     def release(self, op, boundary, runtime):
         record = self._record(op, {'boundary', 'boundary_committed'})
         if (record['boundary'] != boundary or record['runtime'] != runtime or
-                boundary not in ('old_ready', 'committed') or
+                boundary not in ('pre_migration_old_runtime', 'committed') or
                 not self.backend.verify_runtime(op, boundary, runtime) or
                 not self.backend.verify_release_safe(op, boundary, runtime, record['phase'])):
             raise BarrierError('release boundary or runtime is not safe')
