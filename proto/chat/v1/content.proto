@@ -21,6 +21,8 @@ message Content {
     Locality locality = 14;
     Reaction reaction = 16;
     Deletion deletion = 17;
+    GroupTopic group_topic = 18;
+    PresenceEvent presence = 19;
   }
   // Original envelope message id in this conversation, exactly 16 bytes.
   // Absent for an ordinary message. Only used on user-visible messages.
@@ -28,6 +30,57 @@ message Content {
   // SHA-256 of the original authenticated sender and encoded Content.
   // Exactly 32 bytes. Receivers must verify this before showing a quote.
   optional bytes reply_to_hash = 13;
+}
+
+// Experimental wire format only. This is deliberately not a Content body: no
+// existing send or receive path may publish or accept it. A future dedicated
+// transport must encrypt it to each authorized recipient device, authenticate
+// the MLS sender, and independently validate all fields before acceptance.
+// Never send it to the parent group. The server must not see the plaintext.
+// Replay fences and MLS state must be committed atomically with acceptance;
+// restoring an older fence is unsafe. No authorization is defined here.
+message RestrictedChannelBinding {
+  bytes parent_conversation_id = 1; // 16 bytes
+  bytes channel_conversation_id = 2; // 16 bytes, distinct from parent
+  bytes recipient_device = 3; // 32-byte account/device MLS identity
+  uint64 parent_epoch = 4;
+  uint64 channel_epoch = 5;
+  // Complete canonical MLS device identities for the stated epochs. These
+  // claims are not evidence: compare them with independently authenticated
+  // parent and channel MLS state under the mutation lock.
+  repeated bytes parent_members = 6;
+  repeated bytes channel_members = 7;
+  // Positive monotonic generation scoped to sender device, recipient device,
+  // parent and channel. Durable rollback-safe fencing remains unresolved.
+  uint64 generation = 8;
+  // Encrypted channel display name, if any. This is not parent-group metadata.
+  string name = 9;
+}
+
+// Encrypted group topic update. Empty text clears the topic. Receivers must
+// enforce a 512-byte UTF-8 limit and a clock in 1..=9007199254740991,
+// authenticate the MLS sender, and verify group membership at the message epoch.
+message GroupTopic {
+  string text = 1;
+  uint64 clock = 2;
+}
+
+// Experimental ephemeral Content body for a separate transport. It must not
+// be sent through the durable envelope queue.
+// The MLS authenticated credential supplies the sender account and device.
+// The conversation and recipient are checked against the selected direct chat.
+message PresenceEvent {
+  bytes conversation_id = 1; // 16 bytes
+  bytes recipient_account = 2; // 16 bytes
+  uint64 consent_generation = 3;
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    ONLINE = 1;
+    AWAY = 2;
+  }
+  State state = 4;
+  uint64 sent_at_ms = 5;
+  uint64 expires_at_ms = 6;
 }
 
 // Ephemeral state, not history. Identity comes from the authenticated MLS

@@ -104,7 +104,7 @@ pub async fn upload(
     storage::reserve(db, account, &[(key.clone(), declared as i64)]).await?;
     // Failed writes retain their reservations. Cancellation does not prove
     // that a remote multipart writer has stopped.
-    let received = stream_to(db, &store, &object_path(id), declared, body).await?;
+    let received = stream_to(&store, &object_path(id), declared, body).await?;
     storage::mark_ready(db, &key).await?;
     let mut tx = db.begin().await?;
     sqlx::query(
@@ -129,54 +129,49 @@ pub async fn upload(
 }
 
 /// Streams exactly `declared` bytes into a reserved, unique object key.
-/// A confirmed abort fences the writer. Release its charge only after
-/// confirmed deletion too. Uncertain failures and cancellation retain it.
+/// Failed and interrupted uploads retain their reservations. A successful
+/// abort does not fence remote multipart work.
 pub(crate) async fn stream_to(
-    db: &PgPool,
     store: &Arc<dyn ObjectStore>,
     path: &Path,
     declared: u64,
     body: Body,
 ) -> Result<u64, ApiError> {
-    let mut writer = WriteMultipart::new_with_chunk_size(
+    let writer = WriteMultipart::new_with_chunk_size(
         store.put_multipart(path).await.map_err(internal)?,
         PART_BYTES,
     );
+    stream_multipart(writer, declared, body).await
+}
+
+async fn stream_multipart(
+    mut writer: WriteMultipart,
+    declared: u64,
+    body: Body,
+) -> Result<u64, ApiError> {
     let mut received: u64 = 0;
     let mut stream = body.into_data_stream();
     while let Some(chunk) = stream.next().await {
         let chunk: Bytes = match chunk {
             Ok(c) => c,
             Err(_) => {
-                if writer.abort().await.is_ok() {
-                    release_aborted(db, store, path).await;
-                }
+                let _ = writer.abort().await;
                 return Err(ApiError::BadRequest("upload interrupted"));
             }
         };
         received += chunk.len() as u64;
         if received > declared {
-            if writer.abort().await.is_ok() {
-                release_aborted(db, store, path).await;
-            }
+            let _ = writer.abort().await;
             return Err(ApiError::BadRequest("more data than Content-Length"));
         }
         writer.write(&chunk);
     }
     if received != declared {
-        if writer.abort().await.is_ok() {
-            release_aborted(db, store, path).await;
-        }
+        let _ = writer.abort().await;
         return Err(ApiError::BadRequest("upload interrupted"));
     }
     writer.finish().await.map_err(internal)?;
     Ok(received)
-}
-
-async fn release_aborted(db: &PgPool, store: &Arc<dyn ObjectStore>, path: &Path) {
-    if let Err(e) = storage::forget(store, db, path.as_ref()).await {
-        tracing::warn!(error = ?e, "aborted upload cleanup failed; storage remains charged");
-    }
 }
 
 pub(crate) fn content_length(headers: &HeaderMap) -> Result<u64, ApiError> {
@@ -1064,4 +1059,75 @@ pub async fn expire(db: &sqlx::PgPool, store: &Arc<dyn ObjectStore>) -> anyhow::
 
 pub(crate) fn internal(e: object_store::Error) -> ApiError {
     ApiError::Internal(e.into())
+}
+
+#[cfg(test)]
+mod multipart_tests {
+    use super::*;
+    use object_store::{MultipartUpload, PutResult, UploadPart};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[derive(Debug)]
+    struct UnfencedUpload {
+        remote_work: Arc<AtomicBool>,
+        aborted: Arc<AtomicBool>,
+    }
+
+    impl MultipartUpload for UnfencedUpload {
+        fn put_part(&mut self, _: PutPayload) -> UploadPart {
+            // The remote request can outlive the local future.
+            self.remote_work.store(true, Ordering::SeqCst);
+            Box::pin(std::future::pending())
+        }
+
+        fn complete<'a, 'async_trait>(
+            &'a mut self,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = object_store::Result<PutResult>>
+                    + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'a: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async { panic!("short body must not complete") })
+        }
+
+        fn abort<'a, 'async_trait>(
+            &'a mut self,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = object_store::Result<()>> + Send + 'async_trait>,
+        >
+        where
+            'a: 'async_trait,
+            Self: 'async_trait,
+        {
+            self.aborted.store(true, Ordering::SeqCst);
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn successful_abort_does_not_fence_remote_part_or_release_reservation() {
+        let remote_work = Arc::new(AtomicBool::new(false));
+        let aborted = Arc::new(AtomicBool::new(false));
+        let writer = WriteMultipart::new_with_chunk_size(
+            Box::new(UnfencedUpload {
+                remote_work: remote_work.clone(),
+                aborted: aborted.clone(),
+            }),
+            2,
+        );
+        // This function has no ledger access, so it cannot release the charge.
+        let result = stream_multipart(writer, 3, Body::from(vec![1, 2])).await;
+        assert!(matches!(
+            result,
+            Err(ApiError::BadRequest("upload interrupted"))
+        ));
+        assert!(aborted.load(Ordering::SeqCst));
+        assert!(remote_work.load(Ordering::SeqCst));
+    }
 }

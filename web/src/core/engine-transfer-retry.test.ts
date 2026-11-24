@@ -38,6 +38,9 @@ function setup() {
     getJson: vi.fn(async (key: string) => structuredClone(values.get(key))),
     putJson: vi.fn(async (key: string, value: unknown) => { values.set(key, structuredClone(value)) }),
     putBytes: vi.fn(async () => {}),
+    putBatch: vi.fn(async (entries: readonly (readonly [string, Uint8Array])[]) => {
+      for (const [key, value] of entries) values.set(key, key === 'app' ? JSON.parse(new TextDecoder().decode(value)) : value.slice())
+    }),
     getFile: vi.fn(async () => new Blob(['synthetic sealed body'])),
   } as unknown as Engine['store']
   engine['connection'] = 'online'
@@ -81,11 +84,11 @@ describe('upload retry acceptance', () => {
 
   it('does not let reconnect cleanup remove a retry reservation between persistence and sending', async () => {
     const { engine, reads, upload, readNextStatus, finishUpload } = setup()
-    const putJson = engine['store'].putJson.bind(engine['store'])
+    const putBatch = engine['store'].putBatch.bind(engine['store'])
     let reconnect: Promise<void> | undefined
-    engine['store'].putJson = async (key, value) => {
-      await putJson(key, value)
-      if (key === 'app' && !reconnect && engine['state'].transfers.some((transfer) => transfer.messageId === messageId)) {
+    engine['store'].putBatch = async (entries) => {
+      await putBatch(entries)
+      if (entries.some(([key]) => key === 'app') && !reconnect && engine['state'].transfers.some((transfer) => transfer.messageId === messageId)) {
         // Reconnect resumes transfers after its queued commit-resolution lock.
         // Put that task behind reservation persistence, before any second lock
         // that retryMessage uses to publish sending.

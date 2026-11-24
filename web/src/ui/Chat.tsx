@@ -23,7 +23,7 @@ import { GroupCallScreen, useGroupCall } from './GroupCall'
 import { GroupCallController } from './groupCall'
 import { probeClip } from './media'
 import type { MediaInfo } from '../core/protocol'
-import { BlockedList, DeleteAccount, ReportForm } from './Safety'
+import { BlockedList, DeleteAccount, RenameUsername, ReportForm } from './Safety'
 import { VerificationBadge, Verify } from './Verify'
 import {
   type NotificationState,
@@ -261,6 +261,7 @@ export function Chat({
               </section>
               <section className="settings-group danger-zone" aria-labelledby="settings-danger">
                 <h3 id="settings-danger">Danger zone</h3>
+                <RenameUsername core={core} />
                 <DeleteAccount core={core} />
               </section>
             </nav>

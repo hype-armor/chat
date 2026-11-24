@@ -76,7 +76,7 @@ describe('display names and profile pictures', () => {
     const engine = new Engine(() => {})
     const sendProfile = vi.fn(() => new Uint8Array([1]))
     const sendDeviceSync = vi.fn(() => new Uint8Array([2]))
-    const store = { putJson: vi.fn(async () => {}), putBytes: vi.fn(async () => {}) }
+    const store = { putJson: vi.fn(async () => {}), putBytes: vi.fn(async () => {}), putBatch: vi.fn(async () => {}) }
     engine['account'] = {
       username: 'alice.01', displayName: 'Alice', accountId: account, deviceId: device, token: '',
     }

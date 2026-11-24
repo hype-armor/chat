@@ -230,7 +230,7 @@ pub async fn upload(
     let key = new_object(account);
     // The old backup remains charged until its physical object is deleted.
     storage::reserve(db, account, &[(key.clone(), declared as i64)]).await?;
-    let size = blobs::stream_to(db, store, &Path::from(key.clone()), declared, body).await?;
+    let size = blobs::stream_to(store, &Path::from(key.clone()), declared, body).await?;
     storage::mark_ready(db, &key).await?;
     // Point the row at the new object, then drop the one it replaced.
     let mut tx = db.begin().await?;

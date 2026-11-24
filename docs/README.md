@@ -23,10 +23,15 @@ Architecture Decision Records (ADRs) under [`adr/`](adr/).
 | — | [Fail-fast CI](ci.md) | Validation stages, shared CI, generated type contract, and gated image publication |
 | — | [WebKit navigation diagnostic](testing-webkit-navigation.md) | Targeted signup-stall capture, baseline comparison, and artifact privacy |
 | — | [Server management](server-management.md) | Storage quotas, account limits, operator commands, and user usage view |
+| — | [Username migration deployment](username-migration-deployment.md) | Required maintenance window and old-server compatibility limits |
 | — | [Browser permissions](browser-permissions.md) | Browser-controlled grants, capture cleanup, and security headers |
 | — | [Bot social world](bot-social-world.md) | Offline 100-bot social graph, personalities, and scoped conversation fixtures |
 | — | [Synthetic and opt-in AI bots](ai-bots.md) | Local random-text traffic, optional free inference, room consent, and operator setup |
 | — | [ADR index](adr/README.md) | Decision log |
+
+Invite-only group features, presence, and username changes are proposed in
+[ADR-0050](adr/0050-invite-only-groups-and-presence.md). Its privacy and security
+questions must be resolved before stronger group moderation ships.
 
 Message reactions use [ADR-0047](adr/0047-encrypted-message-reactions.md): verified
 original bindings, encrypted durable updates, deterministic account ordering, and removal tombstones.

@@ -63,6 +63,20 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    if config.experimental_presence {
+        if let Some(db) = db.clone() {
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                loop {
+                    interval.tick().await;
+                    if chat_server::presence::purge_expired(&db).await.is_err() {
+                        tracing::error!("presence expiry cleanup failed");
+                    }
+                }
+            });
+        }
+    }
+
     let listener = TcpListener::bind(config.bind).await?;
     tracing::info!(addr = %config.bind, "listening");
     // Only the log sender exists so far; real SMS providers plug in here.
@@ -108,6 +122,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState::new(db)
         .with_blobs(blobs)
         .with_open_registration(config.open_registration)
+        .with_experimental_presence(config.experimental_presence)
         .with_turn(config.turn.clone())
         .with_livekit(config.livekit.clone())
         .with_tiles(config.tiles.clone())

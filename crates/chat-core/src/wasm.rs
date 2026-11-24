@@ -2,8 +2,8 @@
 
 use chat_proto::v1::{
     Ack, Attachment, Authenticate, Call, ClientFrame, Content, ContentType, Deletion, DeviceSync,
-    Envelope, GroupInfo, LiveLocation, Locality, Location, Ping, Profile, Reaction, Receipt,
-    SendEnvelope, ServerFrame, Text, Typing, client_frame, content, receipt, server_frame,
+    Envelope, GroupInfo, GroupTopic, LiveLocation, Locality, Location, Ping, Profile, Reaction,
+    Receipt, SendEnvelope, ServerFrame, Text, Typing, client_frame, content, receipt, server_frame,
 };
 use js_sys::{Array, Uint8Array};
 use prost::Message;
@@ -225,6 +225,11 @@ pub struct EventView {
     pub text: Option<String>,
     #[wasm_bindgen(getter_with_clone)]
     pub reaction: Option<Vec<u8>>,
+    /// Topic content is authenticated by MLS, but is not yet accepted as state.
+    #[wasm_bindgen(getter_with_clone, js_name = groupTopicText)]
+    pub group_topic_text: Option<String>,
+    #[wasm_bindgen(js_name = groupTopicClock)]
+    pub group_topic_clock: Option<f64>,
     #[wasm_bindgen(getter_with_clone, js_name = deletionTarget)]
     pub deletion_target: Option<Vec<u8>>,
     #[wasm_bindgen(getter_with_clone, js_name = deletionTargetHash)]
@@ -355,6 +360,8 @@ impl EventView {
             sent_at_ms: 0.0,
             text: None,
             reaction: None,
+            group_topic_text: None,
+            group_topic_clock: None,
             deletion_target: None,
             deletion_target_hash: None,
             deletion_target_author: None,
@@ -905,6 +912,33 @@ impl CoreClient {
         )
     }
 
+    /// Encodes an encrypted topic update. The worker must not enable sending until
+    /// state persistence, recovery, and compatibility are implemented and reviewed.
+    #[wasm_bindgen(js_name = sendGroupTopic)]
+    pub fn send_group_topic(
+        &mut self,
+        conversation_id: &[u8],
+        text: String,
+        clock: f64,
+        sent_at_ms: f64,
+        message_id: Vec<u8>,
+    ) -> Result<Vec<u8>, JsError> {
+        let clock = exact_timestamp(clock).ok_or_else(|| JsError::new("invalid topic clock"))?;
+        if conversation_id.len() != 16
+            || message_id.len() != 16
+            || text.len() > 512
+            || exact_timestamp(sent_at_ms).is_none()
+        {
+            return Err(JsError::new("invalid group topic"));
+        }
+        self.send(
+            conversation_id,
+            sent_at_ms,
+            content::Body::GroupTopic(GroupTopic { text, clock }),
+            message_id,
+        )
+    }
+
     /// Durable reaction updates use the existing MLS envelope and sender authentication.
     #[wasm_bindgen(js_name = sendReaction)]
     #[allow(clippy::too_many_arguments)]
@@ -1250,7 +1284,19 @@ impl CoreClient {
                             .flatten()
                             .collect();
                     }
-                    None => view.kind = "ignored".to_owned(),
+                    Some(content::Body::GroupTopic(topic)) => {
+                        // Keep invalid clocks out of the JavaScript number boundary.
+                        if topic.text.len() <= 512
+                            && (1..=9_007_199_254_740_991).contains(&topic.clock)
+                        {
+                            view.kind = "groupTopic".to_owned();
+                            view.group_topic_text = Some(topic.text);
+                            view.group_topic_clock = Some(topic.clock as f64);
+                        } else {
+                            view.kind = "ignored".to_owned();
+                        }
+                    }
+                    Some(content::Body::Presence(_)) | None => view.kind = "ignored".to_owned(),
                 }
                 view
             }
@@ -1423,6 +1469,69 @@ mod interaction_tests {
         let mut receiver = CoreClient::restore(&receiver.snapshot().unwrap()).unwrap();
         let next = sender
             .send_text(&id, "next".into(), 3.0, vec![5; 16], None, None)
+            .unwrap();
+        assert_eq!(
+            receiver.receive(&next).unwrap().text.as_deref(),
+            Some("next")
+        );
+    }
+
+    #[test]
+    fn topic_bindings_use_mls_sender_and_reject_invalid_bodies() {
+        let sender_id = vec![1; 32];
+        let receiver_id = vec![2; 32];
+        let mut sender = Client::new(Device::new(&sender_id).unwrap());
+        let mut receiver = Client::new(Device::new(&receiver_id).unwrap());
+        let kp = receiver.key_packages(1).unwrap().remove(0);
+        let started = sender
+            .start_conversation(
+                &[JoinPackage {
+                    identity: &receiver_id,
+                    key_package: &kp,
+                }],
+                vec![1; 16],
+            )
+            .unwrap();
+        receiver.receive(&started.welcome).unwrap();
+        let id = started.conversation_id;
+        let mut sender = CoreClient {
+            inner: sender,
+            last_sent_content_hash: None,
+        };
+        let mut receiver = CoreClient {
+            inner: receiver,
+            last_sent_content_hash: None,
+        };
+        let envelope = sender
+            .send_group_topic(&id, String::new(), 7.0, 10.0, vec![2; 16])
+            .unwrap();
+        let event = receiver.receive(&envelope).unwrap();
+        assert_eq!(event.kind, "groupTopic");
+        assert_eq!(event.sender, sender_id);
+        assert_eq!(event.conversation_id, id);
+        assert_eq!(event.group_topic_text.as_deref(), Some(""));
+        assert_eq!(event.group_topic_clock, Some(7.0));
+        assert!(event.content_hash.is_none());
+        for (clock, text) in [
+            (0, "ok".to_owned()),
+            (9_007_199_254_740_992, "ok".to_owned()),
+            (1, "é".repeat(257)),
+        ] {
+            let content = Content {
+                sent_at_ms: 11,
+                reply_to: None,
+                reply_to_hash: None,
+                body: Some(content::Body::GroupTopic(GroupTopic { text, clock })),
+            };
+            let env = sender.inner.send(&id, &content, vec![3; 16]).unwrap();
+            let event = receiver.receive(&env.encode_to_vec()).unwrap();
+            assert_eq!(event.kind, "ignored");
+            assert!(event.group_topic_clock.is_none());
+            assert!(event.group_topic_text.is_none());
+        }
+        let mut receiver = CoreClient::restore(&receiver.snapshot().unwrap()).unwrap();
+        let next = sender
+            .send_text(&id, "next".into(), 12.0, vec![4; 16], None, None)
             .unwrap();
         assert_eq!(
             receiver.receive(&next).unwrap().text.as_deref(),

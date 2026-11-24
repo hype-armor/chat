@@ -24,7 +24,10 @@ Each device's coarse last-seen *day* is recorded on authentication.
 
 | Method & path | Auth | Body → Response |
 |---------------|------|-----------------|
-| `POST /v1/account/delete` | ✓ | `{username}` (typed again) → `204`; `400` if it doesn't match |
+| `GET /v1/account` | ✓ | Returns `{account_id, username}` for the authenticated device's account. The response uses `Cache-Control: no-store`; clients must check the account ID and session before applying it. It does not expose another account's profile. |
+| `POST /v1/account/username` | ✓ | `{username, request_id}` renames the account. The request ID is a UUID scoped to the account. Retrying it with the same normalized name returns the current account identity; using it with another name returns `409`. New requests are limited to 5 per account per day, including no-ops. Taken and retired names return `409`. |
+| `POST /v1/account/delete/prepare` | ✓ | `{username, authorization}` confirms the current username before departures. The client generates 32 random bytes as 64 lowercase hex characters and stores the secret in encrypted device storage before sending. The server stores its SHA-256 digest. An identical retry succeeds after a rename. The authorization is bound to the account and device and expires after 24 hours. An expired authorization returns `409`; confirm the current username again with a new secret. |
+| `POST /v1/account/delete` | ✓ | `{authorization}` deletes the account once. The current name is released; retired names remain reserved. The authorization is removed with the account. A lost final response can leave the outcome unknown because the device token is also deleted. Old clients can still send `{username}`, but their departures remain exposed to the rename race. Neither method makes departures, cancellation, or late sends atomic. |
 
 Deletes the account and, by cascade:
 - its devices and tokens;

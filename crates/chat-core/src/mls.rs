@@ -49,6 +49,14 @@ impl<'a> JoinPackage<'a> {
 /// Exporter label for group-call frame keys (docs/05-media-and-calling.md §4).
 const CALL_KEY_LABEL: &str = "chat call sframe";
 
+/// The app's departure flow accepts only the sender's own leaf removal.
+fn is_self_removal(proposal: &QueuedProposal) -> bool {
+    matches!(
+        (proposal.sender(), proposal.proposal()),
+        (Sender::Member(sender), Proposal::Remove(remove)) if *sender == remove.removed()
+    )
+}
+
 /// OpenMLS provider whose in-memory key store can be exported and restored,
 /// so a browser can persist it between sessions.
 #[derive(Default)]
@@ -413,8 +421,12 @@ impl Conversation {
         self.group.has_pending_proposals()
     }
 
-    /// Stages a commit of all received proposals.
+    /// Stages only authenticated self-removal proposals, including proposals
+    /// restored from storage by older clients.
     pub fn stage_commit_proposals(&mut self, device: &Device) -> Result<Vec<u8>> {
+        if !self.group.proposal_store().proposals().all(is_self_removal) {
+            return Err(Error::Malformed("unexpected pending MLS proposal"));
+        }
         let (commit, _welcome, _group_info) = self
             .group
             .commit_to_pending_proposals(&device.provider, &device.signer)
@@ -473,7 +485,11 @@ impl Conversation {
                 Ok(Received::EpochChanged(self.epoch()))
             }
             ProcessedMessageContent::ProposalMessage(proposal) => {
-                // OpenMLS only queues proposals the caller stores.
+                // The app treats every proposal as a voluntary departure. Do
+                // not queue another type or a removal of a different leaf.
+                if !is_self_removal(&proposal) {
+                    return Err(Error::Malformed("expected self-removal proposal"));
+                }
                 self.group
                     .store_pending_proposal(device.provider.storage(), *proposal)
                     .map_err(mls_err)?;
@@ -765,6 +781,53 @@ mod tests {
         assert_eq!(a.member_count(), 1);
         c.receive(&carol, &commit).unwrap();
         assert!(!c.is_active(), "carol has left");
+    }
+
+    #[test]
+    fn rejects_removal_proposed_by_another_member() {
+        let alice = Device::new(b"alice").unwrap();
+        let bob = Device::new(b"bob").unwrap();
+        let carol = Device::new(b"carol").unwrap();
+        let mut a = Conversation::create(&alice).unwrap();
+        let bob_kp = bob.key_package().unwrap();
+        let carol_kp = carol.key_package().unwrap();
+        let change = a
+            .add_members(
+                &alice,
+                &[
+                    JoinPackage::of(&bob, &bob_kp),
+                    JoinPackage::of(&carol, &carol_kp),
+                ],
+            )
+            .unwrap();
+        let mut b = Conversation::join(&bob, &change.welcome).unwrap();
+        let mut c = Conversation::join(&carol, &change.welcome).unwrap();
+
+        let carol_leaf = b
+            .group
+            .members()
+            .find(|m| credential_identity(&m.credential) == b"carol")
+            .unwrap()
+            .index;
+        let (forged, _) = b
+            .group
+            .propose_remove_member(&bob.provider, &bob.signer, carol_leaf)
+            .unwrap();
+        let forged = forged.tls_serialize_detached().unwrap();
+        assert!(a.receive(&alice, &forged).is_err());
+        assert!(!a.has_pending_proposals());
+
+        // A rejected proposal must not prevent a later genuine departure.
+        let leave = c.leave(&carol).unwrap();
+        assert!(matches!(
+            a.receive(&alice, &leave),
+            Ok(Received::Proposal { .. })
+        ));
+        let commit = a.stage_commit_proposals(&alice).unwrap();
+        a.merge_pending_commit(&alice).unwrap();
+        c.receive(&carol, &commit).unwrap();
+        assert!(!c.is_active());
+        assert_eq!(a.member_count(), 2);
     }
 
     #[test]

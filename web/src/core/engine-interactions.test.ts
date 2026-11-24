@@ -33,7 +33,9 @@ function setup() {
   engine['store'] = {
     getJson: async (key: string) => values.get(key),
     putJson: async (key: string, value: unknown) => { values.set(key, structuredClone(value)) },
-    putBytes: vi.fn(async () => {}),
+    putBatch: vi.fn(async (entries: readonly (readonly [string, Uint8Array])[]) => {
+      for (const [key, value] of entries) values.set(key, key === 'app' ? JSON.parse(new TextDecoder().decode(value)) : value.slice())
+    }),
   } as unknown as Engine['store']
   const request = vi.fn<Engine['request']>(async () => undefined)
   engine['request'] = request
@@ -56,8 +58,8 @@ describe('engine typing integration', () => {
     await engine.setTyping(conversationId, true)
     await engine.setTyping(conversationId, true)
     expect(sendTyping).toHaveBeenCalledTimes(1)
-    expect(engine['store'].putBytes).toHaveBeenCalledWith('core', new Uint8Array([3]))
-    expect(vi.mocked(engine['store'].putBytes).mock.invocationCallOrder[0]).toBeLessThan(request.mock.invocationCallOrder[0])
+    expect(engine['store'].putBatch).toHaveBeenCalledWith([['core', new Uint8Array([3])], ['app', expect.any(Uint8Array)]])
+    expect(vi.mocked(engine['store'].putBatch).mock.invocationCallOrder[0]).toBeLessThan(request.mock.invocationCallOrder[0])
     expect(engine['state'].outbox).toEqual([])
     expect(values.has(`messages:${conversationId}`)).toBe(false)
     expect(JSON.stringify(values.get('app'))).not.toContain('typingSent')
@@ -227,7 +229,7 @@ describe('engine typing integration', () => {
     let persisting!: () => void
     const stopped = new Promise<void>((resolve) => { persisting = resolve })
     const storageBarrier = new Promise<void>((resolve) => { release = resolve })
-    vi.mocked(engine['store'].putBytes).mockImplementationOnce(async () => {
+    vi.mocked(engine['store'].putBatch).mockImplementationOnce(async () => {
       persisting()
       await storageBarrier
     })
@@ -363,7 +365,7 @@ describe('engine typing integration', () => {
     request.mockRejectedValueOnce(new Error('Socket closed'))
     await expect(engine.setTyping(conversationId, true)).resolves.toBeUndefined()
     await Promise.resolve()
-    vi.mocked(engine['store'].putBytes).mockRejectedValueOnce(new Error('Storage failed'))
+    vi.mocked(engine['store'].putBatch).mockRejectedValueOnce(new Error('Storage failed'))
     await expect(engine.setTyping(conversationId, false)).rejects.toThrow('Storage failed')
     expect(request).toHaveBeenCalledTimes(1)
     expect(engine['state'].outbox).toEqual([])

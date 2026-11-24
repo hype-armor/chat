@@ -24,13 +24,13 @@ function database() {
       error: null as DOMException | null,
       oncomplete: null as (() => void) | null,
       onabort: null as (() => void) | null,
-      objectStore: () => ({ put: operation, delete: operation, clear: operation, get: operation }),
+      objectStore: () => ({ put: operation, add: operation, delete: operation, clear: operation, get: operation }),
       succeed() { for (const req of requests) req.onsuccess?.() },
       commit() { this.oncomplete?.() },
       abort() { this.error = new DOMException('Aborted', 'AbortError'); this.onabort?.() },
     }
   }
-  const db = { transaction: () => { const tx = transaction(); transactions.push(tx); return tx } }
+  const db = { close: vi.fn(), transaction: () => { const tx = transaction(); transactions.push(tx); return tx } }
   return { db, transactions }
 }
 
@@ -230,6 +230,34 @@ describe('SecureStore connection recovery', () => {
 })
 
 describe('SecureStore durable acknowledgement', () => {
+  it('uses the transaction winner when two fresh opens generate keys', async () => {
+    const { db, transactions } = database()
+    const openings: Request[] = []
+    vi.stubGlobal('indexedDB', { open: () => {
+      const opening: Request = { result: db, error: null, onsuccess: null, onerror: null }
+      openings.push(opening)
+      return opening
+    } })
+    const first = SecureStore.open()
+    const second = SecureStore.open()
+    openings.forEach(opening => opening.onsuccess?.())
+    await vi.waitFor(() => expect(transactions).toHaveLength(2))
+    transactions[0].succeed(); transactions[1].succeed()
+    await vi.waitFor(() => expect(transactions).toHaveLength(4))
+    const winner = transactions[2]
+    winner.succeed()
+    await vi.waitFor(() => expect(winner.requests).toHaveLength(2))
+    const key = winner.values[1] as CryptoKey
+    winner.succeed(); winner.commit()
+    const loser = transactions[3]
+    loser.requests[0].result = key // IndexedDB serializes this read after the winner commits.
+    loser.succeed(); loser.commit()
+    const [a, b] = await Promise.all([first, second])
+    expect(loser.requests).toHaveLength(1)
+    expect((a as unknown as { key: CryptoKey }).key).toBe(key)
+    expect((b as unknown as { key: CryptoKey }).key).toBe(key)
+  })
+
   it('does not open a fresh store until its encryption key transaction commits', async () => {
     const { db, transactions } = database()
     const opening: Request = { result: db, error: null, onsuccess: null, onerror: null }
@@ -241,7 +269,9 @@ describe('SecureStore durable acknowledgement', () => {
     transactions[0].succeed() // No existing storage key.
     await vi.waitFor(() => expect(transactions).toHaveLength(2))
     const creating = transactions[1]
-    expect(creating.values[0]).toBeInstanceOf(CryptoKey)
+    creating.succeed() // The serialized recheck still sees no key.
+    await vi.waitFor(() => expect(creating.requests).toHaveLength(2))
+    expect(creating.values[1]).toBeInstanceOf(CryptoKey)
     creating.succeed()
     await Promise.resolve()
     await Promise.resolve()
@@ -260,6 +290,8 @@ describe('SecureStore durable acknowledgement', () => {
     await vi.waitFor(() => expect(transactions).toHaveLength(1))
     transactions[0].succeed()
     await vi.waitFor(() => expect(transactions).toHaveLength(2))
+    transactions[1].succeed()
+    await vi.waitFor(() => expect(transactions[1].requests).toHaveLength(2))
     transactions[1].succeed()
     transactions[1].abort()
     await rejected
