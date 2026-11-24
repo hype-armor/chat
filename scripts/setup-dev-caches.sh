@@ -37,5 +37,5 @@ SHIM
   } > "$dest"
   chmod +x "$dest"
 done
-printf 'Installed shims. Activate in each shell with:\nexport PATH="%s:$PATH"\n' "$bin"
+printf "Installed shims. Activate in each shell with:\nexport PATH=\"%s:\$PATH\"\n" "$bin"
 printf 'Run this setup in another clone to register that clone instead. Existing caches were not removed.\n'
