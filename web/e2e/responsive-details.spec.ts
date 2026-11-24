@@ -28,7 +28,19 @@ test('report form fits a narrow direct conversation', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'dark' })
   const details = conversationDetails(page)
   await expect(details.getByRole('form')).toBeVisible()
-  await expectLayout(page, 'narrow report form', true)
+  try {
+    await expectLayout(page, 'narrow report form', true)
+  } catch (error) {
+    const geometry = await details.locator('.details-content').evaluate((panel) =>
+      [panel, ...panel.querySelectorAll('*')].map((element) => {
+        const box = element.getBoundingClientRect()
+        const style = getComputedStyle(element)
+        return { element: `${element.tagName.toLowerCase()}.${element.className}`, left: box.left, right: box.right,
+          client: element.clientWidth, scroll: element.scrollWidth, overflow: style.overflowX }
+      }))
+    console.error('Report overflow geometry:', JSON.stringify(geometry))
+    throw error
+  }
 })
 
 for (const width of [768, 1024, 1100, 1280]) {
