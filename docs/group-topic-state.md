@@ -11,11 +11,13 @@ the topic rules; consumers must validate them before use.
 
 Older clients ignore the unknown body. They must still persist the advanced MLS
 ratchet after decryption, or later messages can fail. They do not display or
-apply topic updates. `engine-group-topic-mls.test.ts` checks that the current
-worker discards a topic, retries a failed ratchet write before acknowledgement,
-and can decrypt a later message after restoring the saved ratchet. This test
-uses the current bindings, not an older client, and does not establish old-client
-compatibility or crash safety across all storage failure points. Do not enable
+apply topic updates. `engine-group-topic-mls.test.ts` checks that the worker
+consumes and discards topic state. If the storage batch fails, the worker
+closes the socket without acknowledging the event and blocks retry in the same
+engine. A fresh engine can replay the ciphertext from the last saved ratchet,
+acknowledge it after persistence, and decrypt a later message. These tests do
+not exercise an older client or prove crash safety across all storage failure
+points. Do not enable
 sending until client compatibility, state recovery, and the remaining
 integration have been reviewed.
 
