@@ -22,6 +22,7 @@ export default defineConfig({
     'issue132-chat.fixture.spec.ts',
     'locality.fixture.spec.ts',
     'responsive-details.spec.ts',
+    'restricted-channels.fixture.spec.ts',
     'details-priority.spec.ts',
     'storage-usage.fixture.spec.ts',
     'gif-fixture.spec.ts',

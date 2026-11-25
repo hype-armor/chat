@@ -23,6 +23,7 @@ message Content {
     Deletion deletion = 17;
     GroupTopic group_topic = 18;
     PresenceEvent presence = 19;
+    RestrictedChannelInfo restricted_channel_info = 20;
   }
   // Original envelope message id in this conversation, exactly 16 bytes.
   // Absent for an ordinary message. Only used on user-visible messages.
@@ -30,6 +31,16 @@ message Content {
   // SHA-256 of the original authenticated sender and encoded Content.
   // Exactly 32 bytes. Receivers must verify this before showing a quote.
   optional bytes reply_to_hash = 13;
+}
+
+// Encrypted inside the restricted channel MLS conversation only, never the
+// parent group. The authenticated MLS context supplies the channel ID and sender.
+// Receivers must independently authorize the sender and parent/channel membership.
+// This body makes no roster or authorization claims. Names are at most 512 UTF-8
+// bytes. Parent and channel IDs must be distinct and exactly 16 bytes.
+message RestrictedChannelInfo {
+  bytes parent_conversation_id = 1;
+  string name = 2;
 }
 
 // Experimental wire format only. This is deliberately not a Content body: no

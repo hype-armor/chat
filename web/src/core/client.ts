@@ -105,6 +105,14 @@ export class CoreClient {
     return expect(await this.call({ type: 'createGroup', name, usernames }), 'conversation').conversationId
   }
 
+  async createRestrictedChannel(parentId: string, name: string, usernames: string[]): Promise<string> {
+    return expect(await this.call({ type: 'createRestrictedChannel', parentId, name, usernames }), 'conversation').conversationId
+  }
+
+  async inviteToRestrictedChannel(channelId: string, usernames: string[]): Promise<void> {
+    expect(await this.call({ type: 'inviteToRestrictedChannel', channelId, usernames }), 'ok')
+  }
+
   async addMembers(conversationId: string, usernames: string[]) {
     expect(await this.call({ type: 'addMembers', conversationId, usernames }), 'ok')
   }

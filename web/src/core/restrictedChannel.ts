@@ -31,9 +31,15 @@ export function canSendRestrictedChannel(snapshot: RestrictedChannelSendSnapshot
   const { parentConversation, channelConversation, parentEpoch, channelEpoch,
     removalsSynchronized, parentDevices, invitedAccounts, channelDevices } = snapshot
   if (!parentConversation || !channelConversation || parentConversation === channelConversation ||
-      !parentEpoch || !channelEpoch || removalsSynchronized !== true ||
-      parentDevices.length === 0 || invitedAccounts.length === 0 || channelDevices.length === 0) return false
+      !parentEpoch || !channelEpoch || removalsSynchronized !== true) return false
+  return matchesRestrictedChannelRoster(parentDevices, invitedAccounts, channelDevices)
+}
 
+/** Compare rosters only. This does not establish that either roster is current. */
+export function matchesRestrictedChannelRoster(
+  parentDevices: readonly ChannelDevice[], invitedAccounts: readonly string[], channelDevices: readonly ChannelDevice[],
+): boolean {
+  if (parentDevices.length === 0 || invitedAccounts.length === 0 || channelDevices.length === 0) return false
   const invited = new Set(invitedAccounts)
   if (invited.size !== invitedAccounts.length || invited.has('')) return false
 
