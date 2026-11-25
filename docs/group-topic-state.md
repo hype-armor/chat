@@ -1,18 +1,46 @@
-# Encrypted group topic state: implementation foundation
+# Encrypted group topics: opt-in sending
 
-This document specifies a candidate client-side topic rule for ADR-0051. The
-pure rules in `web/src/core/groupTopic.ts` include snapshot merging and safe
-clock advancement, but are not connected to storage, snapshot delivery, or the
-user interface. They do not provide a working group topic feature. Integration and independent security review remain necessary. The WASM
-bindings can encode an MLS-encrypted topic and expose valid decrypted topic events
-with their authenticated MLS sender. The worker discards these events without
-applying state, and does not enable sending. The core codec does not validate
-the topic rules; consumers must validate them before use.
+ADR-0051 permits an experimental send and receive path for accepted private
+chat groups. An isolated web build can opt in with
+`VITE_EXPERIMENTAL_GROUP_TOPICS=true`. The default build does not send, apply,
+or display topics. An opted-in worker queues a normal MLS-encrypted envelope,
+with no push notification. It persists the MLS ratchet, outbox and accepted
+edit in the same encrypted storage batch before it sends the update. A sender
+only displays the edit as the current topic after relay acceptance and a
+second durable write. The editor reports local queue acceptance, not
+delivery to every member. An observed membership or epoch change can invalidate a queued edit.
+The worker does not retry queued topics on a different socket. This prevents
+replay during reconnect, before all pending commits arrive. The relay does not
+require exact membership for application sends, and the client has no
+backlog-complete signal. Newly authored edits during reconnect catch-up, or
+during a concurrent membership change, can miss part of the new roster.
+
+A recipient must opt in too. The worker verifies the authenticated MLS sender
+against its current device membership. A message from a retained epoch can
+apply only while that exact device is still a current member. No sender or
+epoch from outer metadata grants authority. Topic state is device-local; a
+new device or new member can have an unknown topic until another edit arrives.
+The experiment requires at least 3 distinct accounts in the authenticated MLS
+roster. The normal group UI also accepts 2-account groups; the topic editor
+cannot use that UI classification to distinguish them from direct chats.
+Editing requires an online connection. Only 1 topic per group can wait in the
+outbox, and each device can author at most 32 updates per observed epoch. This
+bounds the skipped MLS generations if queued updates are canceled.
+
+The current snapshot protocol described below is not implemented. Do not
+enable this experiment by default or deploy it as a complete group feature.
+
+For the real-server browser check, build the isolated web app with
+`VITE_EXPERIMENTAL_GROUP_TOPICS=true`. Use a disposable database with the
+standard `E2E_SERVER=1` Playwright setup. From `web`, run
+`E2E_SERVER=1 E2E_GROUP_TOPICS=1 pnpm exec playwright test e2e/group-topic-send.spec.ts`.
+The test requires 3 accounts. It checks sending, reload, clearing and the
+absence of topic events in normal chat history.
 
 Older clients ignore the unknown body. They must still persist the advanced MLS
 ratchet after decryption, or later messages can fail. They do not display or
-apply topic updates. `engine-group-topic-mls.test.ts` checks that the worker
-consumes and discards topic state. If the storage batch fails, the worker
+apply topic updates. `engine-group-topic-mls.test.ts` checks that a worker with
+the feature disabled consumes and discards topic state. If the storage batch fails, the worker
 closes the socket without acknowledging the event and blocks retry in the same
 engine. A fresh engine can replay the ciphertext from the last saved ratchet,
 acknowledge it after persistence, and decrypt a later message. These tests do
