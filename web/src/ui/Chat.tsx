@@ -25,6 +25,7 @@ import { GroupCallController } from './groupCall'
 import { probeClip } from './media'
 import type { MediaInfo } from '../core/protocol'
 import { BlockedList, DeleteAccount, RenameUsername, ReportForm } from './Safety'
+import { GroupTopic } from './GroupTopic'
 import { VerificationBadge, Verify } from './Verify'
 import {
   type NotificationState,
@@ -306,6 +307,8 @@ export function Chat({
             title={conversation.title}
             isGroup={conversation.isGroup}
             memberCount={conversation.memberCount}
+            topic={conversation.topic}
+            canEditTopic={conversation.canEditTopic}
             amAdmin={conversation.amAdmin}
             status={conversation.status}
             peer={conversation.peer}
@@ -908,6 +911,8 @@ function GroupInfo({
   messages,
   id,
   title,
+  topic,
+  canEditTopic,
   amAdmin,
   active,
   memberCount,
@@ -925,6 +930,8 @@ function GroupInfo({
   messages: ChatMessage[]
   id: string
   title: string
+  topic?: string
+  canEditTopic: boolean
   amAdmin: boolean
   active: boolean
   memberCount: number
@@ -1010,6 +1017,7 @@ function GroupInfo({
           </span>
         </form>
       )}
+      <GroupTopic key={id} core={core} id={id} topic={topic} canEdit={canEditTopic} />
       {verifying && (
         <div>
           <button ref={verifyBack} type="button" className="link" onClick={() => setVerifying(undefined)}>← Members</button>
@@ -1226,6 +1234,8 @@ function Conversation({
   title,
   isGroup,
   memberCount,
+  topic,
+  canEditTopic,
   amAdmin,
   status,
   peer,
@@ -1250,6 +1260,8 @@ function Conversation({
   title: string
   isGroup: boolean
   memberCount: number
+  topic?: string
+  canEditTopic?: boolean
   amAdmin: boolean
   status: ConversationSummary['status']
   peer?: string
@@ -1996,6 +2008,8 @@ function Conversation({
               amAdmin={amAdmin && active}
               active={active}
               memberCount={memberCount}
+              topic={topic}
+              canEditTopic={canEditTopic === true && active && !request && !blocked}
               adding={panel === 'add'}
               onAdd={() => setPanel('add')}
               onAdded={() => setPanel(undefined)}

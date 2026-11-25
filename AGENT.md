@@ -124,6 +124,8 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
 - The opt-in pre-topic WASM compatibility check uses independently built old/current packages
   and explicit provenance manifests; see `docs/testing-topic-legacy-wasm.md`.
   A current-only smoke test is not evidence of old-client compatibility.
+- Keep `VITE_EXPERIMENTAL_GROUP_TOPICS` off in release builds. See
+  `docs/group-topic-state.md` for scope and the isolated real-server browser check.
 - Run browser tests against isolated test services, never a live deployment.
 - Restricted channels are opt-in via `VITE_EXPERIMENTAL_RESTRICTED_CHANNELS=true`.
   Do not send channel names or child conversation IDs in parent group traffic.

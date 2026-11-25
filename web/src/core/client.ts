@@ -129,6 +129,10 @@ export class CoreClient {
     return expect(await this.call({ type: 'members', conversationId }), 'members').members
   }
 
+  async setGroupTopic(conversationId: string, text: string) {
+    expect(await this.call({ type: 'setGroupTopic', conversationId, text }), 'ok')
+  }
+
   async renameGroup(conversationId: string, name: string) {
     expect(await this.call({ type: 'renameGroup', conversationId, name }), 'ok')
   }

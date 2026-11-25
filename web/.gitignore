@@ -1,6 +1,7 @@
 node_modules
 dist
 dist-restricted-channels
+dist-group-topics
 dev-dist
 src/core/pkg
 test-results

@@ -7,8 +7,12 @@ const all = !!process.env.PW_ALL_BROWSERS
 // E2E_SERVER=1 also starts chat-server (needs DATABASE_URL) for the
 // messaging tests; its log is where they read verification codes.
 const withServer = !!process.env.E2E_SERVER
-// The channel check uses a separate opt-in build, never the standard preview.
+// Experimental checks each use a separate build and fresh loopback services.
 const channels = process.env.E2E_RESTRICTED_CHANNELS === '1'
+const topics = process.env.E2E_GROUP_TOPICS === '1'
+if (channels && topics) throw new Error('Select one experimental browser build')
+const testBuild = channels ? 'dist-restricted-channels' : topics ? 'dist-group-topics' : undefined
+const reuseExistingServer = !process.env.CI && !testBuild
 // E2E_LIVEKIT=ws://127.0.0.1:7880 (a `livekit-server --dev`) turns on the
 // group-call tests.
 const livekit = process.env.E2E_LIVEKIT
@@ -21,10 +25,10 @@ export default defineConfig({
   use: { baseURL: 'http://127.0.0.1:4173' },
   webServer: [
     {
-      command: `pnpm preview --host 127.0.0.1 --port 4173 --strictPort${channels ? ' --outDir dist-restricted-channels' : ''}`,
+      command: `pnpm preview --host 127.0.0.1 --port 4173 --strictPort${testBuild ? ` --outDir ${testBuild}` : ''}`,
       env: livekit ? { CSP_CONNECT_EXTRA: `${livekit} ${livekit.replace(/^ws/, 'http')}` } : {},
       url: 'http://127.0.0.1:4173/',
-      reuseExistingServer: !process.env.CI && !channels,
+      reuseExistingServer,
     },
     ...(withServer
       ? [
@@ -33,7 +37,7 @@ export default defineConfig({
             cwd: '..',
             url: 'http://127.0.0.1:8080/readyz',
             timeout: 300_000,
-            reuseExistingServer: !process.env.CI && !channels,
+            reuseExistingServer,
             env: {
               CHAT_BIND: '127.0.0.1:8080',
               CHAT_LOG_FORMAT: 'json',
@@ -60,7 +64,7 @@ export default defineConfig({
             cwd: '..',
             url: 'http://127.0.0.1:8090/',
             timeout: 300_000,
-            reuseExistingServer: !process.env.CI && !channels,
+            reuseExistingServer,
             env: {
               ECHO_SERVER: 'http://127.0.0.1:8080',
               ECHO_STATE_DIR: 'target/e2e-echo-state',
