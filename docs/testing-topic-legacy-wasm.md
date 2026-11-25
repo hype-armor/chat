@@ -134,5 +134,35 @@ checkout SHAs, not the default current revision.
 | Current | `60ee55de299f283a639e91f2aac38631f1d4296f87ba45d63e69eb1c2fe07442` |
 
 No Rust build ran on this host. This result covers only the tested WASM pair.
-It does not verify the old web worker or browser persistence and does not
-permit enabling topic transport.
+This WASM check alone does not verify the old web delivery path or browser persistence.
+
+## Old web delivery check
+
+The opt-in `scripts/fixtures/legacy-topic-engine.test.ts` runs the actual old
+`Engine.onDeliver` with the two verified WASM packages. It asserts no emitted
+UI events or stored topic, restores the persisted old MLS state, rejects a replay of the
+exact topic ciphertext, and decrypts later text. It also injects a failure
+between the old core and app-state writes. A new engine loads those saved
+after-failure values and handles a redelivery before sending an ACK. The store
+and socket are test doubles; this is not a browser or IndexedDB crash test.
+
+Use an isolated checkout at `4141dbd3c87a7bd2fa09d4359a969de7a73458c3` with
+lockfile-matched dependencies. Prepare the 2 package manifests as described
+above, with the recorded checkout `4e018ad818288cb32df9c35c77ea78f48004bad8`
+for the current CI-package test. Use `HARNESS`, `OLD_WORKTREE`, `OLD_PACKAGE`,
+and `CURRENT_PACKAGE` as absolute paths. Do not copy into a working deployment.
+
+```sh
+mkdir -p "$OLD_WORKTREE/web/src/core/pkg"
+cp "$OLD_PACKAGE"/chat_core.js "$OLD_PACKAGE"/chat_core_bg.wasm \
+  "$OLD_PACKAGE"/topic-compat-build.json "$OLD_WORKTREE/web/src/core/pkg/"
+cp "$HARNESS/scripts/test-topic-legacy-wasm.mjs" "$OLD_WORKTREE/scripts/"
+cp "$HARNESS/scripts/fixtures/legacy-topic-engine.test.ts" "$OLD_WORKTREE/web/src/core/"
+cd "$OLD_WORKTREE/web"
+CURRENT_TOPIC_WASM_PACKAGE="$CURRENT_PACKAGE" pnpm exec vitest run src/core/legacy-topic-engine.test.ts
+```
+
+Both cases passed in an isolated copy with the recorded CI packages. This
+covers one ignored-content recovery path. It does not prove real browser
+persistence, delivery recovery for visible content, or that topic transport
+can be enabled.
