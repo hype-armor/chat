@@ -68,6 +68,28 @@ these controls. Honest clients must pause channel sends while a parent-member
 removal remains unsynchronized, and show pending or failed status. Review
 these rules and their metadata effects before release.
 
+The first restricted-channel slice is an opt-in web build
+(`VITE_EXPERIMENTAL_RESTRICTED_CHANNELS=true`). An existing group admin can
+create a private child, select current parent members, and later invite more
+current parent members. Channel name and parent association travel only in
+child MLS ciphertext. No child listing is published to the parent. Honest
+clients pause channel traffic if the locally authenticated child roster does
+not match the eligible parent devices. The first slice does not remove stale
+child devices automatically, provide restored-device admission, or guarantee
+that a local roster check sees a commit not yet delivered by the relay.
+An invited device can briefly see an unnamed conversation before its encrypted
+channel metadata arrives. A non-invited device does not get the child Welcome.
+
+CI runs a separate opt-in build for the real-relay test against disposable
+services. To repeat it from `web` with a disposable `DATABASE_URL`, run:
+
+```sh
+VITE_EXPERIMENTAL_RESTRICTED_CHANNELS=true pnpm exec vite build --outDir dist-restricted-channels
+E2E_SERVER=1 E2E_RESTRICTED_CHANNELS=1 pnpm exec playwright test restricted-channel.spec.ts
+```
+
+The fixture-only browser suite does not verify relay delivery.
+
 A topic is authenticated, encrypted group state. Define bounded length,
 authorized authors, ordering, conflict handling, and an authenticated current
 snapshot for newly added members. Do not expose it to the server.

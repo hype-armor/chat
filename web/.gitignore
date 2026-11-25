@@ -1,5 +1,6 @@
 node_modules
 dist
+dist-restricted-channels
 dev-dist
 src/core/pkg
 test-results

@@ -705,6 +705,72 @@ mod tests {
     }
 
     #[test]
+    fn restricted_channel_info_is_encrypted_and_legacy_readers_advance() {
+        #[derive(Clone, PartialEq, prost::Message)]
+        struct LegacyContent {
+            #[prost(uint64, tag = "1")]
+            sent_at_ms: u64,
+            #[prost(message, optional, tag = "2")]
+            text: Option<Text>,
+            #[prost(message, optional, tag = "4")]
+            group_info: Option<chat_proto::v1::GroupInfo>,
+        }
+        let mut alice = Client::new(Device::new(b"alice").unwrap());
+        let mut bob = Client::new(Device::new(b"bob").unwrap());
+        let kp = bob.key_packages(1).unwrap().remove(0);
+        let started = alice
+            .start_conversation(
+                &[JoinPackage {
+                    identity: b"bob",
+                    key_package: &kp,
+                }],
+                vec![1; 16],
+            )
+            .unwrap();
+        bob.receive(&started.welcome).unwrap();
+        let id = started.conversation_id;
+        let content = Content {
+            sent_at_ms: 2,
+            reply_to: None,
+            reply_to_hash: None,
+            body: Some(content::Body::RestrictedChannelInfo(
+                chat_proto::v1::RestrictedChannelInfo {
+                    parent_conversation_id: vec![7; 16],
+                    name: "secret channel name".into(),
+                },
+            )),
+        };
+        let env = alice.send(&id, &content, vec![2; 16]).unwrap();
+        assert_eq!(env.content_type, i32::from(ContentType::Application));
+        assert!(
+            !env.encode_to_vec()
+                .windows(b"secret channel name".len())
+                .any(|w| w == b"secret channel name")
+        );
+        let Event::Message {
+            sender,
+            conversation_id,
+            content: received,
+        } = bob.receive(&env).unwrap()
+        else {
+            panic!("expected an authenticated channel info message");
+        };
+        assert_eq!(sender, b"alice");
+        assert_eq!(conversation_id, id);
+        assert_eq!(received, content);
+        let legacy = LegacyContent::decode(received.encode_to_vec().as_slice()).unwrap();
+        assert!(legacy.text.is_none());
+        assert!(legacy.group_info.is_none());
+        let mut bob = Client::restore(&bob.snapshot().unwrap()).unwrap();
+        let next = alice
+            .send(&id, &text("after channel info"), vec![3; 16])
+            .unwrap();
+        assert!(
+            matches!(bob.receive(&next).unwrap(), Event::Message { content, .. } if content == text("after channel info"))
+        );
+    }
+
+    #[test]
     fn reactions_preserve_mls_authentication_and_legacy_ratchets() {
         #[derive(Clone, PartialEq, prost::Message)]
         struct LegacyContent {

@@ -267,6 +267,17 @@ jobs:
           CI: "1"
           E2E_SERVER: "1"
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      - name: Invite-only channels through the real relay (Chromium, Firefox, WebKit)
+        run: |
+          pnpm --filter web exec vite build --outDir dist-restricted-channels
+          pnpm --filter web exec playwright test e2e/restricted-channel.spec.ts --output=test-results/restricted-channels
+        env:
+          VITE_EXPERIMENTAL_RESTRICTED_CHANNELS: "true"
+          E2E_RESTRICTED_CHANNELS: "1"
+          PW_ALL_BROWSERS: "1"
+          CI: "1"
+          E2E_SERVER: "1"
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
       - name: LiveKit log
         if: failure()
         run: docker logs livekit > target/livekit.log 2>&1 || true

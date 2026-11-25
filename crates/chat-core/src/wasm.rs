@@ -3,7 +3,8 @@
 use chat_proto::v1::{
     Ack, Attachment, Authenticate, Call, ClientFrame, Content, ContentType, Deletion, DeviceSync,
     Envelope, GroupInfo, GroupTopic, LiveLocation, Locality, Location, Ping, Profile, Reaction,
-    Receipt, SendEnvelope, ServerFrame, Text, Typing, client_frame, content, receipt, server_frame,
+    Receipt, RestrictedChannelInfo, SendEnvelope, ServerFrame, Text, Typing, client_frame, content,
+    receipt, server_frame,
 };
 use js_sys::{Array, Uint8Array};
 use prost::Message;
@@ -210,7 +211,8 @@ pub struct AddedView {
 }
 
 /// A received envelope, flattened for JavaScript. `kind` is one of
-/// `message`, `joined`, `epoch`, `proposal`, `ignored`.
+/// `message`, `joined`, `epoch`, `proposal`, `groupTopic`,
+/// `restrictedChannelInfo`, `ignored`.
 #[wasm_bindgen]
 pub struct EventView {
     #[wasm_bindgen(getter_with_clone)]
@@ -230,6 +232,11 @@ pub struct EventView {
     pub group_topic_text: Option<String>,
     #[wasm_bindgen(js_name = groupTopicClock)]
     pub group_topic_clock: Option<f64>,
+    /// Unaccepted encrypted association. The worker must independently authorize it.
+    #[wasm_bindgen(getter_with_clone, js_name = restrictedChannelParentId)]
+    pub restricted_channel_parent_id: Option<Vec<u8>>,
+    #[wasm_bindgen(getter_with_clone, js_name = restrictedChannelName)]
+    pub restricted_channel_name: Option<String>,
     #[wasm_bindgen(getter_with_clone, js_name = deletionTarget)]
     pub deletion_target: Option<Vec<u8>>,
     #[wasm_bindgen(getter_with_clone, js_name = deletionTargetHash)]
@@ -351,6 +358,10 @@ pub struct LocationView {
     pub label: String,
 }
 
+fn valid_restricted_channel_info(channel_id: &[u8], parent_id: &[u8], name: &str) -> bool {
+    channel_id.len() == 16 && parent_id.len() == 16 && channel_id != parent_id && name.len() <= 512
+}
+
 impl EventView {
     fn new(kind: &str, conversation_id: Vec<u8>) -> Self {
         Self {
@@ -362,6 +373,8 @@ impl EventView {
             reaction: None,
             group_topic_text: None,
             group_topic_clock: None,
+            restricted_channel_parent_id: None,
+            restricted_channel_name: None,
             deletion_target: None,
             deletion_target_hash: None,
             deletion_target_author: None,
@@ -939,6 +952,34 @@ impl CoreClient {
         )
     }
 
+    /// Encrypts channel metadata only in the child MLS conversation. The worker
+    /// must authorize the sender and verify parent/channel membership before use.
+    #[wasm_bindgen(js_name = sendRestrictedChannelInfo)]
+    pub fn send_restricted_channel_info(
+        &mut self,
+        channel_id: &[u8],
+        parent_id: &[u8],
+        name: String,
+        sent_at_ms: f64,
+        message_id: Vec<u8>,
+    ) -> Result<Vec<u8>, JsError> {
+        if !valid_restricted_channel_info(channel_id, parent_id, &name)
+            || message_id.len() != 16
+            || exact_timestamp(sent_at_ms).is_none()
+        {
+            return Err(JsError::new("invalid restricted channel info"));
+        }
+        self.send(
+            channel_id,
+            sent_at_ms,
+            content::Body::RestrictedChannelInfo(RestrictedChannelInfo {
+                parent_conversation_id: parent_id.to_vec(),
+                name,
+            }),
+            message_id,
+        )
+    }
+
     /// Durable reaction updates use the existing MLS envelope and sender authentication.
     #[wasm_bindgen(js_name = sendReaction)]
     #[allow(clippy::too_many_arguments)]
@@ -1296,6 +1337,20 @@ impl CoreClient {
                             view.kind = "ignored".to_owned();
                         }
                     }
+                    Some(content::Body::RestrictedChannelInfo(info)) => {
+                        if valid_restricted_channel_info(
+                            &view.conversation_id,
+                            &info.parent_conversation_id,
+                            &info.name,
+                        ) && (1..=9_007_199_254_740_991).contains(&content.sent_at_ms)
+                        {
+                            view.kind = "restrictedChannelInfo".to_owned();
+                            view.restricted_channel_parent_id = Some(info.parent_conversation_id);
+                            view.restricted_channel_name = Some(info.name);
+                        } else {
+                            view.kind = "ignored".to_owned();
+                        }
+                    }
                     Some(content::Body::Presence(_)) | None => view.kind = "ignored".to_owned(),
                 }
                 view
@@ -1528,6 +1583,107 @@ mod interaction_tests {
             assert_eq!(event.kind, "ignored");
             assert!(event.group_topic_clock.is_none());
             assert!(event.group_topic_text.is_none());
+        }
+        let mut receiver = CoreClient::restore(&receiver.snapshot().unwrap()).unwrap();
+        let next = sender
+            .send_text(&id, "next".into(), 12.0, vec![4; 16], None, None)
+            .unwrap();
+        assert_eq!(
+            receiver.receive(&next).unwrap().text.as_deref(),
+            Some("next")
+        );
+    }
+
+    #[test]
+    fn restricted_channel_info_validates_ids_and_utf8_bytes() {
+        assert!(valid_restricted_channel_info(&[1; 16], &[2; 16], ""));
+        assert!(valid_restricted_channel_info(
+            &[1; 16],
+            &[2; 16],
+            &"é".repeat(256)
+        ));
+        assert!(!valid_restricted_channel_info(&[1; 15], &[2; 16], "ok"));
+        assert!(!valid_restricted_channel_info(&[1; 16], &[2; 17], "ok"));
+        assert!(!valid_restricted_channel_info(&[1; 16], &[1; 16], "ok"));
+        assert!(!valid_restricted_channel_info(
+            &[1; 16],
+            &[2; 16],
+            &"é".repeat(257)
+        ));
+    }
+
+    #[test]
+    fn restricted_channel_info_uses_authenticated_context_and_preserves_ratchet() {
+        let sender_id = vec![1; 32];
+        let receiver_id = vec![2; 32];
+        let mut sender = Client::new(Device::new(&sender_id).unwrap());
+        let mut receiver = Client::new(Device::new(&receiver_id).unwrap());
+        let kp = receiver.key_packages(1).unwrap().remove(0);
+        let started = sender
+            .start_conversation(
+                &[JoinPackage {
+                    identity: &receiver_id,
+                    key_package: &kp,
+                }],
+                vec![1; 16],
+            )
+            .unwrap();
+        receiver.receive(&started.welcome).unwrap();
+        let id = started.conversation_id;
+        let parent = if id == vec![9; 16] {
+            vec![8; 16]
+        } else {
+            vec![9; 16]
+        };
+        let mut sender = CoreClient {
+            inner: sender,
+            last_sent_content_hash: None,
+        };
+        let mut receiver = CoreClient {
+            inner: receiver,
+            last_sent_content_hash: None,
+        };
+        let envelope = sender
+            .send_restricted_channel_info(&id, &parent, "private name".into(), 10.0, vec![2; 16])
+            .unwrap();
+        let event = receiver.receive(&envelope).unwrap();
+        assert_eq!(event.kind, "restrictedChannelInfo");
+        assert_eq!(event.conversation_id, id);
+        assert_eq!(event.sender, sender_id);
+        assert_eq!(event.restricted_channel_parent_id, Some(parent.clone()));
+        assert_eq!(
+            event.restricted_channel_name.as_deref(),
+            Some("private name")
+        );
+        assert!(event.group_name.is_none());
+        assert!(event.group_admins.is_empty());
+        assert!(event.content_hash.is_none());
+        assert!(event.text.is_none());
+        assert!(sender.last_sent_content_hash().is_none());
+        for (parent_conversation_id, name, sent_at_ms) in [
+            (vec![3; 15], "ok".into(), 11),
+            (vec![3; 17], "ok".into(), 11),
+            (id.clone(), "ok".into(), 11),
+            (parent.clone(), "é".repeat(257), 11),
+            (parent.clone(), "ok".into(), 0),
+            (parent.clone(), "ok".into(), 9_007_199_254_740_992),
+        ] {
+            let content = Content {
+                sent_at_ms,
+                reply_to: None,
+                reply_to_hash: None,
+                body: Some(content::Body::RestrictedChannelInfo(
+                    RestrictedChannelInfo {
+                        parent_conversation_id,
+                        name,
+                    },
+                )),
+            };
+            let env = sender.inner.send(&id, &content, vec![3; 16]).unwrap();
+            let event = receiver.receive(&env.encode_to_vec()).unwrap();
+            assert_eq!(event.kind, "ignored");
+            assert!(event.restricted_channel_parent_id.is_none());
+            assert!(event.restricted_channel_name.is_none());
         }
         let mut receiver = CoreClient::restore(&receiver.snapshot().unwrap()).unwrap();
         let next = sender

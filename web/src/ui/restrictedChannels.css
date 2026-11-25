@@ -1,0 +1,17 @@
+.restricted-channel-form fieldset {
+  display: grid;
+  gap: 0.25rem;
+  min-inline-size: 0;
+  max-block-size: 16rem;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+
+.restricted-channel-form .channel-member {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-block-size: 2.75rem;
+  overflow-wrap: anywhere;
+}

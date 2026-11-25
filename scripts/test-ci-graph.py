@@ -143,13 +143,25 @@ def validate(workflow):
     browser_tests = [step for step in jobs["web-browser"]["steps"]
                      if "playwright test" in step.get("run", "")
                      or step.get("run") == "pnpm --filter web e2e"]
-    assert len(browser_tests) == 2
+    assert len(browser_tests) == 3
     for step in browser_tests:
         assert step["env"]["PW_ALL_BROWSERS"] == "1"
         assert step["env"]["CI"] == "1"
-    assert browser_tests[1]["env"]["E2E_SERVER"] == "1"
-    assert browser_tests[1]["env"]["E2E_LIVEKIT"] == "ws://127.0.0.1:7880"
-    assert "DATABASE_URL" in browser_tests[1]["env"]
+    fixtures, standard, channels = browser_tests
+    assert "playwright.fixtures.config.ts" in fixtures["run"]
+    assert standard["run"] == "pnpm --filter web e2e"
+    assert standard["env"]["E2E_SERVER"] == "1"
+    assert standard["env"]["E2E_LIVEKIT"] == "ws://127.0.0.1:7880"
+    assert "DATABASE_URL" in standard["env"]
+    for step in (fixtures, standard):
+        assert "VITE_EXPERIMENTAL_RESTRICTED_CHANNELS" not in step["env"]
+        assert "E2E_RESTRICTED_CHANNELS" not in step["env"]
+    assert "vite build --outDir dist-restricted-channels" in channels["run"]
+    assert "playwright test e2e/restricted-channel.spec.ts" in channels["run"]
+    assert channels["env"]["VITE_EXPERIMENTAL_RESTRICTED_CHANNELS"] == "true"
+    assert channels["env"]["E2E_RESTRICTED_CHANNELS"] == "1"
+    assert channels["env"]["E2E_SERVER"] == "1"
+    assert channels["env"]["DATABASE_URL"] == standard["env"]["DATABASE_URL"]
 
     for gate, tested in (("rust", "rust-integration"), ("web", "web-browser")):
         job = jobs[gate]
