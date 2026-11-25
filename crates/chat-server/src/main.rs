@@ -63,18 +63,18 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    if config.experimental_presence {
-        if let Some(db) = db.clone() {
-            tokio::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-                loop {
-                    interval.tick().await;
-                    if chat_server::presence::purge_expired(&db).await.is_err() {
-                        tracing::error!("presence expiry cleanup failed");
-                    }
+    if config.experimental_presence
+        && let Some(db) = db.clone()
+    {
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                if chat_server::presence::purge_expired(&db).await.is_err() {
+                    tracing::error!("presence expiry cleanup failed");
                 }
-            });
-        }
+            }
+        });
     }
 
     let listener = TcpListener::bind(config.bind).await?;

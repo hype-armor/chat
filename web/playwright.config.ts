@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test'
+import { devStorageSpecs } from './playwright.dev-storage-specs'
 
 // Locally only Chromium may be installed; CI runs all three engines
 // (`PW_ALL_BROWSERS=1`) because Safari/WebKit gaps are a top risk.
@@ -12,6 +13,7 @@ const livekit = process.env.E2E_LIVEKIT
 
 export default defineConfig({
   testDir: 'e2e',
+  testIgnore: devStorageSpecs,
   // The loopback address, not "localhost": Playwright's Firefox gathers no
   // ICE candidates on pages from that name, and the preview binds IPv4 only.
   use: { baseURL: 'http://127.0.0.1:4173' },

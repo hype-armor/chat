@@ -150,6 +150,8 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   `scripts/test-compose-build.sh` after changes to build controls.
 - Run responsive UI and interaction fixtures with
   `PW_ALL_BROWSERS=1 pnpm --filter web exec playwright test -c playwright.fixtures.config.ts`.
+  Run delivery and storage fixtures that import source modules in this Vite suite,
+  not the production-preview E2E suite. Both configs use `devStorageSpecs`.
   These fixtures do not prove call transport. The narrow-header echo-call test
   needs the isolated server and echo bot. Set `E2E_UI_FIXTURE_PORT` to a free
   dedicated port when another session runs UI fixtures. Call UI fixtures must
