@@ -242,7 +242,6 @@ jobs:
           PW_ALL_BROWSERS: "1"
           CI: "1"
       - name: Start PostgreSQL for messaging e2e tests
-        id: e2e-postgres
         run: |
           docker run -d --name postgres -p 5432:5432 \
             -e POSTGRES_PASSWORD=postgres \
@@ -269,7 +268,6 @@ jobs:
           E2E_SERVER: "1"
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
       - name: Invite-only channels through the real relay (Chromium, Firefox, WebKit)
-        if: ${{ !cancelled() && steps.e2e-postgres.outcome == 'success' }}
         run: |
           pnpm --filter web exec vite build --outDir dist-restricted-channels
           pnpm --filter web exec playwright test e2e/restricted-channel.spec.ts --output=test-results/restricted-channels
