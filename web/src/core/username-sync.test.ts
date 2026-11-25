@@ -109,11 +109,29 @@ describe('authoritative username', () => {
     } finally { rename.mockRestore() }
   })
 
+  it.each([new ApiError(429, 'rate limited'), new Error('network')])('refreshes the authoritative name after an uncertain retry fails: %s', async (error) => {
+    const engine = setup()
+    const pending = { username: 'new.02', requestId: 'request' }
+    engine['account']!.pendingUsername = pending
+    const rename = vi.spyOn(api, 'renameAccount').mockRejectedValue(error)
+    // Another linked device renamed again after the original request committed.
+    const refresh = vi.spyOn(api, 'currentAccount').mockResolvedValue({ account_id: id, username: 'latest.03' })
+    try {
+      engine['syncUsername']()
+      await engine['usernameBackgroundSync']
+      expect(refresh).toHaveBeenCalledWith('token')
+      expect(engine['account']?.username).toBe('latest.03')
+      expect(engine['account']?.pendingUsername).toEqual(pending)
+      expect(engine['store'].putJson).toHaveBeenCalledWith('account', expect.objectContaining({ username: 'latest.03', pendingUsername: pending }))
+    } finally { rename.mockRestore(); refresh.mockRestore() }
+  })
+
   it('deduplicates background retries and allows a later retry after failure', async () => {
     const engine = setup()
     engine['account']!.pendingUsername = { username: 'new.02', requestId: 'request' }
     let reject!: (error: Error) => void
     const rename = vi.spyOn(engine, 'renameUsername').mockImplementationOnce(() => new Promise((_, fail) => { reject = fail })).mockResolvedValue()
+    const refresh = vi.spyOn(api, 'currentAccount').mockRejectedValue(new Error('offline'))
     try {
       engine['syncUsername']()
       engine['syncUsername']()
@@ -124,7 +142,26 @@ describe('authoritative username', () => {
       engine['syncUsername']()
       expect(rename).toHaveBeenCalledTimes(2)
       await engine['usernameBackgroundSync']
-    } finally { rename.mockRestore() }
+    } finally { rename.mockRestore(); refresh.mockRestore() }
+  })
+
+  it.each(['ending', 'replacement', 'epoch'] as const)('does not refresh after a failed retry from an ended session: %s', async (change) => {
+    const engine = setup()
+    engine['account']!.pendingUsername = { username: 'new.02', requestId: 'request' }
+    let reject!: (error: Error) => void
+    const rename = vi.spyOn(api, 'renameAccount').mockImplementation(() => new Promise((_, fail) => { reject = fail }))
+    const refresh = vi.spyOn(api, 'currentAccount')
+    try {
+      engine['syncUsername']()
+      await vi.waitFor(() => expect(rename).toHaveBeenCalledTimes(1))
+      if (change === 'ending') engine['endingSession'] = true
+      if (change === 'replacement') engine['account'] = { ...engine['account']!, token: 'new-token' }
+      if (change === 'epoch') engine['draftEpoch'] += 1
+      reject(new Error('network'))
+      await engine['usernameBackgroundSync']
+      expect(refresh).not.toHaveBeenCalled()
+      expect(engine['account']?.username).toBe('old.01')
+    } finally { rename.mockRestore(); refresh.mockRestore() }
   })
 
   it('does not claim keys when a renamed own account is used as a peer', async () => {

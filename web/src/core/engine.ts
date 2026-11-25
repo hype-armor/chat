@@ -1054,8 +1054,15 @@ export class Engine {
   /** Retry uncertain changes and refresh other devices' changes in the background. */
   private syncUsername(): void {
     if (!this.account || this.usernameBackgroundSync) return
-    const pending = this.account.pendingUsername
-    const run = (pending ? this.renameUsername(pending.username) : this.refreshUsername()).catch(() => undefined)
+    const account = this.account
+    const epoch = this.draftEpoch
+    const pending = account.pendingUsername
+    const retry = pending ? this.renameUsername(pending.username).catch(async () => {
+      // An uncertain retry can fail after another device changes the name.
+      // Refresh the authoritative name without clearing the pending request.
+      if (!this.endingSession && this.account === account && this.draftEpoch === epoch) await this.refreshUsername()
+    }) : this.refreshUsername()
+    const run = retry.catch(() => undefined)
     this.usernameBackgroundSync = run
     void run.then(() => {
       if (this.usernameBackgroundSync === run) this.usernameBackgroundSync = undefined
