@@ -163,6 +163,35 @@ CURRENT_TOPIC_WASM_PACKAGE="$CURRENT_PACKAGE" pnpm exec vitest run src/core/lega
 ```
 
 Both cases passed in an isolated copy with the recorded CI packages. This
-covers one ignored-content recovery path. It does not prove real browser
+covers one ignored-content recovery path. It does not prove old-browser
 persistence, delivery recovery for visible content, or that topic transport
 can be enabled.
+
+## Current browser storage check
+
+The isolated topic-delivery fixture runs the current `Engine` and `SecureStore`
+in a module worker. It aborts the IndexedDB batch after the core write request
+succeeds but before transaction commit. The socket double must see no ACK, and
+both stored records must remain unchanged. The fixture terminates the worker,
+starts a fresh one on the same IndexedDB, and replays the same encrypted topic.
+The new worker must commit before it acknowledges. At acknowledgement, both
+stored records must match the engine state, including the seen delivery ID.
+The restored ratchet must reject exact replay and decrypt the following text. The fixture
+blocks requests to chat APIs and other origins.
+
+Run from `web` in an isolated checkout with lockfile-matched dependencies and
+the current CI WASM package installed. `E2E_TOPIC_DELIVERY_PORT` can select an
+unused test port. The default runs Chromium and Firefox; set
+`PW_ALL_BROWSERS=1` to include WebKit when available.
+
+```sh
+pnpm exec playwright test --config=playwright.topic-delivery.config.ts
+```
+
+Chromium and Firefox passed. WebKit did not launch on the test host because
+system libraries were missing. A separate Chromium run with the app write
+removed failed at the app-state readback assertion, as expected.
+
+This is a controlled transaction-abort test, not a power-loss or cross-device
+recovery test. It does not exercise the production worker entry point or prove
+that unrelated writers cannot race the transaction.
