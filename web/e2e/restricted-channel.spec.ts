@@ -23,7 +23,9 @@ test('only invited parent members can see and use a private channel', async ({ b
   await createGroup(alice, 'Parent group', [bobName, cathyName])
   await message(alice, 'Parent message')
   for (const page of [bob, cathy]) {
-    await openChat(page, /^Parent group/)
+    // A collapsed request can include the avatar initial in its accessible name.
+    await openChat(page, /Parent group/)
+    await expect(page.getByRole('heading', { name: 'Parent group', exact: true })).toBeVisible()
     await expect(messages(page).filter({ hasText: 'Parent message' })).toHaveCount(1)
   }
 
