@@ -9,7 +9,7 @@ beforeAll(() => {
   initSync({ module: readFileSync(new URL('./pkg/chat_core_bg.wasm', import.meta.url)) })
 })
 
-function setupTopicDelivery() {
+function setupTopicDelivery(beforeBatch?: () => Promise<void>) {
   const alice = new PendingClient().intoClient(makeIdentity('11'.repeat(16), '22'.repeat(16)))
   const bob = new PendingClient().intoClient(makeIdentity('33'.repeat(16), '44'.repeat(16)))
   const started = alice.startConversation([makeIdentity('33'.repeat(16), '44'.repeat(16))], bob.keyPackages(1), randomId())
@@ -27,6 +27,7 @@ function setupTopicDelivery() {
   const store = {
     putBatch: async (entries: readonly (readonly [string, Uint8Array])[]) => {
       if (rejectBatch) throw new Error('ratchet batch rejected')
+      await beforeBatch?.()
       for (const [key, value] of entries) {
         values.set(key, key === 'app' ? JSON.parse(new TextDecoder().decode(value)) : value.slice())
       }
@@ -58,15 +59,31 @@ function setupTopicDelivery() {
 
 describe('disabled group topic delivery', () => {
   it('discards the topic and persists the consumed ratchet before acknowledgement', async () => {
-    const { id, frame, alice, newEngine, order, values } = setupTopicDelivery()
+    let enteredBatch!: () => void
+    const batchEntered = new Promise<void>((resolve) => { enteredBatch = resolve })
+    let releaseBatch!: () => void
+    const batchReleased = new Promise<void>((resolve) => { releaseBatch = resolve })
+    const { id, frame, alice, newEngine, order, values } = setupTopicDelivery(() => {
+      enteredBatch()
+      return batchReleased
+    })
     const engine = newEngine()
-    await engine['onDeliver'](frame)
+    const delivery = engine['onDeliver'](frame)
+    try {
+      await Promise.race([batchEntered, delivery.then(() => { throw new Error('delivery did not wait for its batch') })])
+      expect(order).toEqual([])
+    } finally {
+      releaseBatch()
+      await delivery
+    }
     expect(order).toEqual(['batch', 'ack'])
     expect(values.has('messages:' + id)).toBe(false)
     expect(JSON.stringify(values.get('app'))).not.toContain('private topic')
     expect(engine['state'].conversations[id]).toEqual({ id, peers: ['11'.repeat(16)], lastAt: 1 })
 
     const restored = CoreClient.restore(values.get('core') as Uint8Array)
+    // Later text can decrypt even from a stale ratchet, so also test exact replay.
+    expect(() => restored.receive(frame.envelope)).toThrow()
     expect(restored.receive(alice.sendText(frame.conversationId, 'after topic', 11, randomId())).text).toBe('after topic')
   })
 
@@ -89,6 +106,7 @@ describe('disabled group topic delivery', () => {
     expect(values.has('messages:' + id)).toBe(false)
     expect(JSON.stringify(values.get('app'))).not.toContain('private topic')
     const restored = CoreClient.restore(values.get('core') as Uint8Array)
+    expect(() => restored.receive(frame.envelope)).toThrow()
     expect(restored.receive(alice.sendText(frame.conversationId, 'after replay', 11, randomId())).text).toBe('after replay')
   })
 })
