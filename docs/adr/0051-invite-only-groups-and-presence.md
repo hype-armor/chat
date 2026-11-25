@@ -80,9 +80,15 @@ that a local roster check sees a commit not yet delivered by the relay.
 An invited device can briefly see an unnamed conversation before its encrypted
 channel metadata arrives. A non-invited device does not get the child Welcome.
 
-For the real-relay test, build the opt-in web app against disposable test
-services and run `E2E_SERVER=1 E2E_RESTRICTED_CHANNELS=1 pnpm exec playwright test restricted-channel.spec.ts`
-from `web`. The fixture-only browser suite does not verify relay delivery.
+CI runs a separate opt-in build for the real-relay test against disposable
+services. To repeat it from `web` with a disposable `DATABASE_URL`, run:
+
+```sh
+VITE_EXPERIMENTAL_RESTRICTED_CHANNELS=true pnpm exec vite build --outDir dist-restricted-channels
+E2E_SERVER=1 E2E_RESTRICTED_CHANNELS=1 pnpm exec playwright test restricted-channel.spec.ts
+```
+
+The fixture-only browser suite does not verify relay delivery.
 
 A topic is authenticated, encrypted group state. Define bounded length,
 authorized authors, ordering, conflict handling, and an authenticated current
