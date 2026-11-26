@@ -121,7 +121,17 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   `update.sh`. Bot registration/start requires `--enable-bots`. Never replace missing
   keys over existing state or bypass bootstrap quotas. Run `scripts/test-update-with-bots.sh`
   with mock services after updater changes; keep bot config outside Git and build context.
+- The opt-in pre-topic WASM compatibility check uses independently built old/current packages
+  and explicit provenance manifests; see `docs/testing-topic-legacy-wasm.md`.
+  A current-only smoke test is not evidence of old-client compatibility.
+- Keep `VITE_EXPERIMENTAL_GROUP_TOPICS` off in release builds. See
+  `docs/group-topic-state.md` for scope and the isolated real-server browser check.
 - Run browser tests against isolated test services, never a live deployment.
+- Restricted channels are opt-in via `VITE_EXPERIMENTAL_RESTRICTED_CHANNELS=true`.
+  Do not send channel names or child conversation IDs in parent group traffic.
+  Wait for initial relay catch-up. Repair observed removals using exact MLS devices.
+  Preserve revocations across parent rejoin until the child removes those leaves.
+  Do not reuse queued ciphertext or automatically add a restored device during repair.
 - Notification service reset must remain a manual action for the current app worker.
   Unsubscribe before unregistering and reload only after success. Never clear encrypted site data to repair push.
 - Browser and OS permission grants belong to the browser. Do not cache fake grants or keep
@@ -147,6 +157,8 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   `scripts/test-compose-build.sh` after changes to build controls.
 - Run responsive UI and interaction fixtures with
   `PW_ALL_BROWSERS=1 pnpm --filter web exec playwright test -c playwright.fixtures.config.ts`.
+  Run delivery and storage fixtures that import source modules in this Vite suite,
+  not the production-preview E2E suite. Both configs use `devStorageSpecs`.
   These fixtures do not prove call transport. The narrow-header echo-call test
   needs the isolated server and echo bot. Set `E2E_UI_FIXTURE_PORT` to a free
   dedicated port when another session runs UI fixtures. Call UI fixtures must

@@ -6,7 +6,10 @@ import { mapInfo, tile } from './maps'
 import type { CoreEvent, CoreResponseBody, MediaEnvelope, RequestEnvelope } from './protocol'
 import type { MediaTransformOptions } from './media'
 
-const engine = new Engine((event: CoreEvent) => self.postMessage({ id: 0, event }))
+const engine = new Engine((event: CoreEvent) => self.postMessage({ id: 0, event }), {
+  restrictedChannels: import.meta.env.VITE_EXPERIMENTAL_RESTRICTED_CHANNELS === 'true',
+  groupTopics: import.meta.env.VITE_EXPERIMENTAL_GROUP_TOPICS === 'true',
+})
 const started = engine.start()
 
 async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
@@ -23,6 +26,11 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
       return { type: 'conversation', conversationId: await engine.startChat(request.username) }
     case 'createGroup':
       return { type: 'conversation', conversationId: await engine.createGroup(request.name, request.usernames) }
+    case 'createRestrictedChannel':
+      return { type: 'conversation', conversationId: await engine.createRestrictedChannel(request.parentId, request.name, request.usernames) }
+    case 'inviteToRestrictedChannel':
+      await engine.inviteToRestrictedChannel(request.channelId, request.usernames)
+      return { type: 'ok' }
     case 'addMembers':
       await engine.addMembers(request.conversationId, request.usernames)
       return { type: 'ok' }
@@ -33,6 +41,9 @@ async function handle({ request }: RequestEnvelope): Promise<CoreResponseBody> {
       return { type: 'ok' }
     case 'members':
       return { type: 'members', members: engine.members(request.conversationId) }
+    case 'setGroupTopic':
+      await engine.setGroupTopic(request.conversationId, request.text)
+      return { type: 'ok' }
     case 'renameGroup':
       await engine.renameGroup(request.conversationId, request.name)
       return { type: 'ok' }

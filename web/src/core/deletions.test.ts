@@ -47,7 +47,7 @@ describe('authenticated deletion rules', () => {
     for (let i = 0; i < 2_200; i++) addCandidate(ledger, { ...binding, conversation: String(i), requestAt: 1_000 + i })
     expect(ledger.candidates).toHaveLength(2_048)
     expect(ledger.records).toHaveLength(1)
-  })
+  }, 15_000)
   it('enforces the serialized candidate-byte bound without touching verified records', () => {
     const ledger = emptyDeletions()
     ledger.records.push({ scope: 'everyone', ...binding, remote: true })

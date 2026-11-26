@@ -1,0 +1,14 @@
+.group-topic {
+  min-width: 0;
+}
+
+.group-topic-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.group-topic textarea {
+  width: 100%;
+  min-height: 5rem;
+  resize: vertical;
+}

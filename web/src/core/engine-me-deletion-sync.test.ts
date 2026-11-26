@@ -24,6 +24,11 @@ function setup(device = a) {
   const rosters = new Map([[selfId, identities], [conversation, [makeIdentity(me, device), makeIdentity(peer, '44'.repeat(16))]]])
   const core = { identity: () => makeIdentity(me, device), members: (id: Uint8Array) => rosters.get(Array.from(id, (n) => n.toString(16).padStart(2, '0')).join('')) ?? [], snapshot: () => new Uint8Array([2]), sendDeviceSync: vi.fn<CoreClient['sendDeviceSync']>(() => new Uint8Array([3])) }
   const store = { getJson: vi.fn(async (key: string) => structuredClone(values.get(key))), putJson: vi.fn(async (key: string, value: unknown) => { values.set(key, structuredClone(value)) }), deleteBytes: vi.fn(async (key: string) => { values.delete(key) }), putBytes: vi.fn(async () => {}), putFile: vi.fn(async () => {}), clear: vi.fn(async () => values.clear()) }
+  const putBatch = vi.fn(async (entries: readonly (readonly [string, Uint8Array])[]) => {
+    const staged = entries.map(([key, value]) => [key, key === 'app' ? JSON.parse(new TextDecoder().decode(value)) : value.slice()] as const)
+    for (const [key, value] of staged) values.set(key, value)
+  })
+  Object.assign(store, { putBatch })
   engine['account'] = { accountId: me, deviceId: device, username: 'me', displayName: 'Me', token: 'synthetic' }
   engine['core'] = core as unknown as CoreClient; engine['store'] = store as unknown as Engine['store']
   engine['state'].myDevices = [a, b]
@@ -35,7 +40,7 @@ function setup(device = a) {
   const apply = (data: Uint8Array, senderDevice = device === a ? b : a, id = selfId, account = me) => engine['apply']({ kind: 'message', conversationId: fromHex(id), sender: makeIdentity(account, senderDevice), sentAtMs: 1_000_100, deviceSync: data } as Parameters<Engine['apply']>[0], '88'.repeat(16))
   const ledger = () => values.get(ledgerKey) as DeletionLedger
   const chunks = () => core.sendDeviceSync.mock.calls.map((call) => call[1]).filter((value) => parseMeDeletions(value).length)
-  return { engine, events, values, core, store, rosters, flush, apply, ledger, chunks }
+  return { engine, events, values, core, store, putBatch, rosters, flush, apply, ledger, chunks }
 }
 beforeAll(() => initSync({ module: readFileSync(new URL('./pkg/chat_core_bg.wasm', import.meta.url)) }))
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(1_000_100) })
@@ -157,7 +162,7 @@ describe('private Me deletion synchronization', () => {
   })
 
   it('keeps sync gated and retryable when app persistence fails after local tombstone acceptance', async () => {
-    const s = setup(); s.store.putJson.mockImplementation(async (key, value) => { if (key === 'app') throw new Error('quota'); s.values.set(key, structuredClone(value)) })
+    const s = setup(); s.putBatch.mockRejectedValue(new Error('quota'))
     await expect(s.engine.deleteMessage(conversation, target, 'me')).resolves.toMatchObject({ accepted: true })
     s.engine['connection'] = 'online'; s.engine['request'] = vi.fn()
     await s.flush(); expect(s.engine['request']).not.toHaveBeenCalled()
@@ -170,10 +175,10 @@ describe('private Me deletion synchronization', () => {
 
   it('finishes a previously gated batch after a transient app failure without requiring reload', async () => {
     const s = setup()
-    s.store.putJson.mockImplementation(async (key, value) => { if (key === 'app') throw new Error('quota'); s.values.set(key, structuredClone(value)) })
+    s.putBatch.mockRejectedValue(new Error('quota'))
     await s.engine.deleteMessage(conversation, target, 'me')
     expect(s.engine['acceptingMeDeletionSync'].size).toBeGreaterThan(0)
-    s.store.putJson.mockImplementation(async (key, value) => { s.values.set(key, structuredClone(value)) })
+    s.putBatch.mockReset(); s.putBatch.mockImplementation(async (entries) => { for (const [key, value] of entries) s.values.set(key, key === 'app' ? JSON.parse(new TextDecoder().decode(value)) : value.slice()) })
     s.engine['connection'] = 'online'; await s.engine['flushMeDeletionSync']()
     expect(s.engine['acceptingMeDeletionSync'].size).toBe(0)
     expect(s.chunks()).toHaveLength(1)
@@ -193,7 +198,8 @@ describe('private Me deletion synchronization', () => {
 
   it('gates a new sync batch until the advanced ratchet and outbox are durable', async () => {
     const s = setup(), entered = deferred<void>(), gate = deferred<void>()
-    s.store.putBytes.mockImplementation(async () => { entered.resolve(); await gate.promise })
+    const commit = s.putBatch.getMockImplementation()!
+    s.putBatch.mockImplementation(async (entries) => { entered.resolve(); await gate.promise; await commit(entries) })
     const deletion = s.engine.deleteMessage(conversation, target, 'me')
     await entered.promise; s.engine['connection'] = 'online'; s.engine['request'] = vi.fn()
     await s.flush(); expect(s.engine['request']).not.toHaveBeenCalled()
@@ -247,15 +253,15 @@ describe('private Me deletion synchronization', () => {
     const directory = { devices: [{ device_id: a }, { device_id: b }] } as Awaited<ReturnType<typeof api.devices>>
     vi.spyOn(api, 'devices').mockImplementation(async () => { entered.resolve(); return held.promise })
     s.engine['state'].myDevices = [b]; s.engine['connection'] = 'online'
-    s.store.putJson.mockImplementation(async (key, value) => { if (key === 'app') throw new Error('crash after consumed ratchet'); s.values.set(key, structuredClone(value)) })
+    s.putBatch.mockRejectedValue(new Error('crash after consumed ratchet'))
     await s.apply(frame({ ...binding, scope: 'everyone', verified: true, localIntent: true }))
     await entered.promise
     expect(s.engine['pendingSyncs']).toHaveLength(1)
     expect(s.ledger()).toBeUndefined()
     await expect(s.engine['persist']()).rejects.toThrow('crash after consumed ratchet')
     expect(s.values.get(inbox)).toEqual([{ conversationId: selfId, device: a, bindings: [binding] }])
-    expect(s.store.putBytes).toHaveBeenCalled()
-    expect(s.store.putJson.mock.invocationCallOrder[s.store.putJson.mock.calls.findIndex(([key]) => key === inbox)]).toBeLessThan(s.store.putBytes.mock.invocationCallOrder[0])
+    expect(s.putBatch).toHaveBeenCalled()
+    expect(s.store.putJson.mock.invocationCallOrder[s.store.putJson.mock.calls.findIndex(([key]) => key === inbox)]).toBeLessThan(s.putBatch.mock.invocationCallOrder[0])
     s.engine['endingSession'] = true; s.engine['draftEpoch']++; held.resolve(directory); await s.engine['syncChain']
     const recovered = setup(b); for (const [key, value] of s.values) recovered.values.set(key, structuredClone(value))
     recovered.engine['state'].myDevices = [a, b]; recovered.engine['connection'] = 'online'
@@ -275,11 +281,11 @@ describe('private Me deletion synchronization', () => {
 
   it('journals decrypted incoming bindings before the consumed ratchet when ledger and app writes fail', async () => {
     const s = setup(b), inbox = 'me-deletion-inbox:' + me
-    s.store.putJson.mockImplementation(async (key, value) => { if (key === ledgerKey || key === 'app') throw new Error('quota'); s.values.set(key, structuredClone(value)) })
+    s.store.putJson.mockImplementation(async (key, value) => { if (key === ledgerKey) throw new Error('quota'); s.values.set(key, structuredClone(value)) }); s.putBatch.mockRejectedValue(new Error('quota'))
     await s.apply(frame(binding))
     await expect(s.engine['persist']()).rejects.toThrow('quota')
     expect(s.values.get(inbox)).toEqual([{ conversationId: selfId, device: a, bindings: [binding] }])
-    expect(s.store.putBytes).toHaveBeenCalled()
+    expect(s.putBatch).toHaveBeenCalled()
     const recovered = setup(b); for (const [key, value] of s.values) recovered.values.set(key, structuredClone(value))
     await recovered.engine['loadMeDeletionInbox']()
     recovered.engine['connection'] = 'online'; await recovered.engine['flushMeDeletionSync']()
@@ -293,7 +299,7 @@ describe('private Me deletion synchronization', () => {
     s.store.putJson.mockImplementation(async (key, value) => { if (key === ledgerKey || key === inbox) throw new Error('quota'); s.values.set(key, structuredClone(value)) })
     await s.apply(frame(binding))
     await expect(s.engine['persist']()).rejects.toThrow('quota')
-    expect(s.store.putBytes).not.toHaveBeenCalled()
+    expect(s.putBatch).not.toHaveBeenCalled()
     expect(s.engine['state'].pendingMeDeletions?.[0].bindings).toEqual([binding])
   })
 

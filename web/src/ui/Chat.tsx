@@ -2,6 +2,7 @@ import { Fragment, type FormEvent, useCallback, useEffect, useId, useLayoutEffec
 import { flushSync } from 'react-dom'
 import type { CoreClient } from '../core/client'
 import type { AppView, ChatMessage, ConversationSummary, GroupCallStatus, MemberInfo } from '../core/protocol'
+import { RestrictedChannelForm, visibleChildChannels } from './RestrictedChannels'
 import { SetupActions, SetupBanner, useSetup } from './Banners'
 import { Devices } from './Devices'
 import { ServerStorage } from './ServerStorage'
@@ -24,6 +25,7 @@ import { GroupCallController } from './groupCall'
 import { probeClip } from './media'
 import type { MediaInfo } from '../core/protocol'
 import { BlockedList, DeleteAccount, RenameUsername, ReportForm } from './Safety'
+import { GroupTopic } from './GroupTopic'
 import { VerificationBadge, Verify } from './Verify'
 import {
   type NotificationState,
@@ -299,9 +301,14 @@ export function Chat({
             calls={calls}
             groupCalls={groupCalls}
             id={conversation.id}
+            channel={conversation}
+            conversations={view.conversations}
+            onSelect={select}
             title={conversation.title}
             isGroup={conversation.isGroup}
             memberCount={conversation.memberCount}
+            topic={conversation.topic}
+            canEditTopic={conversation.canEditTopic}
             amAdmin={conversation.amAdmin}
             status={conversation.status}
             peer={conversation.peer}
@@ -904,17 +911,27 @@ function GroupInfo({
   messages,
   id,
   title,
+  topic,
+  canEditTopic,
   amAdmin,
   active,
   memberCount,
   adding,
   onAdd,
   onAdded,
+  channel,
+  conversations,
+  onSelect,
 }: {
+  channel: ConversationSummary
+  conversations: ConversationSummary[]
+  onSelect: (id: string) => void
   core: CoreClient
   messages: ChatMessage[]
   id: string
   title: string
+  topic?: string
+  canEditTopic: boolean
   amAdmin: boolean
   active: boolean
   memberCount: number
@@ -922,6 +939,7 @@ function GroupInfo({
   onAdd: () => void
   onAdded: () => void
 }) {
+  const [creatingChannel, setCreatingChannel] = useState(false)
   const [members, setMembers] = useState<MemberInfo[]>([])
   const [verifying, setVerifying] = useState<MemberInfo>()
   const [name, setName] = useState(title)
@@ -960,7 +978,7 @@ function GroupInfo({
         <Avatar name={title} id={id} size={5} />
         <div className="details-name">
           <strong>{title}</strong>
-          {amAdmin && (
+          {amAdmin && !channel.channelParentId && (
             <button
               type="button"
               className="icon"
@@ -978,7 +996,7 @@ function GroupInfo({
         </div>
         <span className="muted small">{memberCount} people</span>
       </div>
-      {amAdmin && editing && (
+      {amAdmin && !channel.channelParentId && editing && (
         <form
           className="rename"
           onSubmit={(e) => {
@@ -999,6 +1017,7 @@ function GroupInfo({
           </span>
         </form>
       )}
+      <GroupTopic key={id} core={core} id={id} topic={topic} canEdit={canEditTopic} />
       {verifying && (
         <div>
           <button ref={verifyBack} type="button" className="link" onClick={() => setVerifying(undefined)}>← Members</button>
@@ -1016,10 +1035,24 @@ function GroupInfo({
           />
         </div>
       )}
+      {!channel.channelParentId && (channel.canCreateRestrictedChannel || visibleChildChannels(conversations, id).length > 0) && <section aria-label="Private channels" hidden={!!verifying}>
+        <h3>Private channels</h3>
+        <ul className="members">
+          {visibleChildChannels(conversations, id).map((child) => <li key={child.id}>
+            <button type="button" className="link" onClick={() => onSelect(child.id)}>{child.title}</button>
+            {child.channelSendPaused && <span role="status">Membership synchronization pending</span>}
+          </li>)}
+        </ul>
+        {active && channel.canCreateRestrictedChannel && <button type="button" className="link" onClick={() => setCreatingChannel((creating) => !creating)}>{creatingChannel ? 'Cancel channel creation' : 'Create private channel'}</button>}
+        {active && channel.canCreateRestrictedChannel && creatingChannel && <RestrictedChannelForm core={core} parentId={id} onDone={(createdId) => { if (createdId) onSelect(createdId) }} />}
+      </section>}
+      {channel.channelParentId && <p className="small">Private channel{conversations.some((parent) => parent.id === channel.channelParentId) && <> in <button type="button" className="link" onClick={() => onSelect(channel.channelParentId!)}>{conversations.find((parent) => parent.id === channel.channelParentId)?.title}</button></>}</p>}
       <div className="details-members" hidden={!!verifying}>
         <h3>Members</h3>
-        {active && <button type="button" className="link add-member" onClick={onAdd}>＋ Add people</button>}
-        {adding && active && <AddPeople core={core} id={id} onDone={onAdded} />}
+        {active && (!channel.channelParentId || channel.canInviteToRestrictedChannel) && <button type="button" className="link add-member" onClick={onAdd}>{channel.channelParentId ? 'Invite to private channel' : '＋ Add people'}</button>}
+        {adding && active && (channel.channelParentId
+          ? channel.canInviteToRestrictedChannel && <RestrictedChannelForm core={core} parentId={channel.channelParentId} channelId={id} onDone={onAdded} />
+          : <AddPeople core={core} id={id} onDone={onAdded} />)}
         <ul className="members" aria-label="Members">
           {members.map((m) => (
             <li key={m.account}>
@@ -1042,7 +1075,7 @@ function GroupInfo({
                         setVerifying(m)
                       },
                     },
-                    ...(amAdmin ? [
+                    ...(amAdmin && !channel.channelParentId ? [
                       ...(!m.isAdmin ? [{
                         label: 'Make admin',
                         onSelect: () => { if (!busy) void run(() => core.makeAdmin(id, m.account)) },
@@ -1060,7 +1093,7 @@ function GroupInfo({
           ))}
         </ul>
       </div>
-      {active && (
+      {active && !channel.channelParentId && (
         <div className="details-danger">
           <h3>Danger zone</h3>
           <button
@@ -1195,9 +1228,14 @@ function Conversation({
   calls,
   groupCalls,
   id,
+  channel,
+  conversations,
+  onSelect,
   title,
   isGroup,
   memberCount,
+  topic,
+  canEditTopic,
   amAdmin,
   status,
   peer,
@@ -1216,9 +1254,14 @@ function Conversation({
   calls: CallController
   groupCalls: GroupCallController
   id: string
+  channel: ConversationSummary
+  conversations: ConversationSummary[]
+  onSelect: (id: string) => void
   title: string
   isGroup: boolean
   memberCount: number
+  topic?: string
+  canEditTopic?: boolean
   amAdmin: boolean
   status: ConversationSummary['status']
   peer?: string
@@ -1254,6 +1297,7 @@ function Conversation({
   const [compactHeader, setCompactHeader] = useState(false)
   const [reported, setReported] = useState(false)
   const active = status === 'active'
+  const sendPaused = channel.channelSendPaused === true
   const openPanel = (p: 'add' | 'info' | 'verify' | 'report', trigger?: HTMLElement) => {
     if (!panel) detailsTrigger.current = trigger ?? document.activeElement as HTMLElement | null
     setDetailsVersion((version) => version + 1)
@@ -1347,8 +1391,8 @@ function Conversation({
   const typingEnabled = typingIndicators
   const [composerFocused, setComposerFocused] = useState(false)
   const [typingError, setTypingError] = useState('')
-  const typingNames = useRemoteTyping(core, id, typingEnabled && active && !blocked && !request)
-  useSendTyping(core, id, draft, typingEnabled && active && !blocked && !request, composerFocused)
+  const typingNames = useRemoteTyping(core, id, typingEnabled && active && !sendPaused && !blocked && !request)
+  useSendTyping(core, id, draft, typingEnabled && active && !sendPaused && !blocked && !request, composerFocused)
   const [attaching, setAttaching] = useState(false)
   const [attachError, setAttachError] = useState<string>()
   const { viewport, content, onScroll, capture, scrollToBottom, newMessages, showScrollToBottom } = useMessageScroll(messages, panelOpen, {
@@ -1368,7 +1412,7 @@ function Conversation({
     // CallScreen and GroupCallScreen are siblings, outside the details modal.
     document.querySelector<HTMLElement>('.call-screen button, .call-prompt button')?.focus({ preventScroll: true })
   }, [callOpen, panel, setPanel])
-  const canCall = active && !request && (isGroup || (!!peer && !blocked))
+  const canCall = active && !channel.channelParentId && !request && (isGroup || (!!peer && !blocked))
   const startCall = (video: boolean) => {
     const controller = isGroup ? groupCalls : calls
     void controller.start(id, title, video).catch((e) => setAttachError(String(e.message ?? e)))
@@ -1396,7 +1440,7 @@ function Conversation({
     ] : []),
     ...(isGroup ? [{ label: 'Group info', onSelect: () => openPanel('info') }] : []),
     ...(peer ? [{ label: 'Verify safety number', onSelect: () => openPanel('verify') }] : []),
-    ...(active ? [{ label: 'Add people', onSelect: () => openPanel('add') }] : []),
+    ...(active && (!channel.channelParentId || channel.canInviteToRestrictedChannel) ? [{ label: channel.channelParentId ? 'Invite to private channel' : 'Add people', onSelect: () => openPanel('add') }] : []),
     ...(peer ? [{ label: 'Report', onSelect: () => openPanel('report') }] : []),
     ...(peer && !blocked ? [{ label: 'Block', onSelect: () => void core.block(peer), danger: true }] : []),
   ]
@@ -1500,7 +1544,7 @@ function Conversation({
   }, [recording])
 
   const send = async () => {
-    if (!draft.trim()) return
+    if (sendPaused || !draft.trim()) return
     setAttachError(undefined)
     composer.current?.focus({ preventScroll: true })
     scrollToBottom()
@@ -1510,7 +1554,7 @@ function Conversation({
   // The draft, if any, goes with the file as its caption.
   const attach = async (file: File | undefined, recorded?: MediaInfo) => {
     if (picker.current) picker.current.value = ''
-    if (!file) return
+    if (sendPaused || !file) return
     if (replyTo) {
       setAttachError('Send or cancel your text reply before attaching a file.')
       return
@@ -1787,6 +1831,7 @@ function Conversation({
               : 'You were removed from this group.'}
         </p>
       )}
+      {sendPaused && active && <p className="notice warning" role="status">Channel sending is paused while parent membership synchronizes. Your draft is kept.</p>}
       {attachError && (
         <p className="notice warning" role="alert">
           {attachError}
@@ -1798,7 +1843,7 @@ function Conversation({
           e.preventDefault()
           void send()
         }}
-        hidden={!active || blocked || request}
+        hidden={!active || blocked || request || sendPaused}
       >
         {draftState.issue && <div role="alert">
           <p>{draftState.issue.message}</p>
@@ -1834,7 +1879,7 @@ function Conversation({
             data-testid="attach-input"
             onChange={(e) => void attach(e.target.files?.[0])}
           />
-          <ShareLocation
+          {!channel.channelParentId && <ShareLocation
             core={core}
             conversationId={id}
             onError={setAttachError}
@@ -1862,7 +1907,7 @@ function Conversation({
                 />
               )
             }
-          />
+          />}
           <label className="visually-hidden" htmlFor="composer">
             Message
           </label>
@@ -1897,8 +1942,8 @@ function Conversation({
             </button>
           )}
           <Recorder
-            hidden={draft.length > 0}
-            disabled={attaching || !!replyTo}
+            hidden={draft.length > 0 || !!channel.channelParentId}
+            disabled={attaching || !!replyTo || !!channel.channelParentId}
             onRecordingChange={setRecording}
             onRecorded={(file, media) => void attach(file, media)}
             onError={setAttachError}
@@ -1954,12 +1999,17 @@ function Conversation({
             <GroupInfo
               key={detailsVersion}
               core={core}
+              channel={channel}
+              conversations={conversations}
+              onSelect={onSelect}
               messages={messages}
               id={id}
               title={title}
               amAdmin={amAdmin && active}
               active={active}
               memberCount={memberCount}
+              topic={topic}
+              canEditTopic={canEditTopic === true && active && !request && !blocked}
               adding={panel === 'add'}
               onAdd={() => setPanel('add')}
               onAdded={() => setPanel(undefined)}

@@ -22,13 +22,19 @@ Architecture Decision Records (ADRs) under [`adr/`](adr/).
 | — | [UI quality-of-life review](ui-quality-of-life-review.md) | Navigation focus, viewport-safe menus, history retry, disconnected feedback, and media fallbacks |
 | — | [Development caches](dev-caches.md) | Shared worktree caches, setup, and isolation overrides |
 | — | [Fail-fast CI](ci.md) | Validation stages, shared CI, generated type contract, and gated image publication |
+| — | [Pre-topic WASM compatibility](testing-topic-legacy-wasm.md) | Opt-in genuine old/current WASM ratchet and ignored-topic check |
 | — | [WebKit navigation diagnostic](testing-webkit-navigation.md) | Targeted signup-stall capture, baseline comparison, and artifact privacy |
 | — | [Server management](server-management.md) | Storage quotas, account limits, operator commands, and user usage view |
+| — | [SeaweedFS recovery validation](seaweedfs-recovery-validation.md) | Source review, migration duties, and outstanding recovery tests |
 | — | [Username migration deployment](username-migration-deployment.md) | Required maintenance window and old-server compatibility limits |
 | — | [Browser permissions](browser-permissions.md) | Browser-controlled grants, capture cleanup, and security headers |
 | — | [Bot social world](bot-social-world.md) | Offline 100-bot social graph, personalities, and scoped conversation fixtures |
 | — | [Synthetic and opt-in AI bots](ai-bots.md) | Local random-text traffic, optional free inference, room consent, and operator setup |
 | — | [ADR index](adr/README.md) | Decision log |
+
+Invite-only group features, presence, and username changes are proposed in
+[ADR-0051](adr/0051-invite-only-groups-and-presence.md). Its privacy and security
+questions must be resolved before stronger group moderation ships.
 
 Message reactions use [ADR-0047](adr/0047-encrypted-message-reactions.md): verified
 original bindings, encrypted durable updates, deterministic account ordering, and removal tombstones.

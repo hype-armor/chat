@@ -16,7 +16,7 @@ function setup() {
   engine['account'] = { accountId: me, deviceId: device, username: 'me', displayName: 'Me', token: '' }
   engine['core'] = { identity: () => identity, members: () => [identity, sender, makeIdentity(peer, '45'.repeat(16))], sendReaction, snapshot: () => new Uint8Array([2]) } as unknown as NonNullable<Engine['core']>
   engine['state'].conversations[id] = { id, peers: [peer], lastAt: 1 }
-  engine['store'] = { getJson: async (key: string) => structuredClone(values.get(key)), putJson: async (key: string, value: unknown) => { values.set(key, structuredClone(value)) }, putBytes: vi.fn(async () => {}) } as unknown as Engine['store']
+  engine['store'] = { getJson: async (key: string) => structuredClone(values.get(key)), putJson: async (key: string, value: unknown) => { values.set(key, structuredClone(value)) }, putBatch: vi.fn(async (entries: readonly (readonly [string, Uint8Array])[]) => { for (const [key, value] of entries) values.set(key, key === 'app' ? JSON.parse(new TextDecoder().decode(value)) : value.slice()) }) } as unknown as Engine['store']
   engine['flushOutbox'] = vi.fn(async () => {})
   const apply = (emoji: string, at: number, extra: Partial<ReactionUpdate> = {}, account = peer, dev = peerDevice) => {
     const r = { target, hash, author: peer, emoji, ...extra }
@@ -43,7 +43,7 @@ describe('worker reaction verification and projection', () => {
     expect(messages[0]).not.toHaveProperty('reactionEvent')
     expect(sendReaction.mock.calls).toHaveLength(3)
     expect(engine['state'].outbox).toHaveLength(3)
-    expect(engine['store'].putBytes).toHaveBeenCalledWith('core', new Uint8Array([2]))
+    expect(engine['store'].putBatch).toHaveBeenCalledWith([['core', new Uint8Array([2])], ['app', expect.any(Uint8Array)]])
     expect(engine['state'].conversations[id].lastAt).toBe(1)
     expect(engine['state'].conversations[id].unread).toBeUndefined()
     expect(engine['receipts'].size).toBe(0)

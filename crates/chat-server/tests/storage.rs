@@ -3,7 +3,7 @@ mod support;
 
 use std::sync::Arc;
 
-use axum::{body::Body, http::Request};
+use axum::{body::Body, http::Request, response::IntoResponse};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use chat_server::{blobs, router, storage};
 use object_store::{ObjectStore, ObjectStoreExt};
@@ -12,6 +12,90 @@ use sqlx::PgPool;
 use support::TestServer;
 use tower::ServiceExt;
 use uuid::Uuid;
+
+async fn assert_retained(pool: &PgPool, account: Uuid) {
+    let usage = storage::account_usage(pool, account).await.unwrap();
+    assert_eq!(usage.used_bytes, 0);
+    assert_eq!(usage.reserved_bytes, 4);
+    let error = storage::reserve(pool, account, &[("quota-probe".into(), 1)])
+        .await
+        .unwrap_err();
+    assert_eq!(error.into_response().status(), 429);
+}
+
+#[sqlx::test]
+async fn failed_and_cancelled_streams_retain_quota(pool: PgPool) {
+    use bytes::Bytes;
+    use futures_util::{StreamExt, stream};
+    use std::time::Duration;
+
+    let server = TestServer::start(pool.clone()).await;
+    for (index, path) in ["/v1/blobs", "/v1/backup"].into_iter().enumerate() {
+        for (case, name) in ["ann", "ben", "cam"].into_iter().enumerate() {
+            let (device, token) = server.register(&format!("{name}.0{}", index + 1)).await;
+            let owner = account(&pool, device).await;
+            if path == "/v1/backup" {
+                assert_eq!(
+                    server
+                        .put_json(
+                            "/v1/backup/key",
+                            &token,
+                            json!({"auth_hash": STANDARD.encode([1; 32])})
+                        )
+                        .await
+                        .0,
+                    204
+                );
+            }
+            sqlx::query(
+                "INSERT INTO account_storage_policy (account_id, limit_bytes) VALUES ($1, 4)",
+            )
+            .bind(owner)
+            .execute(&pool)
+            .await
+            .unwrap();
+            let (started, observed) = tokio::sync::oneshot::channel();
+            let body = match case {
+                0 => Body::from_stream(stream::iter(vec![
+                    Ok::<_, std::io::Error>(Bytes::from_static(b"ab")),
+                    Err(std::io::Error::other("injected body error")),
+                ])),
+                1 => Body::from_stream(stream::iter(vec![Ok::<_, std::io::Error>(
+                    Bytes::from_static(b"abcde"),
+                )])),
+                _ => Body::from_stream(
+                    stream::once(async move {
+                        started.send(()).unwrap();
+                        Ok::<_, std::io::Error>(Bytes::from_static(b"ab"))
+                    })
+                    .chain(stream::pending()),
+                ),
+            };
+            let request = Request::put(path)
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-length", 4)
+                .body(body)
+                .unwrap();
+            let upload = tokio::spawn(router(server.state.clone()).oneshot(request));
+            if case == 2 {
+                tokio::time::timeout(Duration::from_secs(10), observed)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_retained(&pool, owner).await;
+                upload.abort();
+                assert!(upload.await.unwrap_err().is_cancelled());
+            } else {
+                assert_eq!(
+                    upload.await.unwrap().unwrap().status(),
+                    400,
+                    "{path}, case {case}"
+                );
+            }
+            assert_retained(&pool, owner).await;
+        }
+    }
+}
 
 async fn account(pool: &PgPool, device: Uuid) -> Uuid {
     let (id,): (Uuid,) = sqlx::query_as("SELECT account_id FROM devices WHERE device_id = $1")
@@ -158,7 +242,7 @@ async fn usage_is_private_and_includes_uncommitted_bytes(pool: PgPool) {
         0
     );
     assert_eq!(server.get("/v1/storage", None).await.0, 401);
-    // A definite multipart abort and confirmed deletion release the charge.
+    // An abort does not fence remote parts, so the charge remains reserved.
     let request = Request::put("/v1/blobs")
         .header("authorization", format!("Bearer {token}"))
         .header("content-length", 5)
@@ -168,7 +252,7 @@ async fn usage_is_private_and_includes_uncommitted_bytes(pool: PgPool) {
     assert_eq!(response.status(), 400);
     let (_, usage) = server.get("/v1/storage", Some(&token)).await;
     assert_eq!(usage["used_bytes"], 3);
-    assert_eq!(usage["reserved_bytes"], 4);
+    assert_eq!(usage["reserved_bytes"], 9);
 }
 
 #[sqlx::test]
@@ -458,8 +542,8 @@ async fn backup_attempt_and_bandwidth_budgets_precede_reservation(pool: PgPool) 
     let usage = storage::account_usage(&pool, a).await.unwrap();
     assert_eq!(
         usage.used_bytes + usage.reserved_bytes,
-        0,
-        "confirmed abort releases its charge"
+        1,
+        "an abort does not prove remote storage was reclaimed"
     );
     assert_eq!(
         server.raw("PUT", "/v1/backup", &token, vec![1]).await.0,
@@ -488,7 +572,7 @@ async fn backup_attempt_and_bandwidth_budgets_precede_reservation(pool: PgPool) 
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(count, 0);
+    assert_eq!(count, 1, "rate-limited uploads add no new reservation");
 }
 
 #[sqlx::test]

@@ -34,6 +34,11 @@ function setup() {
     getFile: vi.fn(async (key: string) => files.get(key)), putFile: vi.fn(async (key: string, body: Blob | undefined) => { if (body) files.set(key, body); else files.delete(key) }),
     clear: vi.fn(async () => { values.clear(); files.clear() }), getKey: vi.fn(async () => undefined as CryptoKey | undefined),
   }
+  const putBatch = vi.fn(async (entries: readonly (readonly [string, Uint8Array])[]) => {
+    const staged = entries.map(([key, value]) => [key, key === 'app' ? JSON.parse(new TextDecoder().decode(value)) : value.slice()] as const)
+    for (const [key, value] of staged) values.set(key, value)
+  })
+  Object.assign(store, { putBatch })
   engine['account'] = account
   engine['core'] = core as unknown as NonNullable<Engine['core']>
   engine['store'] = store as unknown as Engine['store']
@@ -46,7 +51,7 @@ function setup() {
   } as Parameters<Engine['apply']>[0], '88'.repeat(16))
   const ledger = () => values.get(ledgerKey) as DeletionLedger
   const rows = () => engine.messages(conversation)
-  return { engine, events, values, files, account, core, store, flush, apply, ledger, rows }
+  return { engine, events, values, files, account, core, store, putBatch, flush, apply, ledger, rows }
 }
 beforeAll(() => initSync({ module: readFileSync(new URL('./pkg/chat_core_bg.wasm', import.meta.url)) }))
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(at + 100) })
@@ -199,10 +204,11 @@ describe('worker message deletion', () => {
     expect(s.engine['state'].outbox).toHaveLength(0)
   })
 
-  it('retains the advanced ratchet and rejects transport when app persistence fails after local acceptance', async () => {
-    const s = setup(); s.store.putJson.mockImplementation(async (key, value) => { if (key === 'app') throw new Error('quota'); s.values.set(key, structuredClone(value)) })
+  it('rejects transport when the atomic ratchet and app batch fails after local acceptance', async () => {
+    const s = setup(); s.putBatch.mockRejectedValue(new Error('quota'))
     await s.engine.deleteMessage(conversation, target, 'everyone')
-    expect(s.store.putBytes).toHaveBeenCalledWith('core', new Uint8Array([2]))
+    expect(s.putBatch).toHaveBeenCalledWith(expect.arrayContaining([['core', new Uint8Array([2])], ['app', expect.any(Uint8Array)]]))
+    expect(s.values.has('core')).toBe(false); expect(s.values.has('app')).toBe(false)
     expect(s.engine['state'].outbox).toHaveLength(0)
     expect((await s.rows())[0]).toMatchObject({ deleted: true, deletionStatus: { status: 'failed' } })
     expect(s.ledger().records[0].requestAt).toBe(at + 100)
@@ -446,7 +452,8 @@ describe('worker message deletion', () => {
 
   it('keeps deletion transport gated through a paused ratchet persistence write', async () => {
     const s = setup(), gate = deferred<void>(), entered = deferred<void>()
-    s.store.putBytes.mockImplementation(async () => { entered.resolve(); await gate.promise })
+    const commit = s.putBatch.getMockImplementation()!
+    s.putBatch.mockImplementation(async (entries) => { entered.resolve(); await gate.promise; await commit(entries) })
     s.engine['connection'] = 'online'; s.engine['request'] = vi.fn()
     const deletion = s.engine.deleteMessage(conversation, target, 'everyone')
     await entered.promise

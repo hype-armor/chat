@@ -29,7 +29,7 @@ function setup() {
   engine['account'] = { accountId: me, deviceId: myDevice, username: 'me', displayName: 'Me', token: 'synthetic-token' }
   engine['core'] = { identity: () => self, members, removeMembers, addMembers, snapshot: () => new Uint8Array([4]) } as unknown as NonNullable<Engine['core']>
   engine['connection'] = 'online'
-  engine['store'] = { getJson: async () => undefined, putJson: async () => {}, putBytes: async () => {}, clear: async () => {} } as unknown as Engine['store']
+  engine['store'] = { getJson: async () => undefined, putJson: async () => {}, putBytes: async () => {}, putBatch: async () => {}, clear: async () => {} } as unknown as Engine['store']
   engine['flushOutbox'] = vi.fn(async () => {})
   engine['sendCommit'] = vi.fn<Engine['sendCommit']>(async () => 'accepted')
   engine['scheduleSync'] = vi.fn()

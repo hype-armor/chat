@@ -172,6 +172,11 @@ export class CoreClient {
      */
     sendGroupInfo(conversation_id: Uint8Array, name: string, admins: Array<any>, sent_at_ms: number, message_id: Uint8Array): Uint8Array;
     /**
+     * Encodes an encrypted topic update. The worker must not enable sending until
+     * state persistence, recovery, and compatibility are implemented and reviewed.
+     */
+    sendGroupTopic(conversation_id: Uint8Array, text: string, clock: number, sent_at_ms: number, message_id: Uint8Array): Uint8Array;
+    /**
      * A live-location start or update (`point` true) or stop. Until-stopped
      * sessions renew their 8-hour lease. Returns the encoded `Envelope`.
      */
@@ -193,6 +198,11 @@ export class CoreClient {
      * `read`: read receipt, else delivered. Ids are 16-byte message ids.
      */
     sendReceipt(conversation_id: Uint8Array, read: boolean, message_ids: Array<any>, sent_at_ms: number, message_id: Uint8Array): Uint8Array;
+    /**
+     * Encrypts channel metadata only in the child MLS conversation. The worker
+     * must authorize the sender and verify parent/channel membership before use.
+     */
+    sendRestrictedChannelInfo(channel_id: Uint8Array, parent_id: Uint8Array, name: string, sent_at_ms: number, message_id: Uint8Array): Uint8Array;
     /**
      * Returns the encoded `Envelope`. The optional reply id must have 16 bytes.
      */
@@ -218,7 +228,8 @@ export class CoreClient {
 
 /**
  * A received envelope, flattened for JavaScript. `kind` is one of
- * `message`, `joined`, `epoch`, `proposal`, `ignored`.
+ * `message`, `joined`, `epoch`, `proposal`, `groupTopic`,
+ * `restrictedChannelInfo`, `ignored`.
  */
 export class EventView {
     private constructor();
@@ -261,6 +272,16 @@ export class EventView {
     groupAdmins: Uint8Array;
     get groupName(): string | undefined;
     set groupName(value: string | null | undefined);
+    get groupTopicClock(): number | undefined;
+    set groupTopicClock(value: number | null | undefined);
+    /**
+     * Topic content is authenticated by MLS, but is not yet accepted as state.
+     */
+    get groupTopicText(): string | undefined;
+    /**
+     * Topic content is authenticated by MLS, but is not yet accepted as state.
+     */
+    set groupTopicText(value: string | null | undefined);
     kind: string;
     get live(): LiveLocationView | undefined;
     set live(value: LiveLocationView | null | undefined);
@@ -296,6 +317,16 @@ export class EventView {
      * Original message id, only for valid user-visible reply references.
      */
     set replyTo(value: Uint8Array | null | undefined);
+    get restrictedChannelName(): string | undefined;
+    set restrictedChannelName(value: string | null | undefined);
+    /**
+     * Unaccepted encrypted association. The worker must independently authorize it.
+     */
+    get restrictedChannelParentId(): Uint8Array | undefined;
+    /**
+     * Unaccepted encrypted association. The worker must independently authorize it.
+     */
+    set restrictedChannelParentId(value: Uint8Array | null | undefined);
     sender: Uint8Array;
     sentAtMs: number;
     get text(): string | undefined;
@@ -553,6 +584,8 @@ export interface InitOutput {
     readonly __wbg_get_eventview_displayName: (a: number) => [number, number];
     readonly __wbg_get_eventview_groupAdmins: (a: number) => [number, number];
     readonly __wbg_get_eventview_groupName: (a: number) => [number, number];
+    readonly __wbg_get_eventview_groupTopicClock: (a: number) => [number, number];
+    readonly __wbg_get_eventview_groupTopicText: (a: number) => [number, number];
     readonly __wbg_get_eventview_kind: (a: number) => [number, number];
     readonly __wbg_get_eventview_live: (a: number) => number;
     readonly __wbg_get_eventview_locality: (a: number) => number;
@@ -563,6 +596,8 @@ export interface InitOutput {
     readonly __wbg_get_eventview_receiptKind: (a: number) => number;
     readonly __wbg_get_eventview_replyTo: (a: number) => [number, number];
     readonly __wbg_get_eventview_replyToHash: (a: number) => [number, number];
+    readonly __wbg_get_eventview_restrictedChannelName: (a: number) => [number, number];
+    readonly __wbg_get_eventview_restrictedChannelParentId: (a: number) => [number, number];
     readonly __wbg_get_eventview_sender: (a: number) => [number, number];
     readonly __wbg_get_eventview_sentAtMs: (a: number) => number;
     readonly __wbg_get_eventview_text: (a: number) => [number, number];
@@ -644,6 +679,8 @@ export interface InitOutput {
     readonly __wbg_set_eventview_displayName: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_groupAdmins: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_groupName: (a: number, b: number, c: number) => void;
+    readonly __wbg_set_eventview_groupTopicClock: (a: number, b: number, c: number) => void;
+    readonly __wbg_set_eventview_groupTopicText: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_kind: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_live: (a: number, b: number) => void;
     readonly __wbg_set_eventview_locality: (a: number, b: number) => void;
@@ -654,6 +691,8 @@ export interface InitOutput {
     readonly __wbg_set_eventview_receiptKind: (a: number, b: number) => void;
     readonly __wbg_set_eventview_replyTo: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_replyToHash: (a: number, b: number, c: number) => void;
+    readonly __wbg_set_eventview_restrictedChannelName: (a: number, b: number, c: number) => void;
+    readonly __wbg_set_eventview_restrictedChannelParentId: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_sender: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_sentAtMs: (a: number, b: number) => void;
     readonly __wbg_set_eventview_text: (a: number, b: number, c: number) => void;
@@ -729,12 +768,14 @@ export interface InitOutput {
     readonly coreclient_sendDeletion: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
     readonly coreclient_sendDeviceSync: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly coreclient_sendGroupInfo: (a: number, b: number, c: number, d: number, e: number, f: any, g: number, h: number, i: number) => [number, number, number, number];
+    readonly coreclient_sendGroupTopic: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number, number, number];
     readonly coreclient_sendLiveLocation: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => [number, number, number, number];
     readonly coreclient_sendLocality: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number, number, number];
     readonly coreclient_sendLocation: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number) => [number, number, number, number];
     readonly coreclient_sendProfile: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number, number, number];
     readonly coreclient_sendReaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => [number, number, number, number];
     readonly coreclient_sendReceipt: (a: number, b: number, c: number, d: number, e: any, f: number, g: number, h: number) => [number, number, number, number];
+    readonly coreclient_sendRestrictedChannelInfo: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
     readonly coreclient_sendText: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
     readonly coreclient_sendTyping: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly coreclient_snapshot: (a: number) => [number, number, number, number];

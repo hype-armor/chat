@@ -38,6 +38,8 @@ pub struct Config {
     /// `CHAT_REGISTRATION`: `invite` (default) or `open` (development and
     /// tests): whether sign-up needs an invite (ADR-0021).
     pub open_registration: bool,
+    /// `CHAT_EXPERIMENTAL_PRESENCE=true` enables the experimental transport.
+    pub experimental_presence: bool,
     /// Calls (ADR-0028): `CHAT_STUN_URLS` and `CHAT_TURN_URLS`, comma
     /// separated (`stun:host:3478`, `turn:host:3478?transport=udp`,
     /// `turns:host:5349`), and `CHAT_TURN_SECRET`, coturn's
@@ -75,6 +77,11 @@ impl Config {
                 Ok("open") => true,
                 Ok("invite") | Err(_) => false,
                 Ok(other) => anyhow::bail!("CHAT_REGISTRATION must be open or invite, not {other}"),
+            },
+            experimental_presence: match std::env::var("CHAT_EXPERIMENTAL_PRESENCE").as_deref() {
+                Ok("true") => true,
+                Ok("false") | Err(std::env::VarError::NotPresent) => false,
+                _ => anyhow::bail!("CHAT_EXPERIMENTAL_PRESENCE must be true or false"),
             },
             turn: crate::turn::TurnConfig {
                 stun_urls: list_var("CHAT_STUN_URLS"),
