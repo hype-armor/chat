@@ -267,6 +267,12 @@ class RehearsalTest(unittest.TestCase):
 
 
 class StaticTest(unittest.TestCase):
+    def test_single_log_file_disables_compression(self):
+        expected = {'driver': 'local', 'options': {'max-size': '1m', 'max-file': '1', 'compress': 'false'}}
+        for name, service in SPEC['services'].items():
+            with self.subTest(service=name):
+                self.assertEqual(service['logging'], expected)
+
     def test_rejects_mutable_or_wrong_version_images(self):
         for value in ['docker.io/library/postgres:18.6', 'docker.io/library/postgres:latest@sha256:' + 'b' * 64]:
             with self.assertRaisesRegex(fixture.Refusal, 'Wrong version or missing digest'):
@@ -317,6 +323,7 @@ class StaticTest(unittest.TestCase):
                 self.assertEqual(service['image'], SPEC['services'][name]['image'])
                 self.assertEqual(service['pull_policy'], 'never')
                 self.assertEqual(service['restart'], 'no')
+                self.assertEqual(service['logging'], SPEC['services'][name]['logging'])
                 self.assertFalse({'ports', 'build', 'privileged'} & service.keys())
             self.assertTrue(compiled['networks']['writers']['internal'])
             self.assertEqual(compiled['services']['maint-s3']['network_mode'], 'none')

@@ -73,9 +73,11 @@ def plan(project, refs):
     refs = image_refs(refs)
 
     def service(key, **extra):
+        # Docker enables compression by default, but rejects it for a single log file.
         return {'image': refs[key], 'pull_policy': 'never', 'restart': 'no',
                 'labels': {'chat.fence.fixture': project},
-                'logging': {'driver': 'local', 'options': {'max-size': '1m', 'max-file': '1'}}, **extra}
+                'logging': {'driver': 'local', 'options': {'max-size': '1m', 'max-file': '1', 'compress': 'false'}},
+                **extra}
 
     def writer_net(ip=None):
         return {'networks': {'writers': {'ipv4_address': ip} if ip else {}}}
