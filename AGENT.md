@@ -129,6 +129,9 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
 - Run browser tests against isolated test services, never a live deployment.
 - Restricted channels are opt-in via `VITE_EXPERIMENTAL_RESTRICTED_CHANNELS=true`.
   Do not send channel names or child conversation IDs in parent group traffic.
+  Wait for initial relay catch-up. Repair observed removals using exact MLS devices.
+  Preserve revocations across parent rejoin until the child removes those leaves.
+  Do not reuse queued ciphertext or automatically add a restored device during repair.
 - Notification service reset must remain a manual action for the current app worker.
   Unsubscribe before unregistering and reload only after success. Never clear encrypted site data to repair push.
 - Browser and OS permission grants belong to the browser. Do not cache fake grants or keep

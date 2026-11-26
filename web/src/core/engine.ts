@@ -6,7 +6,7 @@ import { markMeSyncDirty, meBindingKey, meDeletionBindings, meDeletionChunks, me
 import { DELETE_WINDOW_MS, addCandidate, emptyDeletions, equivalent, mergeDeletions, newRequestTime, promoteCandidates, safeTime, suppresses, timely, validBinding, type DeletionBinding, type DeletionLedger, type DeletionRecord, type DeletionOriginal } from './deletions'
 import { bindingMatches, validReaction, reactionStates, reactionChips, type ReactionUpdate } from './reactions'
 import { matchesRestrictedChannelRoster } from './restrictedChannel'
-import { acceptsRestrictedChannelInfo, authenticatedChannelRoster, restrictedInviteRoster } from './restrictedChannelRoster'
+import { acceptsRestrictedChannelInfo, authenticatedChannelRoster, restrictedInviteRoster, revokedRestrictedChannelDevices } from './restrictedChannelRoster'
 import { applyGroupTopic, MAX_GROUP_TOPIC_BYTES, nextGroupTopicClock, type GroupTopic } from './groupTopic'
 
 import init, {
@@ -202,6 +202,10 @@ type Conversation = {
   name?: string
   /** An authenticated binding to a parent group. Never include this in parent traffic. */
   channelParentId?: string
+  /** Devices observed leaving the parent, until removed from this child. Never sync this state. */
+  channelRevokedDevices?: string[]
+  /** A queued channel binding was canceled and must be issued under the repaired epoch. */
+  channelNeedsBinding?: boolean
   /** Authenticated child metadata awaiting the parent's local roster reconciliation. */
   channelInfoCandidate?: { parentId: string; name: string; sender: string }
   /** Admin account ids in priority order (groups only, ADR-0016). */
@@ -257,6 +261,8 @@ type Outgoing = {
   attempts?: number
   /** Private own-device deletion-sync batch, never exposed to the UI. */
   meDeletionBatch?: string
+  /** Identifies a Welcome or binding that must not be replayed after revocation. */
+  restrictedChannelSetup?: 'welcome' | 'binding'
   /** Device-local fences only; never encoded in the transport. */
   groupTopic?: { generation: number; members: string[]; candidate: GroupTopic }
 }
@@ -270,6 +276,8 @@ type PendingCommit = {
   conversationId: string
   /** Base64 SHA-256 of the commit ciphertext. */
   commitHash: string
+  /** The removal commit also goes to this device as a receipt, ordered before successors. */
+  repairReceipt?: { messageId: string; envelope: string; removed: string[] }
   /**
    * For commits that add people. Their welcome travels with the commit (the
    * server accepts both together, ADR-0017); this records who was invited.
@@ -491,6 +499,9 @@ export class Engine {
   private acceptingReactions = new Set<string>()
 
   private readonly pendingRestrictedChannels = new Set<string>()
+  private readonly settlingRestrictedChannels = new Set<string>()
+  private restrictedRepairRunning = false
+  private restrictedRepairAttempt?: { socket: WebSocket; messageId: string }
   private acceptingGroupTopics = new Set<string>()
   private topicMembershipMutations = new Set<string>()
   /** Topics must not replay before a replacement socket processes its backlog. */
@@ -842,6 +853,8 @@ export class Engine {
       this.acceptingGroupTopics.clear()
       this.topicSockets.clear()
       this.topicMembershipMutations.clear()
+      this.pendingRestrictedChannels.clear()
+      this.settlingRestrictedChannels.clear()
       this.deletionCache = undefined
       this.deletionPreviewsReady.clear()
       this.deletionKnown.clear()
@@ -1319,6 +1332,8 @@ export class Engine {
       this.acceptingGroupTopics.clear()
       this.topicSockets.clear()
       this.topicMembershipMutations.clear()
+      this.pendingRestrictedChannels.clear()
+      this.settlingRestrictedChannels.clear()
       this.deletionClock = new TypingClock()
       this.localityClock = new TypingClock()
       this.headerLocalities.clear()
@@ -1401,7 +1416,7 @@ export class Engine {
     } catch (e) {
       console.warn('device sync failed', e)
     }
-    if (current()) { await this.flushMeDeletionSync(); this.emitView() }
+    if (current()) { void this.repairRestrictedChannels(); await this.flushMeDeletionSync(); this.emitView() }
   }
 
   private directorySyncEligible(conv: Conversation): boolean {
@@ -2165,14 +2180,14 @@ export class Engine {
   }
 
   private restrictedChannelAdmin(id: string): Conversation | undefined {
-    if (!this.options.restrictedChannels || this.deliveryFenced || this.endingSession || this.connection !== 'online' || !this.account) return undefined
+    if (!this.options.restrictedChannels || this.deliveryFenced || this.endingSession || !this.hasAppliedSocketBacklog() || !this.account) return undefined
     const parent = this.restrictedParent(id)
     return parent?.admins?.includes(this.myAccount()) ? parent : undefined
   }
 
   private restrictedChannelReady(channel: Conversation, sending = true): boolean {
     if (!this.options.restrictedChannels || !channel.channelParentId || channel.status || channel.request || this.endingSession || this.deliveryFenced ||
-        (sending && (this.connection !== 'online' || this.pendingRestrictedChannels.has(channel.id))) ||
+        (sending && (!this.hasAppliedSocketBacklog() || this.pendingRestrictedChannels.has(channel.id) || this.settlingRestrictedChannels.has(channel.id))) ||
         this.state.pendingCommit?.conversationId === channel.id ||
         !this.restrictedParent(channel.channelParentId)) return false
     const parent = this.restrictedRoster(channel.channelParentId)
@@ -2180,7 +2195,120 @@ export class Engine {
     if (!parent || !roster || this.core!.hasPendingProposals(fromHex(channel.id))) return false
     const self = splitIdentity(this.core!.identity())
     return roster.some(({ account, device }) => account === self.account && device === toHex(self.device)) &&
+      revokedRestrictedChannelDevices(parent, roster, channel.channelRevokedDevices).length === 0 &&
       matchesRestrictedChannelRoster(parent, [...new Set(roster.map(({ account }) => account))], roster)
+  }
+
+  /** Drop ciphertext created before an observed revocation. Never retarget it. Under the lock. */
+  private async cancelRestrictedOutbox(channel: Conversation) {
+    const stale = this.state.outbox.filter((item) => item.conversationId === channel.id)
+    if (!stale.length) return
+    this.state.outbox = this.state.outbox.filter((item) => item.conversationId !== channel.id)
+    for (const item of stale) {
+      if (item.restrictedChannelSetup === 'binding') channel.channelNeedsBinding = true
+      if (item.restrictedChannelSetup === 'welcome') this.state.alerts.push({ id: item.messageId,
+        text: 'A membership change interrupted private channel setup. If the channel stays paused, create a new one.' })
+      await this.setStatus(channel.id, item.messageId, 'failed', 'Channel membership changed. Send again after it synchronizes.')
+    }
+  }
+
+  private retryRestrictedBinding(channel: Conversation): boolean {
+    if (!channel.channelNeedsBinding || !channel.name || !channel.channelParentId || !this.recipients(channel.id).length ||
+        !this.restrictedChannelReady(channel, false) || !this.restrictedParent(channel.channelParentId)?.admins?.includes(this.myAccount())) return false
+    this.queueRestrictedChannelInfo(channel)
+    return true
+  }
+
+  /** Keep observed revocations across parent rejoin and worker restart. Under the lock, before persist. */
+  private async rememberRestrictedRevocations(conversationId: string, removedHere = false) {
+    const parent = this.restrictedRoster(conversationId)
+    if (!parent && !removedHere) return
+    const self = toHex(this.core!.identity())
+    for (const channel of Object.values(this.state.conversations)) {
+      if (channel.channelParentId !== conversationId || channel.status) continue
+      const child = this.restrictedRoster(channel.id)
+      if (!child) continue
+      const revoked = parent
+        ? revokedRestrictedChannelDevices(parent, child, channel.channelRevokedDevices).map(({ device }) => device)
+        : [...new Set([...(channel.channelRevokedDevices ?? []), ...child.filter(({ account, device }) => account + device === self).map(({ device }) => device)])]
+      if (!revoked.length) continue
+      channel.channelRevokedDevices = revoked
+      await this.cancelRestrictedOutbox(channel)
+    }
+  }
+
+  /** A surviving channel device can subtract ineligible leaves without involving a parent-only admin. */
+  private async repairRestrictedChannels() {
+    if (!this.options.restrictedChannels || this.restrictedRepairRunning || !this.hasAppliedSocketBacklog()) return
+    const session = this.draftSession()
+    const socket = this.ws
+    this.restrictedRepairRunning = true
+    try {
+      await this.exclusive(async () => {
+        this.assertReactionSession(session)
+        if (socket && this.ws === socket) await this.resumeRestrictedRepair(socket)
+        for (const channel of Object.values(this.state.conversations)) {
+          if (this.ws !== socket || !this.hasAppliedSocketBacklog() || this.state.pendingCommit || this.deliveryFenced || this.endingSession) return
+          if (!channel.channelParentId || channel.status || channel.request || this.pendingRestrictedChannels.has(channel.id) ||
+              !this.restrictedParent(channel.channelParentId) || this.core!.hasPendingProposals(fromHex(channel.id))) continue
+          const parent = this.restrictedRoster(channel.channelParentId)
+          const child = this.restrictedRoster(channel.id)
+          if (!parent || !child) continue
+          const self = toHex(this.core!.identity())
+          const stale = revokedRestrictedChannelDevices(parent, child, channel.channelRevokedDevices)
+          const gone = new Set(stale.map(({ device }) => device))
+          const retained = child.filter(({ device }) => !gone.has(device))
+          if (!stale.length) {
+            if (this.retryRestrictedBinding(channel)) await this.persistRestrictedMembership()
+            continue
+          }
+          if (!retained.some(({ account, device }) => account + device === self)) continue
+          await this.cancelRestrictedOutbox(channel)
+          this.assertReactionSession(session)
+          if (this.ws !== socket || !this.hasAppliedSocketBacklog() || this.deliveryFenced) return
+          const messageId = randomId()
+          const staged = this.core!.removeMembers(fromHex(channel.id), stale.map(({ account, device }) => makeIdentity(account, device)), messageId)
+          const repairReceipt = { messageId: toHex(messageId), envelope: toBase64(staged.commit), removed: [...gone].sort() }
+          const result = await this.sendCommit({ conversationId: channel.id, commitHash: toBase64(staged.commitHash), repairReceipt }, staged.commit,
+            this.memberDevices(channel.id), undefined, retained.map(({ device }) => device))
+          if (result === 'lost') return
+        }
+      })
+    } catch (error) {
+      console.warn('repairing private channel membership failed', error)
+    } finally {
+      this.restrictedRepairRunning = false
+    }
+    void this.flushOutbox()
+  }
+
+  /** Retry only the same staged subtraction, once per socket, after backlog catch-up. */
+  private async resumeRestrictedRepair(socket: WebSocket) {
+    const pending = this.state.pendingCommit
+    const receipt = pending?.repairReceipt
+    if (!receipt || socket.readyState !== WebSocket.OPEN || !this.hasAppliedSocketBacklog() || this.deliveryFenced || this.endingSession ||
+        (this.restrictedRepairAttempt?.socket === socket && this.restrictedRepairAttempt.messageId === receipt.messageId)) return
+    const channel = this.conv(pending.conversationId)
+    if (!channel?.channelParentId || channel.status || channel.request || !this.restrictedParent(channel.channelParentId)) return
+    const parent = this.restrictedRoster(channel.channelParentId)
+    const child = this.restrictedRoster(channel.id)
+    if (!parent || !child || this.core!.hasPendingProposals(fromHex(channel.id))) return
+    const stale = revokedRestrictedChannelDevices(parent, child, channel.channelRevokedDevices).map(({ device }) => device).sort()
+    const retained = child.map(({ device }) => device).filter((device) => !stale.includes(device))
+    if (stale.join() !== receipt.removed.join() || !retained.includes(deviceHex(this.account!.deviceId))) return
+    this.restrictedRepairAttempt = { socket, messageId: receipt.messageId }
+    const reply = await this.request((id) => encodeSend(id, fromBase64(receipt.envelope), this.memberDevices(channel.id).map(fromHex), true, retained.map(fromHex)))
+    if (reply?.kind === 'send_result' && reply.accepted) await this.finishCommit(pending)
+    // A conflict can also mean the original won. Keep the pending commit until
+    // an ordered receipt, an authenticated competing commit, or its hash settles it.
+  }
+
+  private async persistRestrictedMembership() {
+    try { await this.persist() } catch (error) {
+      this.deliveryFenced = true
+      try { this.ws?.close() } catch { /* Preserve the write failure. */ }
+      throw error
+    }
   }
 
   private restrictedChannelSummary(conv: Conversation) {
@@ -2210,7 +2338,7 @@ export class Engine {
       this.pendingRestrictedChannels.add(id)
       this.state.conversations[id] = { id, channelParentId: parentId, name: channelName, peers: this.peersOf(id), admins: [this.myAccount()], lastAt: Date.now() }
       for (const invitee of invitees) if (invitee.username) this.state.usernames[invitee.account] = invitee.username
-      this.state.outbox.push({ messageId: toHex(welcomeId), conversationId: id, envelope: toBase64(started.welcome), recipients: invitees.flatMap((i) => i.devices), silent: true })
+      this.state.outbox.push({ messageId: toHex(welcomeId), conversationId: id, envelope: toBase64(started.welcome), recipients: invitees.flatMap((i) => i.devices), silent: true, restrictedChannelSetup: 'welcome' })
       this.queueRestrictedChannelInfo(this.state.conversations[id])
       try { await this.persist() } catch (error) {
         this.deliveryFenced = true
@@ -3117,8 +3245,7 @@ export class Engine {
   }
 
   private groupTopicTransportAllowed(conversationId: string): boolean {
-    return this.topicReady?.socket === this.ws && this.topicReady?.epoch === this.draftEpoch &&
-      this.topicReady?.accountId === this.account?.accountId && this.groupTopicContext(conversationId) && !this.topicMembershipMutations.has(conversationId) &&
+    return this.hasAppliedSocketBacklog() && this.groupTopicContext(conversationId) && !this.topicMembershipMutations.has(conversationId) &&
       this.state.pendingCommit?.conversationId !== conversationId && !(this.state.leaving[conversationId]?.length) &&
       !this.core!.hasPendingProposals(fromHex(conversationId))
   }
@@ -4715,10 +4842,16 @@ export class Engine {
           await this.resolvePendingCommit()
           if (!currentSocket()) return
           this.queueProfileRefreshes()
+          if (this.options.restrictedChannels) {
+            const parents = new Set(Object.values(this.state.conversations).flatMap((c) => c.channelParentId ? [c.channelParentId] : []))
+            for (const parent of parents) await this.rememberRestrictedRevocations(parent)
+          }
           await this.persist()
         })
-        if (this.options.groupTopics) void this.finishTopicCatchup(currentSocket, initialized).catch((error) => {
-          console.warn('topic catch-up failed', error)
+        if (this.options.groupTopics || this.options.restrictedChannels) void this.finishTopicCatchup(currentSocket, initialized).then(() => {
+          if (currentSocket()) void this.repairRestrictedChannels()
+        }).catch((error) => {
+          console.warn('experimental membership catch-up failed', error)
         })
         void initialized.then(() => {
           if (!currentSocket()) return
@@ -4752,6 +4885,11 @@ export class Engine {
     }
   }
 
+  private hasAppliedSocketBacklog(): boolean {
+    const ready = this.topicReady
+    return !!ready && this.connection === 'online' && ready.socket === this.ws && ready.epoch === this.draftEpoch && ready.accountId === this.account?.accountId
+  }
+
   /** The relay reads Ping only after its initial backlog flush succeeds.
    * Queue readiness behind all deliveries that arrived before its Pong.
    * This does not fence membership changes concurrent with online sends.
@@ -4762,7 +4900,8 @@ export class Engine {
     const [reply] = await Promise.all([this.request(encodePing), initialized])
     if (reply?.kind !== 'pong') return
     await this.exclusive(async () => {
-      if (!socket || this.ws !== socket || !currentSocket() || this.deliveryFenced || this.endingSession || this.state.pendingCommit ||
+      const pending = this.state.pendingCommit
+      if (!socket || this.ws !== socket || !currentSocket() || this.deliveryFenced || this.endingSession || (pending && !pending.repairReceipt) ||
           session.epoch !== this.draftEpoch || session.accountId !== this.account?.accountId) return
       this.topicReady = { socket, epoch: session.epoch, accountId: session.accountId }
       this.emitView()
@@ -4787,7 +4926,12 @@ export class Engine {
             this.state.early.push({ conversationId, messageId: id, envelope: toBase64(envelope) })
             if (this.state.early.length > MAX_EARLY) this.state.early.shift()
           } else {
-            await this.process(envelope, id, conversationId)
+            const pending = this.state.pendingCommit
+            if (pending?.repairReceipt?.messageId === id && pending.conversationId === conversationId && pending.repairReceipt.envelope === toBase64(envelope)) {
+              await this.finishCommit(pending)
+            } else {
+              await this.process(envelope, id, conversationId)
+            }
           }
           this.recent.add(id)
           for (const conv of Object.values(this.state.conversations)) {
@@ -4799,7 +4943,8 @@ export class Engine {
           this.pendingRestrictedChannels.clear()
           if (currentSocket()) this.emitView()
         }
-        if (this.options.groupTopics && currentSocket() && sameSession()) this.emitView()
+        if (sameSession()) this.settlingRestrictedChannels.clear()
+        if ((this.options.groupTopics || this.options.restrictedChannels) && currentSocket() && sameSession()) this.emitView()
         // Ack only after storage, and only on the socket that delivered the frame.
         if (!currentSocket() || this.deliveryFenced) return
         this.ws?.send(plain(encodeAck(0, messageId)))
@@ -4815,6 +4960,7 @@ export class Engine {
     }, true)
     if (!currentSocket() || this.deliveryFenced) return
     this.commitDepartures()
+    void this.repairRestrictedChannels()
     void this.flushOutbox()
   }
 
@@ -4954,6 +5100,17 @@ export class Engine {
       if (this.options.groupTopics || this.state.groupTopics || this.state.outbox.some((item) => item.groupTopic)) this.advanceTopicGeneration(conversationId)
       const conv = this.state.conversations[conversationId]
       if (!conv) return
+      if (conv.channelParentId) {
+        this.settlingRestrictedChannels.add(conversationId)
+        this.pruneRestrictedRevocations(conv)
+        await this.cancelRestrictedOutbox(conv)
+        // An authenticated competing commit settled this child epoch instead.
+        if (this.state.pendingCommit?.conversationId === conversationId && this.state.pendingCommit.repairReceipt) {
+          this.core!.discardCommit(event.conversationId)
+          this.state.pendingCommit = undefined
+        }
+        this.retryRestrictedBinding(conv)
+      } else if (this.options.restrictedChannels) await this.rememberRestrictedRevocations(conversationId, !this.core!.isActive(event.conversationId))
       const peers = this.peersOf(conversationId)
       if (!this.core!.isActive(event.conversationId)) {
         this.forgetLocality(conversationId)
@@ -5364,6 +5521,7 @@ export class Engine {
     membersAfter?: string[],
   ): Promise<CommitOutcome> {
     const id = fromHex(pending.conversationId)
+    const socket = this.ws
     const restricted = !!this.conv(pending.conversationId)?.channelParentId
     if (recipients.length === 0 && !welcome) {
       // Nobody else to tell (e.g. the last other member left).
@@ -5374,11 +5532,17 @@ export class Engine {
       // A relay can accept the commit and its welcome before this worker sees
       // the reply. Preserve the staged MLS commit and recovery hash first.
       this.state.pendingCommit = pending
-      try { await this.persist() } catch (error) {
-        this.deliveryFenced = true
-        try { this.ws?.close() } catch { /* Preserve the write failure. */ }
-        throw error
+      await this.persistRestrictedMembership()
+    }
+    if (pending.repairReceipt) {
+      if (!socket || socket !== this.ws || socket.readyState !== WebSocket.OPEN || this.endingSession) {
+        // No request was issued. Discard the staged state durably before retrying.
+        this.core!.discardCommit(id)
+        this.state.pendingCommit = undefined
+        await this.persistRestrictedMembership()
+        return 'lost'
       }
+      this.restrictedRepairAttempt = { socket, messageId: pending.repairReceipt.messageId }
     }
     const result = await this.request((requestId) =>
       welcome
@@ -5390,7 +5554,7 @@ export class Engine {
             welcome.recipients.map(fromHex),
             (membersAfter ?? []).map(fromHex),
           )
-        : encodeSend(requestId, commit, recipients.map(fromHex), false, (membersAfter ?? []).map(fromHex)),
+        : encodeSend(requestId, commit, recipients.map(fromHex), !!pending.repairReceipt, (membersAfter ?? []).map(fromHex)),
     )
     if (!result) {
       // The server may or may not have accepted it; ask once reconnected.
@@ -5417,11 +5581,21 @@ export class Engine {
     return result.epochConflict ? 'conflict' : 'rejected'
   }
 
+  private pruneRestrictedRevocations(channel: Conversation) {
+    if (!channel.channelRevokedDevices?.length) return
+    const child = this.restrictedRoster(channel.id)
+    if (!child) return
+    channel.channelRevokedDevices = channel.channelRevokedDevices.filter((device) => child.some((entry) => entry.device === device))
+    if (!channel.channelRevokedDevices.length) delete channel.channelRevokedDevices
+  }
+
   /** Applies an accepted commit; for additions, introduces us to newcomers. */
   private async finishCommit(p: PendingCommit) {
     const conv = this.conv(p.conversationId)
-    if (conv?.channelParentId) this.pendingRestrictedChannels.add(conv.id)
+    if (conv?.channelParentId) this.settlingRestrictedChannels.add(conv.id)
     this.core!.confirmCommit(fromHex(p.conversationId))
+    if (conv?.channelParentId) this.pruneRestrictedRevocations(conv)
+    else if (this.options.restrictedChannels) await this.rememberRestrictedRevocations(p.conversationId)
     if (this.options.groupTopics || this.state.groupTopics || this.state.outbox.some((item) => item.groupTopic)) this.advanceTopicGeneration(p.conversationId)
     this.refreshCallKeys(p.conversationId)
     if (conv && !conv.self) {
@@ -5445,6 +5619,8 @@ export class Engine {
       }
     }
     this.state.pendingCommit = undefined
+    if (p.repairReceipt) this.recent.add(p.repairReceipt.messageId)
+    if (conv?.channelParentId) this.retryRestrictedBinding(conv)
     try { await this.persist() } catch (error) {
       if (conv?.channelParentId) {
         this.deliveryFenced = true
@@ -5452,8 +5628,9 @@ export class Engine {
       }
       throw error
     }
-    if (conv?.channelParentId) this.pendingRestrictedChannels.delete(conv.id)
+    if (conv?.channelParentId) this.settlingRestrictedChannels.delete(conv.id)
     this.emitView()
+    if (!conv?.channelParentId) void this.repairRestrictedChannels()
   }
 
   /** Clears all other members' live points in a conversation we left. Under the lock (issue #114). */
@@ -5495,7 +5672,9 @@ export class Engine {
     }
     if (commitWasAccepted(p.commitHash, serverHash)) {
       await this.finishCommit(p)
-    } else {
+    } else if (!p.repairReceipt) {
+      // A newer hash cannot disprove an older repair. Its queued receipt or
+      // a competing authenticated commit must resolve that staged epoch.
       this.core!.discardCommit(fromHex(p.conversationId))
       this.state.pendingCommit = undefined
       await this.persist()
@@ -5540,7 +5719,8 @@ export class Engine {
   private queueRestrictedChannelInfo(channel: Conversation) {
     const messageId = randomId()
     const envelope = this.core!.sendRestrictedChannelInfo(fromHex(channel.id), fromHex(channel.channelParentId!), channel.name!, Date.now(), messageId)
-    this.state.outbox.push({ messageId: toHex(messageId), conversationId: channel.id, envelope: toBase64(envelope), recipients: this.recipients(channel.id), silent: true })
+    this.state.outbox.push({ messageId: toHex(messageId), conversationId: channel.id, envelope: toBase64(envelope), recipients: this.recipients(channel.id), silent: true, restrictedChannelSetup: 'binding' })
+    delete channel.channelNeedsBinding
   }
 
   private queueGroupInfo(conversationId: string, name: string, admins: string[]) {

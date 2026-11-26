@@ -26,6 +26,15 @@ export function restrictedInviteRoster(parent: readonly ChannelDevice[], account
   return selected
 }
 
+/** Removal never admits a new account. Retain an observed revocation until the child removes that device. */
+export function revokedRestrictedChannelDevices(
+  parent: readonly ChannelDevice[], channel: readonly ChannelDevice[], previouslyRevoked: readonly string[] = [],
+): ChannelDevice[] {
+  const eligible = new Set(parent.map(({ account, device }) => account + device))
+  const revoked = new Set(previouslyRevoked)
+  return channel.filter(({ account, device }) => revoked.has(device) || !eligible.has(account + device))
+}
+
 /** A binding is only valid for a current parent admin whose exact device is in both groups. */
 export function acceptsRestrictedChannelInfo(input: {
   parentConversation: string

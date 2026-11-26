@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { makeIdentity } from './ids'
-import { acceptsRestrictedChannelInfo, authenticatedChannelRoster, restrictedInviteRoster } from './restrictedChannelRoster'
+import { acceptsRestrictedChannelInfo, authenticatedChannelRoster, restrictedInviteRoster, revokedRestrictedChannelDevices } from './restrictedChannelRoster'
 
 const account = (n: string) => n.repeat(16)
 const member = (a: string, d: string) => ({ account: account(a), device: account(d) })
@@ -19,6 +19,19 @@ describe('restricted channel authenticated membership', () => {
     expect(restrictedInviteRoster(parent, [bob.account])).toEqual([bob, tablet])
     expect(restrictedInviteRoster(parent, [bob.account, account('ff')])).toBeUndefined()
     expect(restrictedInviteRoster(parent, [bob.account, bob.account])).toBeUndefined()
+  })
+
+  it('revokes all former account devices and does not let a parent rejoin cancel revocation', () => {
+    const child = [alice, bob, tablet]
+    const revoked = revokedRestrictedChannelDevices([alice, cathy], child)
+    expect(revoked).toEqual([bob, tablet])
+    expect(revokedRestrictedChannelDevices(parent, child, revoked.map(({ device }) => device))).toEqual(revoked)
+    expect(revokedRestrictedChannelDevices(parent, [alice], revoked.map(({ device }) => device))).toEqual([])
+  })
+
+  it('revokes a stale device without revoking other devices of that account', () => {
+    expect(revokedRestrictedChannelDevices([alice, tablet, cathy], [alice, bob, tablet])).toEqual([bob])
+    expect(revokedRestrictedChannelDevices([alice, { ...cathy, device: bob.device }], [alice, bob])).toEqual([bob])
   })
 
   it('checks the exact current parent admin device, recipient, and complete invited roster', () => {
