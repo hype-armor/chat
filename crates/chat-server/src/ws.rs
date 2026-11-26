@@ -232,6 +232,13 @@ impl Session {
                 Ok(batch) => batch,
                 Err(e) => {
                     tracing::error!(error = ?e, "reading queue failed");
+                    // Initial catch-up must fail closed. A later Pong must not
+                    // imply that an unread backlog reached the client.
+                    if !live {
+                        return Err(axum::Error::new(std::io::Error::other(
+                            "initial delivery queue read failed",
+                        )));
+                    }
                     return Ok(());
                 }
             };

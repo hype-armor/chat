@@ -144,3 +144,108 @@ test('group edit stays beside the name, with the count below; resize preserves f
   await expect(details).toBeHidden()
   await expect(page.getByRole('button', { name: 'Conversation menu', exact: true })).toBeFocused()
 })
+
+async function openTopicFixture(page: Page, options: Record<string, string> = {}) {
+  await page.route('**/v1/**', (route) => route.abort('blockedbyclient'))
+  await page.goto(`/e2e/interactions-fixture.html?${new URLSearchParams({ title, group: '1', ...options })}`)
+  if (options.request === '1') await page.getByText('Message requests (1)', { exact: true }).click()
+  await page.getByRole('button', { name: new RegExp(title) }).click()
+  if (options.group === '0') await page.getByRole('button', { name: 'Contact details', exact: true }).click()
+  else await conversationAction(page, 'Group info')
+  return conversationDetails(page)
+}
+
+async function setTopicAvailability(page: Page, available: boolean) {
+  await page.evaluate((value) => {
+    const fixture = (window as unknown as { interactionFixture: { setCanEditTopic(value: boolean): void } }).interactionFixture
+    fixture.setCanEditTopic(value)
+  }, available)
+}
+
+test('topic draft, queue feedback and focus survive a capability change', async ({ page }) => {
+  const details = await openTopicFixture(page, { topics: '1' })
+  const topic = details.getByRole('region', { name: 'Group topic', exact: true })
+  await topic.getByRole('button', { name: 'Edit topic' }).click()
+  const input = topic.getByRole('textbox', { name: 'Group topic' })
+  const queue = topic.getByRole('button', { name: 'Queue topic update' })
+  await input.fill('Keep this draft')
+  await setTopicAvailability(page, false)
+  await expect(input).toHaveValue('Keep this draft')
+  await expect(queue).toBeDisabled()
+  await expect(topic.getByRole('status')).toContainText('Your draft is still here')
+  await setTopicAvailability(page, true)
+  await queue.click()
+  await setTopicAvailability(page, false)
+  await expect(topic.getByRole('status')).toHaveText('Queueing topic update…')
+  await settleTopic(page, false)
+  await expect(topic.getByRole('alert')).toHaveText('Topic queue refused')
+  await expect(input).toHaveValue('Keep this draft')
+  await setTopicAvailability(page, true)
+  await queue.click()
+  await setTopicAvailability(page, false)
+  await settleTopic(page, true)
+  await expect(topic.getByRole('status')).toContainText('Topic update queued')
+  await expect(topic).toBeFocused()
+})
+
+async function settleTopic(page: Page, accept: boolean) {
+  await page.evaluate((accept) => {
+    const fixture = (window as unknown as { interactionFixture: { acceptTopic(): void; rejectTopic(): void } }).interactionFixture
+    if (accept) fixture.acceptTopic()
+    else fixture.rejectTopic()
+  }, accept)
+}
+
+for (const width of [390, 1280]) {
+  test(`topic editing queues escaped text and clear without false delivery status (${width}px)`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 })
+    const details = await openTopicFixture(page, { topics: '1' })
+    await expect(details.getByText('Topic not known on this device.', { exact: true })).toBeVisible()
+    const edit = details.getByRole('button', { name: 'Edit topic', exact: true })
+    await edit.focus()
+    await edit.press('Enter')
+    const input = details.getByRole('textbox', { name: 'Group topic', exact: true })
+    await expect(input).toBeFocused()
+    await input.fill('😀'.repeat(129))
+    const queue = details.getByRole('button', { name: 'Queue topic update', exact: true })
+    await expect(queue).toBeDisabled()
+    const text = '<img src=x onerror=alert(1)>\nPrivate topic'
+    await input.fill(text)
+    await queue.focus()
+    await queue.press('Enter')
+    await expect(details.getByText('Queueing topic update…', { exact: true })).toBeVisible()
+    await expect(details.getByText('Topic not known on this device.', { exact: true })).toBeVisible()
+    await expect(input).toHaveAttribute('readonly', '')
+    await expect(details.getByRole('button', { name: 'Cancel', exact: true })).toBeDisabled()
+    await settleTopic(page, false)
+    await expect(details.getByRole('alert')).toHaveText('Topic queue refused')
+    await expect(input).toHaveValue(text)
+    await expect(details.getByText(/Topic update queued\./)).toHaveCount(0)
+    await queue.click()
+    await settleTopic(page, true)
+    await expect(details.locator('.group-topic-text')).toHaveText(text)
+    await expect(details.locator('.group-topic-text img')).toHaveCount(0)
+    await expect(details.getByText(/Topic update queued\./)).toBeVisible()
+    await expect(edit).toBeFocused()
+    await edit.press('Enter')
+    await input.fill('')
+    await queue.click()
+    await settleTopic(page, true)
+    await expect(details.getByText('No topic.', { exact: true })).toBeVisible()
+    expect(await page.evaluate(() => (window as unknown as { interactionFixture: { topicCalls(): string[] } }).interactionFixture.topicCalls())).toEqual([text, text, ''])
+  })
+}
+
+for (const [label, options] of [
+  ['default', {}],
+  ['direct', { group: '0', topics: '1' }],
+  ['self', { group: '0', topics: '1', self: '1' }],
+  ['request', { request: '1', topics: '1' }],
+  ['left', { left: '1', topics: '1' }],
+] as const) {
+  test(`topic editor is absent for ${label} conversations`, async ({ page }) => {
+    const details = await openTopicFixture(page, options)
+    await expect(details.getByRole('button', { name: 'Edit topic', exact: true })).toHaveCount(0)
+    await expect(details.getByRole('textbox', { name: 'Group topic', exact: true })).toHaveCount(0)
+  })
+}
