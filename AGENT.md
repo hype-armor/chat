@@ -153,6 +153,8 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   Keep PostgreSQL TCP access in normal service. Preserve the fail-closed
   production entry point until the persistent startup gate and storage ownership
   are verified. See `docs/username-migration-deployment.md` for the release boundaries.
+- Run the opt-in Compose fence rehearsal only in a dedicated disposable guest.
+  Never point it at the shared Docker socket. Follow `docs/username-migration-compose-rehearsal.md`.
 - Compose startup and shutdown must load the persistent VAPID environment explicitly.
   The repair command must unset inherited VAPID variables before Compose reads the file.
   Run `python3 scripts/test-vapid-environment.py`; never test repair against live secrets or containers.
