@@ -3,9 +3,8 @@ import { StrictMode, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { CoreClient } from '../core/client'
 import { Attachment } from '../ui/Attachment'
+import { imageViewerPng as png } from './image-viewer-bytes'
 import '../styles.css'
-
-const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF9sAAAAASUVORK5CYII='), c => c.charCodeAt(0))
 // The same deterministic 2-frame GIF used by the upstream GIF regression fixture.
 const gif = Uint8Array.from(atob('R0lGODlhAQABAIAAAP8AAAAA/yH/C05FVFNDQVBFMi4wAwEAAAAh+QQAHgAAACwAAAAAAQABAAACAkQBACH5BAAeAAAALAAAAAABAAEAAAICTAEAOw=='), c => c.charCodeAt(0))
 const pending: { resolve: (blob: Blob) => void; reject: (error: Error) => void }[] = []
