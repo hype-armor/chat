@@ -42,7 +42,8 @@ function setup() {
     engine['account'] = { accountId: person.account, deviceId: person.device, username: who, displayName: who, token: '' }
     engine['core'] = core
     engine['connection'] = 'online'
-    engine['ws'] = { close: vi.fn(), send } as unknown as Engine['ws']
+    engine['ws'] = { close: vi.fn(), send, readyState: WebSocket.OPEN } as unknown as Engine['ws']
+    engine['topicReady'] = { socket: engine['ws']!, epoch: engine['draftEpoch'], accountId: person.account }
     engine['request'] = vi.fn(async () => undefined)
     engine['replenishKeyPackages'] = vi.fn(async () => undefined)
     engine['scheduleSync'] = vi.fn()
@@ -55,8 +56,8 @@ function setup() {
       id: parentId, name: 'Main group', admins: [people.alice.account], lastAt: 1,
       peers: [people.alice, people.bob, people.cathy].filter((peer) => peer !== person).map((peer) => peer.account),
     }
-    const deliver = (conversationId: string, envelope: Uint8Array, welcome = false) =>
-      engine['onDeliver']({ conversationId: fromHex(conversationId), envelope, messageId: randomId(), welcome } as Parameters<Engine['onDeliver']>[0])
+    const deliver = (conversationId: string, envelope: Uint8Array, welcome = false, messageId = randomId()) =>
+      engine['onDeliver']({ conversationId: fromHex(conversationId), envelope, messageId, welcome } as Parameters<Engine['onDeliver']>[0])
     const summary = (id: string) => { const view = engine.view(); return view.phase === 'ready' ? view.conversations.find((c) => c.id === id) : undefined }
     return { core, engine, values, deliver, summary, send }
   }
@@ -113,6 +114,183 @@ describe('restricted channels with real MLS', () => {
     await cathy.deliver(channelId, fromBase64(info.envelope))
     expect(cathy.summary(channelId)).toMatchObject({ title: 'Private channel', channelParentId: parentId })
     expect(() => cathy.core.receive(text)).toThrow()
+  })
+
+  it('keeps a revocation through parent rejoin, then repairs exact child membership with no admin in the child', async () => {
+    const { parentId, worker } = setup()
+    const alice = worker('alice'), bob = worker('bob'), cathy = worker('cathy')
+    const channelId = await alice.engine.createRestrictedChannel(parentId, 'Private channel', ['bob', 'cathy'])
+    const [welcome, info] = alice.engine['state'].outbox
+    for (const member of [bob, cathy]) {
+      await member.deliver(channelId, fromBase64(welcome.envelope), true)
+      await member.deliver(channelId, fromBase64(info.envelope))
+    }
+    // Model the creator leaving the child and a parent-only admin managing the parent.
+    const child = fromHex(channelId), parent = fromHex(parentId)
+    const leaveChild = bob.core.removeMembers(child, [identity(people.alice)], randomId())
+    bob.core.confirmCommit(child)
+    alice.core.receive(leaveChild.commit)
+    await cathy.deliver(channelId, leaveChild.commit)
+    await bob.engine.sendText(channelId, 'Queued before removal')
+    const queued = bob.engine['state'].outbox.find((item) => item.conversationId === channelId && !item.silent)!
+    expect(queued).toBeDefined()
+
+    bob.engine['topicReady'] = undefined
+    const removal = alice.core.removeMembers(parent, [identity(people.cathy)], randomId())
+    alice.core.confirmCommit(parent)
+    await bob.deliver(parentId, removal.commit)
+    await cathy.deliver(parentId, removal.commit)
+    const persisted = JSON.parse(new TextDecoder().decode(bob.values.get('app') as Uint8Array))
+    expect(persisted.conversations[channelId].channelRevokedDevices).toEqual([people.cathy.device])
+    expect(bob.engine['state'].outbox).not.toContain(queued)
+    const rejoin = alice.core.addMembers(parent, [identity(people.cathy)], cathy.core.keyPackages(1), randomId(), randomId())
+    alice.core.confirmCommit(parent)
+    await bob.deliver(parentId, rejoin.commit)
+    expect(bob.engine['restrictedRoster'](parentId)).toContainEqual(people.cathy)
+    expect(bob.summary(channelId)?.channelSendPaused).toBe(true)
+    expect(cathy.summary(channelId)?.channelSendPaused).toBe(true)
+
+    const sendCommit = bob.engine['sendCommit'].bind(bob.engine)
+    bob.engine['sendCommit'] = vi.fn(async (pending, commit, recipients, welcome, members) => {
+      expect(pending.conversationId).toBe(channelId)
+      expect(new Set(recipients)).toEqual(new Set([people.bob.device, people.cathy.device]))
+      expect(members).toEqual([people.bob.device])
+      expect(welcome).toBeUndefined()
+      await cathy.deliver(channelId, commit)
+      bob.engine['request'] = vi.fn(async () => ({ kind: 'send_result', accepted: true }) as Awaited<ReturnType<Engine['request']>>)
+      return sendCommit(pending, commit, recipients, welcome, members)
+    })
+    await bob.engine['repairRestrictedChannels']()
+    expect(bob.engine['sendCommit']).not.toHaveBeenCalled()
+    bob.engine['topicReady'] = { socket: bob.engine['ws']!, epoch: bob.engine['draftEpoch'], accountId: people.bob.account }
+    await bob.engine['repairRestrictedChannels']()
+    expect(bob.engine['sendCommit']).toHaveBeenCalledTimes(1)
+    expect(bob.summary(channelId)?.channelSendPaused).toBe(false)
+    expect(cathy.summary(channelId)).toMatchObject({ status: 'removed', channelSendPaused: true })
+    expect(() => cathy.core.receive(bob.core.sendText(child, 'After repair', Date.now(), randomId()))).toThrow()
+  })
+
+  it('repairs a revoked linked device without removing the retained device of the same account', async () => {
+    const { parentId, claim, worker } = setup()
+    const alice = worker('alice'), bob = worker('bob'), cathy = worker('cathy')
+    const tabletId = hex('bc')
+    const tabletIdentity = makeIdentity(people.bob.account, tabletId)
+    const tablet = new PendingClient().intoClient(tabletIdentity)
+    const parent = fromHex(parentId)
+    const link = alice.core.addMembers(parent, [tabletIdentity], tablet.keyPackages(1), randomId(), randomId())
+    alice.core.confirmCommit(parent)
+    await bob.deliver(parentId, link.commit)
+    tablet.receive(link.welcome)
+    claim.mockImplementation(async (_, devices) => ({ key_packages: Object.fromEntries(devices.map((device) => [
+      device, toBase64((device === uuid(tabletId) ? tablet : bob.core).keyPackages(1)[0]),
+    ])) }))
+    const channelId = await alice.engine.createRestrictedChannel(parentId, 'Private channel', ['bob'])
+    const child = fromHex(channelId)
+    const [welcome, info] = alice.engine['state'].outbox
+    expect(new Set(welcome.recipients)).toEqual(new Set([people.bob.device, tabletId]))
+    tablet.receive(fromBase64(welcome.envelope))
+    await bob.deliver(channelId, fromBase64(welcome.envelope), true)
+    await bob.deliver(channelId, fromBase64(info.envelope))
+
+    alice.engine['topicReady'] = undefined
+    const revoke = bob.core.removeMembers(parent, [tabletIdentity], randomId())
+    bob.core.confirmCommit(parent)
+    await alice.deliver(parentId, revoke.commit)
+    expect(alice.summary(channelId)?.channelSendPaused).toBe(true)
+    const sendCommit = alice.engine['sendCommit'].bind(alice.engine)
+    alice.engine['sendCommit'] = vi.fn(async (pending, commit, recipients, welcome, members) => {
+      expect(new Set(recipients)).toEqual(new Set([people.alice.device, people.bob.device, tabletId]))
+      expect(new Set(members)).toEqual(new Set([people.alice.device, people.bob.device]))
+      expect(welcome).toBeUndefined()
+      tablet.receive(commit)
+      await bob.deliver(channelId, commit)
+      // The relay accepted it, but this request lost its reply.
+      alice.engine['request'] = vi.fn(async () => undefined)
+      return sendCommit(pending, commit, recipients, welcome, members)
+    })
+    alice.engine['topicReady'] = { socket: alice.engine['ws']!, epoch: alice.engine['draftEpoch'], accountId: people.alice.account }
+    await alice.engine['repairRestrictedChannels']()
+    expect(alice.engine['sendCommit']).toHaveBeenCalledTimes(1)
+    const receipt = alice.engine['state'].pendingCommit?.repairReceipt
+    expect(receipt).toBeDefined()
+    const successor = bob.core.addMembers(child, [identity(people.cathy)], cathy.core.keyPackages(1), randomId(), randomId())
+    bob.core.confirmCommit(child)
+    vi.spyOn(api, 'groupEpoch').mockResolvedValue({ last_commit_hash: toBase64(successor.commitHash), epoch: 2 })
+    await alice.engine['resolvePendingCommit']()
+    expect(alice.engine['state'].pendingCommit?.repairReceipt).toEqual(receipt)
+    alice.engine['topicReady'] = undefined
+    alice.engine['request'] = vi.fn(async () => ({ kind: 'pong' }) as Awaited<ReturnType<Engine['request']>>)
+    await alice.engine['finishTopicCatchup'](() => true)
+    expect(alice.engine['hasAppliedSocketBacklog']()).toBe(true)
+    expect(alice.summary(channelId)?.channelSendPaused).toBe(true)
+    alice.engine['request'] = vi.fn(async () => undefined)
+    await alice.deliver(channelId, fromBase64(receipt!.envelope), false, fromHex(receipt!.messageId))
+    await alice.deliver(channelId, successor.commit)
+    expect(alice.engine['state'].pendingCommit).toBeUndefined()
+    expect(alice.summary(channelId)?.channelSendPaused).toBe(false)
+    expect(alice.engine['state'].outbox).not.toContain(welcome)
+    expect(alice.engine['state'].outbox).not.toContain(info)
+    const renewed = alice.engine['state'].outbox.find((item) => item.restrictedChannelSetup === 'binding')
+    expect(new Set(renewed?.recipients)).toEqual(new Set([people.bob.device, people.cathy.device]))
+    const next = alice.core.sendText(child, 'Only current devices', Date.now(), randomId())
+    expect(bob.core.receive(next).text).toBe('Only current devices')
+    expect(() => tablet.receive(next)).toThrow()
+  })
+
+  it('settles a lost repair request when a competing authenticated child commit won the epoch', async () => {
+    const { parentId, worker } = setup()
+    const alice = worker('alice'), bob = worker('bob')
+    const channelId = await alice.engine.createRestrictedChannel(parentId, 'Private channel', ['bob', 'cathy'])
+    const [welcome, info] = alice.engine['state'].outbox
+    await bob.deliver(channelId, fromBase64(welcome.envelope), true)
+    await bob.deliver(channelId, fromBase64(info.envelope))
+    alice.engine['topicReady'] = undefined
+    bob.engine['topicReady'] = undefined // Drive Bob's competing commit explicitly.
+    const parent = fromHex(parentId), child = fromHex(channelId)
+    const removed = bob.core.removeMembers(parent, [identity(people.cathy)], randomId())
+    bob.core.confirmCommit(parent)
+    await alice.deliver(parentId, removed.commit)
+    alice.engine['topicReady'] = { socket: alice.engine['ws']!, epoch: alice.engine['draftEpoch'], accountId: people.alice.account }
+    const original = vi.fn<Engine['request']>(async () => undefined)
+    alice.engine['request'] = original
+    await alice.engine['repairRestrictedChannels']()
+    const pending = alice.engine['state'].pendingCommit
+    expect(pending?.repairReceipt).toBeDefined()
+    const socket = { close: vi.fn(), send: vi.fn(), readyState: WebSocket.OPEN } as unknown as Engine['ws']
+    alice.engine['ws'] = socket
+    alice.engine['topicReady'] = { socket: socket!, epoch: alice.engine['draftEpoch'], accountId: people.alice.account }
+    const retry = vi.fn<Engine['request']>(async () => ({ kind: 'send_result', epochConflict: true }) as Awaited<ReturnType<Engine['request']>>)
+    alice.engine['request'] = retry
+    await alice.engine['repairRestrictedChannels']()
+    await alice.engine['repairRestrictedChannels']()
+    expect(retry).toHaveBeenCalledOnce()
+    expect(retry.mock.calls[0][0](7)).toEqual(original.mock.calls[0][0](7))
+    expect(alice.engine['state'].pendingCommit).toBe(pending)
+    const competing = bob.core.removeMembers(child, [identity(people.cathy)], randomId())
+    bob.core.confirmCommit(child)
+    await alice.deliver(channelId, competing.commit)
+    expect(alice.engine['state'].pendingCommit).toBeUndefined()
+    expect(alice.summary(channelId)?.channelSendPaused).toBe(false)
+    expect(bob.core.receive(alice.core.sendText(child, 'After conflict', Date.now(), randomId())).text).toBe('After conflict')
+  })
+
+  it('discards a known-unsent repair if the socket closes during staging', async () => {
+    const { parentId, worker } = setup()
+    const alice = worker('alice'), cathy = worker('cathy')
+    const channelId = await alice.engine.createRestrictedChannel(parentId, 'Private channel', ['bob'])
+    alice.engine['topicReady'] = undefined
+    const removeBob = cathy.core.removeMembers(fromHex(parentId), [identity(people.bob)], randomId())
+    await alice.deliver(parentId, removeBob.commit)
+    const socket = alice.engine['ws']!
+    const request = vi.fn<Engine['request']>(async () => undefined)
+    alice.engine['request'] = request
+    vi.mocked(alice.engine['store'].putBatch).mockImplementationOnce(async () => { Object.assign(socket, { readyState: WebSocket.CLOSED }) })
+    alice.engine['topicReady'] = { socket, epoch: alice.engine['draftEpoch'], accountId: people.alice.account }
+    await alice.engine['repairRestrictedChannels']()
+    expect(request).not.toHaveBeenCalled()
+    expect(alice.engine['state'].pendingCommit).toBeUndefined()
+    expect(alice.summary(channelId)?.channelSendPaused).toBe(true)
+    expect(JSON.parse(new TextDecoder().decode(alice.values.get('app') as Uint8Array)).pendingCommit).toBeUndefined()
   })
 
   it('persists an authenticated notice while the parent is unstable and checks it after a commit', async () => {
@@ -173,6 +351,7 @@ describe('restricted channels with real MLS', () => {
     await bob.deliver(channelId, fromBase64(info.envelope))
     const remove = cathy.core.removeMembers(fromHex(parentId), [fromHex(people.bob.account)], randomId())
     cathy.core.confirmCommit(fromHex(parentId))
+    vi.spyOn(alice.engine as unknown as { repairRestrictedChannels(): Promise<void> }, 'repairRestrictedChannels').mockResolvedValue(undefined)
     await alice.deliver(parentId, remove.commit)
     expect(alice.summary(channelId)?.channelSendPaused).toBe(true)
     await expect(alice.engine.sendText(channelId, 'Must not send')).rejects.toThrow('paused')

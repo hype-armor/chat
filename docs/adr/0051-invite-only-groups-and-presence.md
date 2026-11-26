@@ -73,10 +73,25 @@ The first restricted-channel slice is an opt-in web build
 create a private child, select current parent members, and later invite more
 current parent members. Channel name and parent association travel only in
 child MLS ciphertext. No child listing is published to the parent. Honest
-clients pause channel traffic if the locally authenticated child roster does
-not match the eligible parent devices. The first slice does not remove stale
-child devices automatically, provide restored-device admission, or guarantee
-that a local roster check sees a commit not yet delivered by the relay.
+clients wait for initial relay catch-up before sending. They pause channel
+traffic when the locally authenticated child roster does not match the eligible
+parent devices. A surviving device in both groups can remove ineligible child
+leaves. This repair never adds devices or tells parent-only members about the
+child. It discards queued child ciphertext after an observed revocation. The
+worker records revoked leaves until the child commit removes them, even if the
+parent admits them again first. The relay queues a copy of the encrypted
+repair commit to its sender in the commit transaction. The sender can use
+that receipt if it lost the reply and the relay has since accepted another
+commit. An uncertain request can resend the exact commit once per fresh socket,
+only if the authenticated removal plan still matches. If the worker cannot
+confirm the outcome, that channel stays paused. Queue eviction can prevent
+recovery. A revoked, unsent Welcome is not retried; the creator may
+need to recreate the channel.
+
+Automatic admission of linked or restored devices is not implemented. Missing
+eligible devices or no surviving eligible child device can leave the channel
+paused. The local check cannot see a commit the relay has not delivered. It
+does not enforce an atomic cutoff across the parent and child.
 An invited device can briefly see an unnamed conversation before its encrypted
 channel metadata arrives. A non-invited device does not get the child Welcome.
 
@@ -88,7 +103,9 @@ VITE_EXPERIMENTAL_RESTRICTED_CHANNELS=true pnpm exec vite build --outDir dist-re
 E2E_SERVER=1 E2E_RESTRICTED_CHANNELS=1 pnpm exec playwright test restricted-channel.spec.ts
 ```
 
-The fixture-only browser suite does not verify relay delivery.
+The real-relay tests check invite and history boundaries, and access after an
+offline member is removed from the parent and later rejoins it. The fixture-only
+browser suite does not verify relay delivery.
 
 A topic is authenticated, encrypted group state. Define bounded length,
 authorized authors, ordering, conflict handling, and an authenticated current
