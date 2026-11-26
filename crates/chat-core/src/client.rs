@@ -531,6 +531,8 @@ mod tests {
             body: Some(content::Body::Typing(Typing {
                 active,
                 expires_at_ms: 6000,
+                activity: None,
+                tool: None,
             })),
         };
         for (index, content) in [reply, typing(true), typing(false), text("ordinary")]
@@ -847,6 +849,8 @@ mod tests {
             body: Some(content::Body::Typing(chat_proto::v1::Typing {
                 active: true,
                 expires_at_ms: 6000,
+                activity: None,
+                tool: None,
             })),
         };
         assert!(
@@ -855,6 +859,57 @@ mod tests {
                 .text
                 .is_none()
         );
+    }
+
+    #[test]
+    fn typing_detail_is_compatible_with_old_readers_and_senders() {
+        #[derive(Clone, PartialEq, prost::Message)]
+        struct OldTyping {
+            #[prost(bool, tag = "1")]
+            active: bool,
+            #[prost(uint64, tag = "2")]
+            expires_at_ms: u64,
+        }
+        let new = chat_proto::v1::Typing {
+            active: true,
+            expires_at_ms: 9000,
+            activity: Some("using".into()),
+            tool: Some("read_file".into()),
+        };
+        let old = OldTyping::decode(new.encode_to_vec().as_slice()).unwrap();
+        assert!(old.active);
+        assert_eq!(old.expires_at_ms, 9000);
+        let decoded = chat_proto::v1::Typing::decode(old.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(decoded.activity, None);
+        assert_eq!(decoded.tool, None);
+        assert!(decoded.active);
+        assert_eq!(decoded.expires_at_ms, 9000);
+    }
+
+    #[test]
+    fn typing_schema_invalid_details_are_rejected_by_new_reader() {
+        #[derive(Clone, PartialEq, prost::Message)]
+        struct OldTyping {
+            #[prost(bool, tag = "1")]
+            active: bool,
+            #[prost(uint64, tag = "2")]
+            expires_at_ms: u64,
+        }
+        // The old schema skips unknown fields. The new schema rejects invalid
+        // UTF-8 and the wrong wire type before semantic fallback can run.
+        for detail in [
+            &[0x1a, 0x01, 0xff][..], // activity: invalid UTF-8
+            &[0x22, 0x01, 0xff][..], // tool: invalid UTF-8
+            &[0x18, 0x01][..],       // activity: varint, not string
+            &[0x20, 0x01][..],       // tool: varint, not string
+        ] {
+            let mut wire = vec![0x08, 0x01, 0x10, 0x64];
+            wire.extend_from_slice(detail);
+            let old = OldTyping::decode(wire.as_slice()).unwrap();
+            assert!(old.active);
+            assert_eq!(old.expires_at_ms, 100);
+            assert!(chat_proto::v1::Typing::decode(wire.as_slice()).is_err());
+        }
     }
 
     #[test]

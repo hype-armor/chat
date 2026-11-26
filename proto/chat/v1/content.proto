@@ -36,6 +36,10 @@ message Content {
 message Typing {
   bool active = 1;
   uint64 expires_at_ms = 2;
+  // Optional coarse activity. Unknown or semantically invalid decoded details
+  // fall back to generic typing. Malformed protobuf is rejected during decode.
+  optional string activity = 3;
+  optional string tool = 4;
 }
 
 // Encrypted durable update. Empty emoji removes the account reaction.

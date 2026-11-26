@@ -3000,9 +3000,9 @@ export class Engine {
       return []
     }
     const owners = this.deviceAccounts(conversationId)
-    const accounts = this.typingLeases.get(conversationId)?.accounts(this.typingNow(), (device, account) =>
+    const accounts = this.typingLeases.get(conversationId)?.details(this.typingNow(), (device, account) =>
       owners.get(device) === account && account !== this.myAccount() && !this.state.blocked.includes(account)) ?? []
-    return accounts.map((account) => ({ account, name: this.nameOf(account) }))
+    return accounts.map(({ account, detail }) => ({ account, name: this.nameOf(account), ...detail }))
   }
 
   private stopTypingForMessage(conversationId: string, from: string, device: string, sentAt: number) {
@@ -4643,7 +4643,7 @@ export class Engine {
       if (event.typingActive !== undefined) {
         if (!mine && conv && !conv.status && !conv.self && !conv.request && !this.state.blocked.includes(from) && this.state.typingIndicators !== false && this.connection === 'online') {
           const leases = this.typingLeases.get(conversationId) ?? new TypingLeases()
-          leases.update(toHex(splitIdentity(event.sender).device), from, event.typingActive, event.sentAtMs, event.typingExpiresAtMs ?? NaN, this.typingNow())
+          leases.update(toHex(splitIdentity(event.sender).device), from, event.typingActive, event.sentAtMs, event.typingExpiresAtMs ?? NaN, this.typingNow(), event.typingActivity, event.typingTool)
           this.typingLeases.set(conversationId, leases)
           this.publishTyping(conversationId)
           this.scheduleTypingSweep()

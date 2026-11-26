@@ -192,6 +192,31 @@ def validate_publication(images, security):
     assert deny["with"]["arguments"] == "--all-features"
 
 
+def validate_activity(workflow):
+    assert workflow["on"] == {"push": {"branches": ["feat/issue-2-activity"]}}
+    assert workflow["permissions"] == {"contents": "read"}
+    validate_required_execution(workflow)
+    jobs = workflow["jobs"]
+    assert set(jobs) == {"checks", "release-web", "webkit"}
+    assert not dependencies(jobs["checks"])
+    assert dependencies(jobs["release-web"]) == {"checks"}
+    assert dependencies(jobs["webkit"]) == {"release-web"}
+    assert not any(marker in commands(jobs["checks"]) for marker in EXPENSIVE)
+    for job in jobs.values():
+        assert not job.get("services")
+        assert job.get("permissions", {"contents": "read"}) == {"contents": "read"}
+        assert not any(marker in commands(job) for marker in (
+            "docker push", "npm publish", "gh release", "deploy-pages", "update.sh",
+        ))
+    build = commands(jobs["release-web"])
+    assert build.index("scripts/build-wasm.sh") < build.index("diff -u")
+    assert build.index("diff -u") < build.index("pnpm typecheck")
+    assert build.index("pnpm test") < build.index("pnpm build")
+    assert "playwright install --with-deps webkit" in commands(jobs["webkit"])
+    assert "activity-fixture.spec.ts" in commands(jobs["webkit"])
+    assert "--project=webkit" in commands(jobs["webkit"])
+
+
 class GraphTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -333,6 +358,33 @@ class GraphTests(unittest.TestCase):
         for trigger in ("schedule", "workflow_dispatch", "workflow_call"):
             with self.subTest(trigger=trigger):
                 self.rejected_publication(lambda _, security: security["on"].pop(trigger))
+
+
+class ActivityGraphTests(unittest.TestCase):
+    def setUp(self):
+        self.workflow = yaml.load(
+            (WORKFLOWS / "activity-validation.yml").read_text(), Loader=yaml.BaseLoader,
+        )
+
+    def test_activity_validation_is_gated_and_read_only(self):
+        validate_activity(self.workflow)
+
+    def test_activity_validation_cannot_bypass_checks(self):
+        for name in ("release-web", "webkit"):
+            with self.subTest(job=name), self.assertRaises(AssertionError):
+                workflow = deepcopy(self.workflow)
+                workflow["jobs"][name].pop("needs")
+                validate_activity(workflow)
+
+    def test_activity_validation_cannot_run_on_main_or_write(self):
+        for field in ("branch", "permissions"):
+            with self.subTest(field=field), self.assertRaises(AssertionError):
+                workflow = deepcopy(self.workflow)
+                if field == "branch":
+                    workflow["on"]["push"]["branches"] = ["main"]
+                else:
+                    workflow["permissions"]["contents"] = "write"
+                validate_activity(workflow)
 
 
 if __name__ == "__main__":

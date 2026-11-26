@@ -1,0 +1,102 @@
+name: Issue 2 activity validation
+
+# Test this feature branch only. Never publish images, releases, or deployments.
+on:
+  push:
+    branches: [feat/issue-2-activity]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: activity-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 -m pip install --disable-pip-version-check PyYAML==6.0.3
+      - run: cargo fmt --all --check
+      - run: python3 scripts/test-ci-graph.py
+      - run: pnpm install --frozen-lockfile
+      - name: Check types without compiling WASM
+        run: |
+          test ! -e web/src/core/pkg
+          mkdir -p web/src/core/pkg
+          cp scripts/ci/wasm-types/chat_core.d.ts web/src/core/pkg/
+          pnpm typecheck
+      - name: Focused pure activity units
+        run: pnpm --filter web exec vitest run src/core/typing.test.ts src/ui/typing.test.ts src/ui/activityLabels.test.ts --maxWorkers=2
+
+  release-web:
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Match the Cargo job budget to the runner
+        run: echo "CARGO_BUILD_JOBS=$(nproc)" >> "$GITHUB_ENV"
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: Install matching bindings CLI
+        run: cargo install wasm-bindgen-cli --locked --version "$(scripts/wasm-bindgen-version.sh)"
+      - name: Build the optimized release WASM package
+        run: scripts/build-wasm.sh
+      - run: diff -u scripts/ci/wasm-types/chat_core.d.ts web/src/core/pkg/chat_core.d.ts
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: activity-release-web
+          path: |
+            web/dist
+            web/src/core/pkg
+          if-no-files-found: error
+          retention-days: 1
+
+  webkit:
+    needs: release-web
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: activity-release-web
+          path: web
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter web exec playwright install --with-deps webkit
+      - name: Run both activity fixtures in WebKit
+        run: pnpm --filter web exec playwright test activity-fixture.spec.ts -c playwright.fixtures.config.ts --project=webkit
+        env:
+          PW_ALL_BROWSERS: "1"
+          CI: "1"

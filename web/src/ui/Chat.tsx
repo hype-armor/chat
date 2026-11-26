@@ -45,7 +45,7 @@ import { localityLabel } from '../core/locality'
 import type { LocalityInfo } from '../core/protocol'
 import { ConversationDrafts, useConversationDraft } from './useConversationDrafts'
 import { useModalBackground } from './useModalBackground'
-import { ReplyPreview, quoteMessage, useRemoteTyping, useSendTyping } from './messageInteractions'
+import { ReplyPreview, quoteMessage, typingLabel, useRemoteTyping, useSendTyping } from './messageInteractions'
 import type { ReplyPreview as ReplyQuote } from '../core/protocol'
 import { isIosDevice } from '../pwa'
 import { filterConversations, highlightTitle, normalizeSearch, searchUsername } from './conversationSearch'
@@ -1823,7 +1823,7 @@ function Conversation({
           composer.current?.focus({ preventScroll: true })
         }} />}
         <div className="typing-controls" hidden={typingNames.length === 0 && !typingError}>
-          <span role="status" aria-live="polite">{typingNames.length > 0 ? `${typingNames.join(', ')} ${typingNames.length === 1 ? 'is' : 'are'} typing…` : ''}</span>
+          <span role="status" aria-live="polite">{typingLabel(typingNames)}</span>
           {typingError && <span role="alert">{typingError}</span>}
         </div>
         <div className="composer-row">

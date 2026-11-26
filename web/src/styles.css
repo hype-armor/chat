@@ -1916,6 +1916,7 @@ button.conversation-title {
 .reply-preview strong, .reply-preview > span { display: block; overflow-wrap: anywhere; white-space: pre-wrap; }
 .reply-preview > span { max-height: 6rem; overflow: auto; }
 .typing-controls { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 0.25rem 0.75rem; min-height: 2rem; }
+.typing-controls > [role="status"] { min-width: 0; overflow-wrap: anywhere; }
 .composer > .typing-controls, .composer > .reply-preview { padding-inline: 1rem; width: 100%; max-width: 54rem; margin-inline: auto; }
 .failed-drafts { max-height: 30vh; overflow-y: auto; padding-inline: 1rem; }
 .failed-draft { border-block-end: 1px solid var(--border); padding-block: 0.5rem; }

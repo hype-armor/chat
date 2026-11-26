@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { TypingClock, TypingLeases } from './typing'
+import { typingDetail, TypingClock, TypingLeases } from './typing'
 
 const now = 50_000
 const allow = () => true
 
 describe('encrypted typing leases', () => {
+  it('rejects unknown detail and all invalid tool identifiers', () => {
+    for (const [activity, tool] of [['using', ''], ['using', 'tool\n'], ['using', 'é'], ['using', 'x'.repeat(65)], ['using', undefined], ['unknown', undefined], ['thinking', 'tool'], [undefined, 'tool']]) {
+      expect(typingDetail(activity, tool)).toBeUndefined()
+    }
+    expect(typingDetail('using', 'x'.repeat(64))).toEqual({ activity: 'using', tool: 'x'.repeat(64) })
+  })
   it('advances the receiver clock with monotonic elapsed time during wall-clock rollback', () => {
     const clock = new TypingClock()
     const leases = new TypingLeases()
@@ -64,6 +70,31 @@ describe('encrypted typing leases', () => {
     expect(leases.empty(sentAt + 10_001)).toBe(true)
     leases.update('a1', 'Alex', true, sentAt - 1, sentAt + 9_999, now)
     expect(leases.accounts(now, allow)).toEqual([])
+  })
+
+  it('keeps valid details in ordered leases and falls back for malformed updates', () => {
+    const leases = new TypingLeases()
+    leases.update('a', 'Alex', true, now, now + 8_000, now, 'thinking')
+    expect(leases.details(now, allow)).toEqual([{ account: 'Alex', detail: { activity: 'thinking' } }])
+    leases.update('a', 'Alex', true, now + 1, now + 8_001, now + 1, 'using', 'read_file')
+    leases.update('a', 'Alex', true, now, now + 8_000, now + 1, 'working')
+    expect(leases.details(now + 1, allow)).toEqual([{ account: 'Alex', detail: { activity: 'using', tool: 'read_file' } }])
+    leases.update('a', 'Alex', true, now + 2, now + 8_002, now + 2, 'using', '<script>')
+    expect(leases.details(now + 2, allow)).toEqual([{ account: 'Alex' }])
+    leases.update('a', 'Alex', false, now + 3, now + 8_003, now + 3)
+    leases.update('a', 'Alex', true, now + 2, now + 8_002, now + 3, 'working')
+    expect(leases.details(now + 3, allow)).toEqual([])
+    leases.update('a', 'Alex', true, now + 4, now + 8_004, now + 4, 'working')
+    expect(leases.details(now + 8_004, allow)).toEqual([])
+  })
+
+  it('uses the newest active device deterministically', () => {
+    const leases = new TypingLeases()
+    leases.update('b', 'Alex', true, now, now + 8_000, now, 'working')
+    leases.update('a', 'Alex', true, now, now + 8_000, now, 'thinking')
+    expect(leases.details(now, allow)).toEqual([{ account: 'Alex', detail: { activity: 'thinking' } }])
+    leases.update('b', 'Alex', true, now + 1, now + 8_001, now + 1, 'using', 'tool')
+    expect(leases.details(now + 1, allow)).toEqual([{ account: 'Alex', detail: { activity: 'using', tool: 'tool' } }])
   })
 
   it('prunes removed and blocked devices', () => {
