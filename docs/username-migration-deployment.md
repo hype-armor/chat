@@ -54,3 +54,6 @@ check uses synthetic listeners in a private Linux network and PID namespace.
 It verifies that the observer cannot use the maintenance listener and that
 killing the namespace controller also stops a detached worker. It does not
 exercise the Docker daemon, real stores, host power loss, or production fencing.
+
+For the separate, opt-in disposable Docker exercise and reboot check, see the
+[Compose writer-fence rehearsal](username-migration-compose-rehearsal.md).
