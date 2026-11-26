@@ -242,6 +242,10 @@ pub struct EventView {
     pub typing_active: Option<bool>,
     #[wasm_bindgen(js_name = typingExpiresAtMs)]
     pub typing_expires_at_ms: Option<f64>,
+    #[wasm_bindgen(getter_with_clone, js_name = typingActivity)]
+    pub typing_activity: Option<String>,
+    #[wasm_bindgen(getter_with_clone, js_name = typingTool)]
+    pub typing_tool: Option<String>,
     #[wasm_bindgen(getter_with_clone, js_name = displayName)]
     pub display_name: Option<String>,
     /// This encrypted profile asks the peer to return its current profile.
@@ -363,6 +367,8 @@ impl EventView {
             content_hash: None,
             typing_active: None,
             typing_expires_at_ms: None,
+            typing_activity: None,
+            typing_tool: None,
             display_name: None,
             profile_refresh: false,
             locality: None,
@@ -999,6 +1005,8 @@ impl CoreClient {
             content::Body::Typing(Typing {
                 active,
                 expires_at_ms: expires,
+                activity: None,
+                tool: None,
             }),
             message_id,
         )
@@ -1195,6 +1203,11 @@ impl CoreClient {
                         if valid_typing_times(content.sent_at_ms, t.expires_at_ms) {
                             view.typing_active = Some(t.active);
                             view.typing_expires_at_ms = Some(t.expires_at_ms as f64);
+                            if let Some((activity, tool)) = valid_typing_detail(t.activity, t.tool)
+                            {
+                                view.typing_activity = Some(activity);
+                                view.typing_tool = tool;
+                            }
                         } else {
                             view.kind = "ignored".to_owned();
                         }
@@ -1335,6 +1348,25 @@ fn exact_timestamp(value: f64) -> Option<u64> {
         .then_some(value as u64)
 }
 
+fn valid_typing_detail(
+    activity: Option<String>,
+    tool: Option<String>,
+) -> Option<(String, Option<String>)> {
+    match (activity.as_deref(), tool.as_deref()) {
+        (Some("thinking" | "working"), None) => Some((activity?, None)),
+        (Some("using"), Some(name))
+            if !name.is_empty()
+                && name.len() <= 64
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"_.:-".contains(&b)) =>
+        {
+            Some((activity?, tool))
+        }
+        _ => None,
+    }
+}
+
 fn valid_typing_times(sent: u64, expires: u64) -> bool {
     sent > 0
         && expires <= 9_007_199_254_740_991
@@ -1438,6 +1470,49 @@ mod interaction_tests {
         assert!(!valid_reply_metadata(None, Some(&[2; 32])));
         assert!(!valid_reply_metadata(Some(&[1; 15]), Some(&[2; 32])));
         assert!(!valid_reply_metadata(Some(&[1; 16]), Some(&[2; 31])));
+    }
+
+    #[test]
+    fn typing_detail_is_bounded_and_falls_back() {
+        let check = |a: Option<&str>, t: Option<&str>| {
+            valid_typing_detail(a.map(str::to_owned), t.map(str::to_owned))
+        };
+        assert!(check(Some("thinking"), None).is_some());
+        assert!(check(Some("working"), None).is_some());
+        assert!(check(Some("using"), Some("tool_1.v:2-test")).is_some());
+        assert!(check(Some("using"), Some(&"x".repeat(64))).is_some());
+        for (a, t) in [
+            (None, None),
+            (Some("unknown"), None),
+            (Some("using"), None),
+            (Some("using"), Some("")),
+            (Some("using"), Some("<script>")),
+            (Some("thinking"), Some("tool")),
+        ] {
+            assert!(check(a, t).is_none());
+        }
+        assert!(check(Some("using"), Some(&"x".repeat(65))).is_none());
+    }
+
+    #[test]
+    fn decoded_semantic_invalid_typing_keeps_the_valid_lease() {
+        for (activity, tool) in [
+            (Some("unknown"), None),
+            (Some("using"), Some("<script>")),
+            (Some("using"), None),
+        ] {
+            let wire = Typing {
+                active: true,
+                expires_at_ms: 9000,
+                activity: activity.map(str::to_owned),
+                tool: tool.map(str::to_owned),
+            }
+            .encode_to_vec();
+            let decoded = Typing::decode(wire.as_slice()).unwrap();
+            assert!(decoded.active);
+            assert!(valid_typing_times(1000, decoded.expires_at_ms));
+            assert!(valid_typing_detail(decoded.activity, decoded.tool).is_none());
+        }
     }
 
     #[test]

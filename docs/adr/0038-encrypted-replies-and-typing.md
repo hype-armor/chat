@@ -79,6 +79,16 @@ The worker must bound this state and clear it when the conversation or account e
 The worker must apply current-membership, blocked-contact, and message-request checks before display.
 The worker must aggregate active devices by account for the UI.
 Typing must not enter history, unread counts, receipts, notifications, backup, or durable offline replay.
+Optional `Typing.activity` (tag 3) and `Typing.tool` (tag 4) extend the same encrypted lease.
+Activity is `thinking`, `working`, or `using`. Only `using` carries a tool identifier.
+Tool identifiers match `[A-Za-z0-9_.:-]{1,64}`. They never contain arguments, output, or thought text.
+The binding and worker strip unknown or semantically invalid detail and retain generic typing.
+The worker strips all detail from inactive controls. Detail cannot extend, reset, or bypass the authenticated device lease.
+The newest active device supplies each account's detail; device ID resolves timestamp ties.
+The UI renders detail as plain text in the existing polite live region.
+Old readers skip the optional fields and retain generic typing.
+Structurally invalid protobuf, including invalid UTF-8 or field wire types, remains rejected.
+This rejection does not create history or a fallback message. It does not weaken protobuf parsing.
 The sender must rate-limit updates and avoid sending them while offline.
 The worker must still persist MLS ratchet changes before transport sends.
 
@@ -98,6 +108,7 @@ Each method returns the encoded encrypted envelope.
 Existing callers can omit the optional final argument.
 
 `EventView` adds `replyTo`, `replyToHash`, `contentHash`, `typingActive`, and `typingExpiresAtMs`.
+Optional `typingActivity` and `typingTool` expose validated activity detail. Older events omit them.
 The binding computes `contentHash` for each visible message before it normalizes fields for the UI.
 The hash uses the full authenticated MLS sender identity, including the device identifier.
 

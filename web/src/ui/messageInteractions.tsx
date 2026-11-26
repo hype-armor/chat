@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { createTypingSender, trackRemoteTyping } from './typing'
 import type { ChatMessage, ReplyPreview as Quote, Typist } from '../core/protocol'
 import type { CoreClient } from '../core/client'
+import { typingDetail } from '../core/typing'
 
 export function quoteMessage(message: ChatMessage): Quote {
   if (message.deleted) return { messageId: message.id, text: 'Original message unavailable', unavailable: true }
@@ -29,7 +30,19 @@ export function useRemoteTyping(core: CoreClient, id: string, enabled: boolean) 
     if (!enabled) return
     return trackRemoteTyping(core, id, setTypists)
   }, [core, id, enabled])
-  return typists.slice(0, 4).map((typist) => typist.name)
+  return typists.slice(0, 4)
+}
+
+export function typingLabel(typists: Typist[]): string {
+  if (!typists.length) return ''
+  if (typists.every((typist) => !typist.activity)) {
+    return `${typists.map((typist) => typist.name).join(', ')} ${typists.length === 1 ? 'is' : 'are'} typing…`
+  }
+  return typists.map((typist) => {
+    const detail = typingDetail(typist.activity, typist.tool)
+    const action = detail?.activity === 'using' ? `using ${detail.tool}` : detail?.activity ?? 'typing'
+    return `${typist.name} is ${action}`
+  }).join(', ') + '…'
 }
 
 export function useSendTyping(core: CoreClient, id: string, draft: string, enabled: boolean, focused: boolean) {

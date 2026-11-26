@@ -164,7 +164,7 @@ export type LiveInfo = {
   ended: boolean
 }
 
-export type Typist = { account: string; name: string }
+export type Typist = { account: string; name: string; activity?: 'thinking' | 'working' | 'using'; tool?: string }
 
 export type ReplyPreview = {
   messageId: string

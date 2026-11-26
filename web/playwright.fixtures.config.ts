@@ -14,6 +14,7 @@ export default defineConfig({
     'composer-spacing.spec.ts',
     'composer-resize.spec.ts',
     'message-interactions.spec.ts',
+    'activity-fixture.spec.ts',
     'link-actions.spec.ts',
     'draft-storage.spec.ts',
     'fixture-scroll.spec.ts',

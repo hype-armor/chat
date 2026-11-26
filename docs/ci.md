@@ -22,6 +22,16 @@ outside this workflow graph. This refactor does not disable or reorder them.
 Ordering those checks requires repository security configuration, not a `needs`
 edge in this workflow. Do not claim that this graph gates those external checks.
 
+## Issue 2 feature validation
+
+`activity-validation.yml` runs only on pushes to `feat/issue-2-activity`.
+It collects the checks that the resource-limited development host cannot complete.
+Cheap format, graph, type, and focused unit checks gate an optimized release WASM build.
+That build verifies the declaration contract, runs all web units, and builds the PWA.
+The WebKit job then runs both activity fixtures on an isolated runner.
+The workflow has read-only repository permission. It cannot publish or deploy.
+It does not replace the complete PR CI workflow or its required checks.
+
 ## Stages
 
 1. **Cheap validation:** dependency audit, Rust formatting, workflow graph tests,
