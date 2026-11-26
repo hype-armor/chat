@@ -52,8 +52,7 @@ class SyntheticWorkflowTest(unittest.TestCase):
             self.assertEqual(backend.events, [])
 
     def test_forward_faults_preserve_rollback_intent_and_propagate(self):
-        # The last journal transition is intentionally rejected: automatic
-        # release is unsupported, even with a fake backend.
+        # Recovery records old_ready but does not attempt automatic release.
         cases = [('capture', 1, False), ('fence', 1, False),
                  ('backup', 1, False), ('verify_recovery_set', 1, False),
                  ('migrate', 1, True), ('start_new', 1, True),
@@ -62,13 +61,16 @@ class SyntheticWorkflowTest(unittest.TestCase):
             with self.subTest(method=method, occurrence=occurrence), tempfile.TemporaryDirectory() as directory:
                 with self.journal(directory) as journal:
                     backend = FakeBackend((method, occurrence))
-                    with self.assertRaisesRegex(components._journal.JournalError, 'invalid or irreversible'):
+                    with self.assertRaisesRegex(components.Unavailable, 'automatic gate release is disabled') as raised:
                         TestOnlyOrchestrator(journal, backend).run(str(uuid.uuid4()))
+                    self.assertIsInstance(raised.exception.__context__, RuntimeError)
+                    self.assertEqual(str(raised.exception.__context__), 'injected ' + method)
                     self.assertEqual(journal.load()['phase'], 'old_ready')
                     self.assertEqual(journal.load()['restore_required'], restore_required)
                     self.assertEqual('verify_and_restore' in backend.events, restore_required)
-                    self.assertNotIn('open_new', backend.events)
-                    self.assertLess(backend.events.index('restore_old_runtime'), backend.events.index('start_old_and_check'))
+                    self.assertEqual(backend.events[-1], 'restore_old_runtime')
+                    for effect in ('open_new', 'start_old_and_check', 'open_old'):
+                        self.assertNotIn(effect, backend.events)
 
     def test_recovery_fault_propagates_without_release(self):
         with tempfile.TemporaryDirectory() as directory, self.journal(directory) as journal:
@@ -89,16 +91,13 @@ class SyntheticWorkflowTest(unittest.TestCase):
             journal.begin_rollback()
             journal.advance('old_ready')
             self.assertEqual(journal.recovery_decision(), 'resume_old')
-            backend = FakeBackend(('start_old_and_check', 1))
+            backend = FakeBackend()
             orchestrator = TestOnlyOrchestrator(journal, backend)
-            with self.assertRaisesRegex(RuntimeError, 'injected start_old_and_check'):
-                orchestrator.recover()
-            self.assertEqual(journal.load()['phase'], 'old_ready')
-            with self.assertRaisesRegex(components._journal.JournalError, 'invalid or irreversible'):
-                orchestrator.recover()
-            self.assertEqual(journal.load()['phase'], 'old_ready')
-            self.assertNotIn('verify_and_restore', backend.events)
-            self.assertEqual(backend.events, ['start_old_and_check', 'start_old_and_check', 'open_old'])
+            for _ in range(2):
+                with self.assertRaisesRegex(components.Unavailable, 'automatic gate release is disabled'):
+                    orchestrator.recover()
+                self.assertEqual(journal.load()['phase'], 'old_ready')
+                self.assertEqual(backend.events, [])
 
     def test_post_commit_failure_propagates_without_restore(self):
         with tempfile.TemporaryDirectory() as directory, self.journal(directory) as journal:

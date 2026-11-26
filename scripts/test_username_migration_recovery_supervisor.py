@@ -44,6 +44,21 @@ class Tests(unittest.TestCase):
             m.Supervisor(self.directory, update, self.recover).run()
         self.assertFalse(self.marker.exists())
 
+    def test_old_ready_blocks_recovery_worker_and_new_operation(self):
+        with m._journal.Journal(self.directory) as journal:
+            journal.begin(str(uuid.uuid4()))
+            for phase in ('fence', 'backup', 'migrate'):
+                journal.advance(phase)
+            journal.begin_rollback()
+            journal.advance('old_ready')
+        supervisor = m.Supervisor(self.directory, lambda j: self.marker.touch(), self.recover)
+        for invoke in (supervisor.recover_pending, supervisor.run):
+            with self.assertRaisesRegex(m.SupervisorError, 'release requires operator resolution'):
+                invoke()
+            self.assertFalse(self.marker.exists())
+        with m._journal.Journal(self.directory) as journal:
+            self.assertEqual('resume_old', journal.recovery_decision())
+
     def test_killed_supervisor_worker_stops_and_restart_recovers(self):
         ready = Path(self.directory) / 'ready'
         late = Path(self.directory) / 'late'

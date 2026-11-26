@@ -38,7 +38,8 @@ class FakeDocker:
                 'Config': {'Labels': {'com.docker.compose.project': 'chat', 'com.docker.compose.service': service}},
                 'State': {'Status': 'running', 'Running': True, 'Paused': False, 'Restarting': False,
                           'Dead': False, 'ExitCode': 0, 'OOMKilled': False, 'Error': ''},
-                'Mounts': [{'Type': 'volume', 'Name': 'pg'}] if service == database else [],
+                'Mounts': [{'Type': 'volume', 'Name': 'pg', 'Driver': 'local', 'Source': '/fake/pg',
+                            'Destination': '/var/lib/postgresql', 'RW': True}] if service == database else [],
                 'NetworkSettings': {'Networks': {'chat_net': {}}, 'Ports': {}},
                 'HostConfig': {'NetworkMode': 'chat_net', 'RestartPolicy': {'Name': 'always', 'MaximumRetryCount': 0}},
             }

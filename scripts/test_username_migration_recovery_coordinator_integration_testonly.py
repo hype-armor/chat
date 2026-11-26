@@ -186,15 +186,15 @@ class Integration(unittest.TestCase):
                         backend.token = 'synthetic-fence'
                     else:
                         backend.repair()
-                    # The synthetic open_old is not release authority. The journal
-                    # rejects completion, and that error must reach the caller.
-                    with self.assertRaises(components._journal.JournalError):
-                        coordinator.recover()
-                    self.assertEqual(journal.load()['phase'], 'old_ready')
-                    self.assertEqual(events.count('restore'), 1)
-                    with self.assertRaises(components._journal.JournalError):
-                        coordinator.recover()
-                    self.assertEqual(events.count('restore'), 1)
+                    # Recovery stages the old runtime but must not release it.
+                    for _ in range(2):
+                        with self.assertRaisesRegex(components.Unavailable, 'automatic gate release is disabled'):
+                            coordinator.recover()
+                        self.assertEqual(journal.load()['phase'], 'old_ready')
+                        self.assertEqual(events.count('restore'), 1)
+                        self.assertEqual(events.count('restore_runtime'), 1)
+                        self.assertNotIn('start_old', events)
+                        self.assertNotIn('open_old', events)
                 elif post_commit:
                     self.assertEqual(journal.load()['phase'], 'committed')
                     checks = events.count('policy_check')

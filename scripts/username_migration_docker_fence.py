@@ -2,7 +2,7 @@
 
 Requires a trusted host and Docker administrator, a held deployment lock, and
 persistent startup gates covering all supervisors. The caller supplies gate
-adapters with engage(resume=True) and verify() methods. These adapters must
+adapters with engage_initial() and verify() methods. These adapters must
 verify persistent state, including after reboot. The existing gate primitives do
 not by themselves supply that adapter. This module is not an operational
 host-reboot or supervisor guarantee. The caller must independently verify that
@@ -12,7 +12,10 @@ The caller must independently verify stop_order against the captured dependency
 graph. Every writer must precede its storage dependencies, and PostgreSQL must
 be last. This module cannot establish those dependencies or continuous fencing.
 The caller must identify application services that require clean drain. A clean
-process exit does not prove that external writes have settled.
+process exit does not prove that external writes have settled. Repeated Docker
+inventory checks detect some drift; they are not atomic and do not replace the
+startup gates or independently established host isolation. The storage binding
+covers only the supplied local named volumes, not bind-backed or remote stores.
 """
 import json
 import os
@@ -22,6 +25,9 @@ import subprocess
 import uuid
 
 from username_migration_systemd_gate import _rename_noreplace
+
+
+DOCKER_FENCE_INTENT_VERSION = 6
 
 
 class FenceError(Exception):
@@ -81,10 +87,45 @@ class DockerFence:
         except Exception:
             raise FenceError('Docker command failed') from None
 
-    def _inventory(self, expected_volumes=None):
+    def _container_ids(self):
         ids = self._run(['container', 'ls', '--all', '--no-trunc', '--quiet']).split()
         if len(ids) != len(set(ids)) or any(not re.fullmatch(r'[0-9a-f]{64}', i) for i in ids):
             raise FenceError('Invalid Docker inventory')
+        return sorted(ids)
+
+    @staticmethod
+    def _absolute_path(path):
+        if (not isinstance(path, str) or not path.startswith('/') or path.startswith('//') or
+                '\0' in path or os.path.normpath(path) != path):
+            raise ValueError()
+        return path
+
+    @staticmethod
+    def _require_isolated_unknown(c, nets):
+        # A bridge or custom network can reach host-published storage. Do not
+        # infer isolation from empty endpoints on a stopped container or try to
+        # resolve container namespace references through a changing inventory.
+        host = c['HostConfig']
+        if (host['NetworkMode'] != 'none' or set(nets) - {'none'} or
+                host['PidMode'] != '' or host['IpcMode'] not in ('private', 'none') or
+                host['UTSMode'] != '' or host['CgroupnsMode'] != 'private' or
+                host['UsernsMode'] != '' or host['Runtime'] != 'runc' or
+                host['Privileged'] is not False or host['PublishAllPorts'] is not False or
+                host['PortBindings'] not in (None, {}) or host['Tmpfs'] not in (None, {}) or
+                c['NetworkSettings']['Ports'] not in (None, {})):
+            raise FenceError('Unknown container isolation not verified')
+        if any(host[k] not in (None, []) for k in (
+                'Binds', 'Mounts', 'VolumesFrom', 'Links', 'CapAdd', 'SecurityOpt',
+                'Devices', 'DeviceCgroupRules', 'DeviceRequests')):
+            raise FenceError('Unknown container isolation not verified')
+        # Even a read-only socket mount can grant daemon access. An unrelated
+        # volume can use driver options to alias a protected path. Docker
+        # inspect cannot prove arbitrary external mount sources harmless.
+        if c['Mounts']:
+            raise FenceError('Unknown container has an external mount')
+
+    def _inventory(self, expected_binding=None):
+        ids = self._container_ids()
         if not set(self.services.values()) <= set(ids):
             raise FenceError('Original container missing')
         try:
@@ -94,38 +135,29 @@ class DockerFence:
                 details = json.loads(self._run(['volume', 'inspect', volume]))
                 if (not isinstance(details, list) or len(details) != 1
                         or details[0].get('Name') != volume or details[0].get('Driver') != 'local'
-                        or details[0].get('Options') not in (None, {})
+                        or details[0]['Options'] not in (None, {})
                         or not isinstance(details[0].get('Mountpoint'), str)
                         or not isinstance(details[0].get('CreatedAt'), str)
                         or not details[0]['CreatedAt']):
                     raise ValueError()
-                path = details[0]['Mountpoint']
-                if not path.startswith('/') or os.path.normpath(path) != path:
+                path = self._absolute_path(details[0]['Mountpoint'])
+                resolved = os.path.realpath(path)
+                if any(os.path.commonpath((resolved, other)) in (resolved, other) for other in mountpoints):
                     raise ValueError()
-                labels = details[0].get('Labels')
+                labels = details[0]['Labels']
                 if labels is not None and (not isinstance(labels, dict) or
                         any(not isinstance(k, str) or not isinstance(v, str) for k, v in labels.items())):
                     raise ValueError()
                 identities[volume] = {key: details[0][key] for key in ('Name', 'Driver', 'Mountpoint', 'CreatedAt')}
                 identities[volume]['Labels'] = labels
-                mountpoints.add(os.path.realpath(path))
-            if expected_volumes is not None and identities != expected_volumes:
-                raise ValueError()
+                identities[volume]['ResolvedMountpoint'] = resolved
+                mountpoints.add(resolved)
             rows = json.loads(self._run(['container', 'inspect', *ids])) if ids else []
             if not isinstance(rows, list) or len(rows) != len(ids):
                 raise ValueError()
             found = {}
             expected = {v: k for k, v in self.services.items()}
-            protected_ports = {'8080'}
-            for c in rows:
-                if c.get('Id') in expected:
-                    for port_map in ((c.get('NetworkSettings', {}).get('Ports') or {}),
-                                     (c.get('HostConfig', {}).get('PortBindings') or {})):
-                        for bindings in port_map.values():
-                            for binding in bindings or []:
-                                if not isinstance(binding, dict) or not isinstance(binding.get('HostPort'), str):
-                                    raise ValueError()
-                                protected_ports.add(binding['HostPort'])
+            attachments = {cid: {} for cid in expected}
             for c in rows:
                 cid = c['Id']
                 if cid not in ids or cid in found:
@@ -133,36 +165,51 @@ class DockerFence:
                 found[cid] = c
                 state = c['State']
                 self._validate_state(state)
-                active = state['Running'] or state['Paused'] or state['Restarting']
-                # A stopped unknown container can restart after a reboot.
-                could_start = active or self._policy(c)['Name'] != 'no'
-                mounts = {m['Name'] for m in c['Mounts'] if m['Type'] == 'volume'}
-                if could_start:
-                    for mount in c['Mounts']:
-                        if mount['Type'] == 'bind':
-                            source = mount.get('Source')
-                            if not isinstance(source, str) or not source.startswith('/'):
+                policy = self._policy(c)
+                could_start = state['Running'] or policy['Name'] != 'no'
+                nets = c['NetworkSettings']['Networks']
+                labels = c['Config']['Labels']
+                if (not isinstance(nets, dict) or not isinstance(c['Mounts'], list) or
+                        (labels is not None and not isinstance(labels, dict))):
+                    raise ValueError()
+                labels = labels or {}
+                if cid not in expected:
+                    if could_start:
+                        if labels.get('com.docker.compose.project') == self.project:
+                            raise FenceError('Unknown deployment container')
+                        self._require_isolated_unknown(c, nets)
+                    continue
+                if (labels.get('com.docker.compose.project') != self.project or
+                        labels.get('com.docker.compose.service') != expected[cid] or
+                        not set(nets) <= self.networks):
+                    raise ValueError()
+                for mount in c['Mounts']:
+                    mount_type = mount['Type']
+                    if mount_type == 'bind':
+                        source = self._absolute_path(mount['Source'])
+                        for candidate in (source, os.path.realpath(source)):
+                            if any(os.path.commonpath((candidate, path)) in (candidate, path) for path in mountpoints):
                                 raise ValueError()
-                            for candidate in (os.path.normpath(source), os.path.realpath(source)):
-                                if any(os.path.commonpath((candidate, path)) in (candidate, path) for path in mountpoints):
-                                    raise ValueError()
-                nets = set(c['NetworkSettings']['Networks'])
-                labels = c['Config']['Labels'] or {}
-                if cid in expected:
-                    if labels.get('com.docker.compose.project') != self.project or labels.get('com.docker.compose.service') != expected[cid] or not nets <= self.networks:
+                    elif mount_type == 'volume':
+                        name = mount['Name']
+                        if name not in self.volumes:
+                            continue
+                        destination = self._absolute_path(mount['Destination'])
+                        if (destination in attachments[cid] or mount['Driver'] != 'local' or
+                                mount['Source'] != identities[name]['Mountpoint'] or type(mount['RW']) is not bool):
+                            raise ValueError()
+                        attachments[cid][destination] = {'name': name, 'rw': mount['RW']}
+                    elif mount_type != 'tmpfs':
                         raise ValueError()
-                elif could_start:
-                    # Include every published port of the captured deployment.
-                    port_maps = (c['NetworkSettings'].get('Ports') or {}, c['HostConfig'].get('PortBindings') or {})
-                    direct = any(p.get('HostPort') in protected_ports for ports in port_maps
-                                 for bindings in ports.values() if bindings for p in bindings)
-                    if mounts & self.volumes or nets & self.networks or direct or c['HostConfig']['NetworkMode'] == 'host' or labels.get('com.docker.compose.project') == self.project:
-                        raise ValueError()
-            used = {m['Name'] for cid in expected for m in found[cid]['Mounts'] if m['Type'] == 'volume'}
-            db_mounts = {m['Name'] for m in found[self.services[self.database_service]]['Mounts'] if m['Type'] == 'volume'}
-            if not self.volumes <= used or not db_mounts & self.volumes:
+            used = {mount['name'] for entries in attachments.values() for mount in entries.values()}
+            if used != self.volumes or not attachments[self.services[self.database_service]]:
                 raise ValueError()
-            return found, identities
+            if self._container_ids() != ids:
+                raise FenceError('Docker inventory changed during inspection')
+            binding = {'container_ids': ids, 'volumes': identities, 'protected_mounts': attachments}
+            if expected_binding is not None and binding != expected_binding:
+                raise FenceError('Docker fence inventory binding changed')
+            return found, binding
         except FenceError:
             raise
         except Exception:
@@ -214,18 +261,21 @@ class DockerFence:
                 state.get('OOMKilled') is not False or state.get('Error') != ''):
             raise FenceError('Application did not drain cleanly')
 
-    def _journal(self, inventory, identities):
+    def _journal(self, inventory, binding):
         try:
             fd = os.open('docker-fence.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=self.fd)
         except FileNotFoundError:
             running = sorted(s for s in self.clean_drain_services if self._active(inventory[self.services[s]]['State']))
-            data = {'version': 5, 'operation_id': self.operation_id, 'project': self.project, 'services': self.services,
+            data = {'version': DOCKER_FENCE_INTENT_VERSION, 'operation_id': self.operation_id,
+                    'project': self.project, 'services': self.services,
                     'clean_drain_services': sorted(self.clean_drain_services), 'drain_initially_running': running,
                     'stop_order': list(self.stop_order),
-                    'database': self.database_service, 'volumes': identities,
+                    'database': self.database_service, 'inventory': binding,
                     'networks': sorted(self.networks),
                     'policies': {i: self._policy(inventory[i]) for i in self.services.values()}}
             raw = json.dumps(data, sort_keys=True, separators=(',', ':')).encode()
+            if len(raw) > 65536:
+                raise FenceError('Docker fence intent exceeds size limit')
             temp = '.docker-fence-' + os.urandom(16).hex()
             fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=self.fd)
             try:
@@ -242,12 +292,12 @@ class DockerFence:
                 raise ValueError()
             with os.fdopen(fd, 'r', closefd=False) as f:
                 data = json.load(f)
-            if (set(data) != {'version', 'operation_id', 'project', 'services', 'database', 'volumes', 'networks', 'policies', 'stop_order', 'clean_drain_services', 'drain_initially_running'} or
-                data['version'] != 5 or data['clean_drain_services'] != sorted(self.clean_drain_services) or
+            if (set(data) != {'version', 'operation_id', 'project', 'services', 'database', 'inventory', 'networks', 'policies', 'stop_order', 'clean_drain_services', 'drain_initially_running'} or
+                data['version'] != DOCKER_FENCE_INTENT_VERSION or data['clean_drain_services'] != sorted(self.clean_drain_services) or
                 not isinstance(data['drain_initially_running'], list) or
                 data['drain_initially_running'] != sorted(set(data['drain_initially_running'])) or
                 not set(data['drain_initially_running']) <= self.clean_drain_services or data['stop_order'] != list(self.stop_order) or data['operation_id'] != self.operation_id or data['project'] != self.project or data['services'] != self.services or
-                data['database'] != self.database_service or data['volumes'] != identities or
+                data['database'] != self.database_service or data['inventory'] != binding or
                 data['networks'] != sorted(self.networks) or set(data['policies']) != set(self.services.values())):
                 raise ValueError()
             for policy in data['policies'].values():
@@ -275,18 +325,20 @@ class DockerFence:
                 for gate in self.gates:
                     gate.engage_initial()
                 self._verify_gates()
-            inventory, identities = self._inventory()
-            journal = self._journal(inventory, identities)
+            inventory, binding = self._inventory()
+            journal = self._journal(inventory, binding)
+            self._inventory(binding)
             for cid in sorted(self.services.values()):
+                self._verify_gates()
                 self._run(['container', 'update', '--restart', 'no', cid])
-                current, _ = self._inventory(identities)
+                current, _ = self._inventory(binding)
                 if self._policy(current[cid]) != {'Name': 'no', 'MaximumRetryCount': 0}:
                     raise FenceError('Restart policy mismatch')
             self._verify_gates()
             stopped = []
             for service in self.stop_order:
                 cid = self.services[service]
-                current, _ = self._inventory(identities)
+                current, _ = self._inventory(binding)
                 if any(any(current[i]['State'][k] for k in ('Running', 'Paused', 'Restarting')) for i in stopped):
                     raise FenceError('Previously stopped container active')
                 for prior in self.stop_order[:len(stopped)]:
@@ -309,14 +361,14 @@ class DockerFence:
                 # and must be resolved by a later inventory and clean-exit check.
                 stop_time = '-1' if service in self.clean_drain_services else '30'
                 self._run(['container', 'stop', '--time', stop_time, cid])
-                current, _ = self._inventory(identities)
+                current, _ = self._inventory(binding)
                 if any(current[cid]['State'][k] for k in ('Running', 'Paused', 'Restarting')):
                     raise FenceError('Container remains active')
                 if service in self.clean_drain_services:
                     self._active(current[cid]['State'])
                     self._clean_exit(current[cid]['State'])
                 stopped.append(cid)
-            current, _ = self._inventory(identities)
+            current, _ = self._inventory(binding)
             if any(any(current[i]['State'][k] for k in ('Running', 'Paused', 'Restarting')) or
                    self._policy(current[i]) != {'Name': 'no', 'MaximumRetryCount': 0} for i in self.services.values()):
                 raise FenceError('Fence verification failed')

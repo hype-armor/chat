@@ -31,7 +31,9 @@ class Gate:
 def container(cid, service, volume=None):
     return {'Id': cid, 'Config': {'Labels': {'com.docker.compose.project': 'chat', 'com.docker.compose.service': service}},
             'State': {'Status': 'running', 'Running': True, 'Paused': False, 'Restarting': False, 'Dead': False, 'ExitCode': 0, 'OOMKilled': False, 'Error': ''},
-            'Mounts': [{'Type': 'volume', 'Name': volume}] if volume else [],
+            'Mounts': [{'Type': 'volume', 'Name': volume, 'Driver': 'local',
+                        'Source': f'/var/lib/docker/volumes/{volume}/_data',
+                        'Destination': '/var/lib/postgresql', 'RW': True}] if volume else [],
             'NetworkSettings': {'Networks': {'chat_net': {}}, 'Ports': {}},
             'HostConfig': {'NetworkMode': 'chat_net', 'RestartPolicy': {'Name': 'always', 'MaximumRetryCount': 0}}}
 
@@ -47,6 +49,7 @@ class Daemon:
                        'Mountpoint': '/var/lib/docker/volumes/pg/_data',
                        'CreatedAt': '2026-01-01T00:00:00Z',
                        'Labels': {'com.docker.compose.project': 'chat'}}
+        self.volumes = {'pg': self.volume}
     def __call__(self, args, **kwargs):
         self.calls.append(args)
         assert args[:3] == ['docker', '--host', 'unix:///var/run/docker.sock']
@@ -56,7 +59,7 @@ class Daemon:
         if cmd[:3] == ['container', 'ls', '--all']:
             out = '\n'.join(self.rows)
         elif cmd[:2] == ['volume', 'inspect']:
-            out = json.dumps([self.volume])
+            out = json.dumps([self.volumes[cmd[2]]])
         elif cmd[:2] == ['container', 'inspect']:
             out = json.dumps([self.rows[i] for i in cmd[2:]])
         elif cmd[:2] == ['container', 'update']:
@@ -253,8 +256,8 @@ class Tests(unittest.TestCase):
                              for x in self.daemon.calls[before:]))
         path = Path(self.tmp.name) / 'docker-fence.json'
         data = json.loads(path.read_text())
-        data['version'] = 3
-        data['volumes'] = ['pg']
+        data['version'] = 5
+        data['volumes'] = data.pop('inventory')['volumes']
         path.write_text(json.dumps(data))
         with self.assertRaises(FenceError):
             self.fence.engage()
@@ -309,26 +312,201 @@ class Tests(unittest.TestCase):
         stops = [x[-1] for x in self.daemon.calls if x[3:5] == ['container', 'stop']]
         self.assertEqual(stops, [self.ids['server']])
 
-    def test_unknown_volume_and_direct_ingress(self):
-        other = container('d'*64, 'other', 'pg')
-        other['Config']['Labels'] = {}
-        other['NetworkSettings']['Networks'] = {}
+    def _isolated_unknown(self):
+        other = container('d' * 64, 'other')
+        other['Config']['Labels'] = None
+        other['NetworkSettings']['Networks'] = {'none': {}}
+        other['State'].update(Status='exited', Running=False)
+        other['HostConfig'].update(
+            NetworkMode='none', PidMode='', IpcMode='private', UTSMode='', CgroupnsMode='private',
+            UsernsMode='', Runtime='runc', Privileged=False, PublishAllPorts=False,
+            PortBindings={}, Tmpfs=None, Binds=None, Mounts=None, VolumesFrom=None,
+            Links=None, CapAdd=None, SecurityOpt=None, Devices=[], DeviceCgroupRules=None,
+            DeviceRequests=None,
+        )
+        return other
+
+    def test_unknown_restartable_container_requires_proven_isolation(self):
+        cases = [
+            ('NetworkMode', 'host'), ('NetworkMode', 'bridge'),
+            ('NetworkMode', 'container:' + self.ids['server']), ('NetworkMode', 'container:next'),
+            ('PidMode', 'host'), ('PidMode', 'container:' + self.ids['db']),
+            ('IpcMode', 'host'), ('IpcMode', 'container:' + self.ids['db']),
+            ('UTSMode', 'host'), ('CgroupnsMode', 'host'), ('UsernsMode', 'host'),
+            ('Privileged', True), ('Privileged', 0), ('Runtime', 'vendor'),
+            ('Binds', ['/run/docker.sock:/inert:ro']),
+            ('Mounts', [{'Type': 'bind', 'Source': '/var/lib/docker'}]),
+            ('Tmpfs', {'/scratch': 'rw'}), ('VolumesFrom', [self.ids['db'] + ':ro']),
+            ('Devices', [{'PathOnHost': '/dev/sda'}]), ('DeviceCgroupRules', ['b 8:* rwm']),
+            ('DeviceRequests', [{'Driver': 'vendor'}]), ('CapAdd', ['SYS_ADMIN']),
+            ('SecurityOpt', ['seccomp=unconfined']),
+            ('PortBindings', {'8333/tcp': [{'HostPort': '8333'}]}),
+        ]
+        for field, value in cases:
+            with self.subTest(field=field, value=value):
+                other = self._isolated_unknown()
+                other['HostConfig'][field] = value
+                self.daemon.rows[other['Id']] = other
+                with self.assertRaises(FenceError):
+                    self.fence.engage()
+        for field in ('NetworkMode', 'Privileged', 'DeviceRequests'):
+            with self.subTest(missing=field):
+                other = self._isolated_unknown()
+                del other['HostConfig'][field]
+                self.daemon.rows[other['Id']] = other
+                with self.assertRaises(FenceError):
+                    self.fence.engage()
+        self.assertFalse(any(call[3:5] in (['container', 'update'], ['container', 'stop'])
+                             for call in self.daemon.calls))
+
+    def test_unknown_external_mounts_rejected_even_when_read_only(self):
+        for mount in (
+            {'Type': 'bind', 'Source': '/var/run/docker.sock', 'Destination': '/sock', 'RW': False},
+            {'Type': 'bind', 'Source': '/run', 'Destination': '/host/run', 'RW': False},
+            {'Type': 'bind', 'Source': '/var/lib/docker', 'Destination': '/host', 'RW': False},
+            {'Type': 'volume', 'Name': 'looks-unrelated', 'RW': False},
+        ):
+            with self.subTest(mount=mount):
+                other = self._isolated_unknown()
+                other['State'].update(Status='running', Running=True)
+                other['HostConfig']['RestartPolicy']['Name'] = 'no'
+                other['Mounts'] = [mount]
+                self.daemon.rows[other['Id']] = other
+                with self.assertRaisesRegex(FenceError, 'external mount'):
+                    self.fence.engage()
+        self.assertFalse(any(call[3:5] in (['container', 'update'], ['container', 'stop'])
+                             for call in self.daemon.calls))
+
+    def test_isolated_restartable_unknown_is_not_mutated(self):
+        other = self._isolated_unknown()
         self.daemon.rows[other['Id']] = other
-        with self.assertRaises(FenceError): self.fence.engage()
-        other['Mounts'] = [{'Type': 'bind', 'Source': '/var/lib/docker/volumes/pg'}]
-        with self.assertRaises(FenceError): self.fence.engage()
+        self.fence.engage()
+        self.daemon.reboot()
+        self.fence.engage()
+        mutations = [call[-1] for call in self.daemon.calls
+                     if call[3:5] in (['container', 'update'], ['container', 'stop'])]
+        self.assertEqual(set(mutations), set(self.ids.values()))
+        self.assertEqual(other['HostConfig']['RestartPolicy']['Name'], 'always')
+        self.assertTrue(other['State']['Running'])
+
+    def test_dormant_unknown_is_rechecked_before_next_stop(self):
+        other = self._isolated_unknown()
+        other['HostConfig'].update(NetworkMode='host', RestartPolicy={'Name': 'no', 'MaximumRetryCount': 0})
+        self.daemon.rows[other['Id']] = other
+        original = self.daemon.__call__
+
+        def runner(args, **kwargs):
+            result = original(args, **kwargs)
+            if args[3:5] == ['container', 'stop']:
+                other['HostConfig']['RestartPolicy']['Name'] = 'always'
+            return result
+
+        self.fence.runner = runner
+        with self.assertRaises(FenceError):
+            self.fence.engage()
+        self.assertEqual([call[-1] for call in self.daemon.calls if call[3:5] == ['container', 'stop']],
+                         [self.ids['server']])
+
+    def test_new_inventory_member_between_list_and_inspect_blocks_mutations(self):
+        original = self.daemon.__call__
+
+        def runner(args, **kwargs):
+            result = original(args, **kwargs)
+            if args[3:5] == ['container', 'inspect']:
+                other = self._isolated_unknown()
+                self.daemon.rows[other['Id']] = other
+            return result
+
+        self.fence.runner = runner
+        with self.assertRaisesRegex(FenceError, 'changed during inspection'):
+            self.fence.engage()
+        self.assertFalse(any(call[3:5] in (['container', 'update'], ['container', 'stop'])
+                             for call in self.daemon.calls))
+
+    def test_new_inventory_member_blocks_next_stop_and_resume(self):
+        original = self.daemon.__call__
+
+        def runner(args, **kwargs):
+            result = original(args, **kwargs)
+            if args[3:5] == ['container', 'stop']:
+                other = self._isolated_unknown()
+                self.daemon.rows[other['Id']] = other
+            return result
+
+        self.fence.runner = runner
+        with self.assertRaisesRegex(FenceError, 'inventory binding changed'):
+            self.fence.engage()
+        self.assertEqual([call[-1] for call in self.daemon.calls if call[3:5] == ['container', 'stop']],
+                         [self.ids['server']])
+        before = len(self.daemon.calls)
+        with self.assertRaisesRegex(FenceError, 'Invalid fence journal'):
+            self.fence.engage()
+        self.assertFalse(any(call[3:5] in (['container', 'update'], ['container', 'stop'])
+                             for call in self.daemon.calls[before:]))
+
+    def test_protected_mount_attachment_cannot_drift_on_resume(self):
+        self.daemon.lose = ['container', 'stop']
+        with self.assertRaises(FenceError):
+            self.fence.engage()
+        before = len(self.daemon.calls)
+        mount = self.daemon.rows[self.ids['db']]['Mounts'][0]
+        for field, value in [('Source', '/var/lib/docker/volumes/alias/_data'),
+                             ('Driver', 'plugin'), ('Destination', '/other'), ('RW', False)]:
+            with self.subTest(field=field):
+                old = mount[field]
+                mount[field] = value
+                with self.assertRaises(FenceError):
+                    self.fence.engage()
+                mount[field] = old
+        self.daemon.rows[self.ids['server']]['Mounts'].append(copy.deepcopy(mount))
+        with self.assertRaises(FenceError):
+            self.fence.engage()
+        self.assertFalse(any(call[3:5] in (['container', 'update'], ['container', 'stop'])
+                             for call in self.daemon.calls[before:]))
+
+    def test_additional_protected_volume_cannot_move_between_captured_ids(self):
+        storage = container(self.ids['seaweed'], 'seaweed', 'object-data')['Mounts'][0]
+        storage['Destination'] = '/data'
+        self.daemon.volumes['object-data'] = dict(self.daemon.volume, Name='object-data',
+                                                  Mountpoint=storage['Source'])
+        self.daemon.rows[self.ids['seaweed']]['Mounts'] = [storage]
+        self.fence.volumes.add('object-data')
+        self.fence.engage()
+        data = json.loads((Path(self.tmp.name) / 'docker-fence.json').read_text())
+        self.assertEqual(data['inventory']['protected_mounts'][self.ids['seaweed']],
+                         {'/data': {'name': 'object-data', 'rw': True}})
+        self.daemon.rows[self.ids['seaweed']]['Mounts'].clear()
+        self.daemon.rows[self.ids['server']]['Mounts'] = [storage]
+        before = len(self.daemon.calls)
+        with self.assertRaisesRegex(FenceError, 'Invalid fence journal'):
+            self.fence.engage()
+        self.assertFalse(any(call[3:5] in (['container', 'update'], ['container', 'stop'])
+                             for call in self.daemon.calls[before:]))
+
+    def test_does_not_retarget_a_recreated_service_with_same_labels(self):
+        self.fence.engage()
+        del self.daemon.rows[self.ids['server']]
+        replacement = container('e' * 64, 'server')
+        self.daemon.rows[replacement['Id']] = replacement
+        before = len(self.daemon.calls)
+        with self.assertRaisesRegex(FenceError, 'Original container missing'):
+            self.fence.engage()
+        self.assertFalse(any(call[3:5] in (['container', 'update'], ['container', 'stop'])
+                             for call in self.daemon.calls[before:]))
+
+    def test_stopped_unknown_protected_mount_and_direct_ingress_are_rejected(self):
+        other = self._isolated_unknown()
+        self.daemon.rows[other['Id']] = other
+        other['Mounts'] = [copy.deepcopy(self.daemon.rows[self.ids['db']]['Mounts'][0])]
+        with self.assertRaisesRegex(FenceError, 'external mount'):
+            self.fence.engage()
         other['Mounts'] = []
         other['NetworkSettings']['Ports'] = {'8080/tcp': [{'HostPort': '8080'}]}
-        with self.assertRaises(FenceError): self.fence.engage()
-        self.assertFalse(any(x[3:5] == ['container', 'stop'] for x in self.daemon.calls))
-    def test_stopped_unknown_automatic_restart_is_rejected(self):
-        other = container('d'*64, 'other', 'pg')
-        other['Config']['Labels'] = {}
-        other['NetworkSettings']['Networks'] = {}
-        other['State'].update(Status='exited', Running=False)
-        self.daemon.rows[other['Id']] = other
-        with self.assertRaises(FenceError): self.fence.engage()
-        self.assertFalse(any(x[3:5] == ['container', 'stop'] for x in self.daemon.calls))
+        with self.assertRaisesRegex(FenceError, 'isolation not verified'):
+            self.fence.engage()
+        self.assertFalse(any(call[3:5] in (['container', 'update'], ['container', 'stop'])
+                             for call in self.daemon.calls))
+
     def test_gate_and_timeout_and_mismatch(self):
         self.gates[1].fail = True
         with self.assertRaises(FenceError): self.fence.engage()
