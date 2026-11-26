@@ -31,8 +31,8 @@ class Interrupted(SupervisorError):
 class Supervisor:
     """The callback receives the locked Journal and must use durable ordering.
 
-    Recovery must be retry-safe. The supervisor never calls recovery for a
-    post-commit journal. All participants must use the same journal lock.
+    Recovery must be retry-safe. The supervisor never calls a recovery worker
+    after committed or old_ready. All participants must use the same journal lock.
     """
     def __init__(self, directory, update, recover):
         self.directory = directory
@@ -102,8 +102,15 @@ class Supervisor:
 
     def _recovery_locked(self, journal):
         decision = journal.recovery_decision()
-        if decision not in ('no_operation', 'leave_new'):
-            self._worker(journal, lambda j: self.recover(j, decision))
+        if decision in ('no_operation', 'leave_new'):
+            return
+        if decision == 'resume_old':
+            # Old writers might already have accepted new state. The generic
+            # rollback worker must not run and automatic release is unavailable.
+            raise SupervisorError('old runtime release requires operator resolution')
+        if decision not in ('begin_rollback', 'restore_old', 'recover_old_runtime'):
+            raise SupervisorError('unsupported recovery decision')
+        self._worker(journal, lambda j: self.recover(j, decision))
 
     def recover_pending(self):
         with _journal.Journal(self.directory) as journal:

@@ -11,6 +11,7 @@ import json
 import os
 import stat
 
+from username_migration_docker_fence import DOCKER_FENCE_INTENT_VERSION
 from username_migration_systemd_gate import SystemdGate
 from username_migration_update_gate import UpdateGate
 
@@ -110,7 +111,8 @@ class TestGateAdapter:
                     raise ValueError()
                 with os.fdopen(fd, 'r', closefd=False) as f:
                     data = json.load(f)
-                if not isinstance(data, dict) or data.get('version') != 5 or data.get('operation_id') != self.operation_id:
+                if (not isinstance(data, dict) or data.get('version') != DOCKER_FENCE_INTENT_VERSION
+                        or data.get('operation_id') != self.operation_id):
                     raise ValueError()
             except (ValueError, OSError, TypeError):
                 raise AdapterError('invalid Docker fence intent') from None

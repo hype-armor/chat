@@ -26,3 +26,31 @@ name collisions. This fails closed: the name is not assigned. A trigger cannot
 make that old statement return its expected conflict result for a retired name
 without an account row for it. Creating such ghost accounts, or weakening the
 permanent reservation, is not an acceptable workaround.
+
+## Writer fence and recovery gates
+
+The tracked migration orchestrator refuses operational execution. A successful
+restore or application restart does not make it safe to open the gate.
+
+- In normal service, PostgreSQL must retain its configured TCP access. During
+  maintenance, isolate both stores, not just the web proxy. Cover direct SQL,
+  S3, SeaweedFS administration, background tasks, bots, and volume access.
+  Bind the operation to the exact storage and runtime identities. Stop on
+  unknown topology or incomplete drain. Credential rotation alone does not end
+  existing SQL sessions or block unauthenticated storage endpoints.
+- Keep a persistent startup gate independent of the migration controller. A
+  controller crash must not start old writers or leave a worker that can still
+  write while recovery is running. Treat uncertain Docker daemon effects as
+  unresolved until independently reconciled.
+- Before `committed`, keep external ingress closed. After `committed`, never
+  restore the old backup or restart old writers. To roll back before commit,
+  restore both stores and verify them before recording `old_ready`. In the
+  coordinator protocol, record `old_ready` durably before old application
+  startup or writer credential exposure. After `old_ready`, never restore
+  again. Do not confuse this with the separate old-release adapter protocol.
+
+The opt-in `python3 scripts/test_migration_maintenance_namespace.py --run-disposable`
+check uses synthetic listeners in a private Linux network and PID namespace.
+It verifies that the observer cannot use the maintenance listener and that
+killing the namespace controller also stops a detached worker. It does not
+exercise the Docker daemon, real stores, host power loss, or production fencing.

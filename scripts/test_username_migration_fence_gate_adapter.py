@@ -71,8 +71,10 @@ class AdapterTests(unittest.TestCase):
             # Synthetic intent exercises this adapter only; it is not fence authorization.
             container_id = 'a' * 64
             intent = {
-                'version': 5, 'operation_id': self.op, 'project': 'chat',
-                'services': {'db': container_id}, 'database': 'db', 'volumes': {},
+                'version': docker_fence.DOCKER_FENCE_INTENT_VERSION,
+                'operation_id': self.op, 'project': 'chat',
+                'services': {'db': container_id}, 'database': 'db',
+                'inventory': {'container_ids': [container_id], 'volumes': {}, 'protected_mounts': {}},
                 'networks': ['chat_net'],
                 'policies': {container_id: {'Name': 'no', 'MaximumRetryCount': 0}},
                 'stop_order': ['db'], 'clean_drain_services': [],
