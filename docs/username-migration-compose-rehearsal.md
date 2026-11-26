@@ -17,11 +17,19 @@ rollback. The separate application rehearsal is the evidence for those paths.
   restore, and no existing containers, user networks, or volumes. The daemon
   must listen directly on the one private Unix socket, not on an API proxy. The
   runner never provisions a daemon, installs packages, pulls images, or builds.
+  On systemd, run rootless Docker as a delegated user service, not a system
+  service with `User=`. Enable lingering and the user service for the reboot
+  check. Before preparing the rehearsal daemon, verify a pinned scratch
+  container can start on an internal bridge with `--log-driver=local`,
+  `--log-opt=max-size=1m`, `--log-opt=max-file=1`, and
+  `--log-opt=compress=false`. Use a separate scratch daemon and stop it before
+  starting the rehearsal daemon. Do not copy scratch state into the rehearsal.
 - Create a short, absolute, nonsymlink workspace path with mode `0700`. The
   daemon command line must set `--data-root=$WORK/engine-data` and
   `--host=unix://$WORK/engine.sock` (the only host). Use a separate daemon
   execution root and PID file. The data directory must have mode `0700` and the
   socket must have mode `0600`. All 3 paths must belong to the fixture user.
+  Reassert these modes after each daemon start, including after a reboot.
   The runner expects `/usr/bin/docker` and a local `/usr/bin/dockerd` socket
   peer. It will not use `/run/docker.sock`, a Docker context, or an inherited
   CLI configuration. Keep the workspace on persistent guest storage for a
