@@ -7,9 +7,11 @@ module is not an authorization to migrate or to start either server version.
 It deliberately refuses unsupported configurations. It does not back up data.
 """
 import hashlib
+import hmac
 import json
 import os
 import re
+import secrets
 import stat
 import subprocess
 import time
@@ -25,9 +27,30 @@ def _run(args, *, input=None):
                           check=True, timeout=120).stdout.strip()
 
 
+def _credential_digest(password, salt):
+    # One bounded work factor per journal version. Never take it from disk.
+    return hashlib.scrypt(password.encode('ascii'), salt=salt, n=2**15, r=8, p=3,
+                          maxmem=64 * 1024**2, dklen=32).hex()
+
+
+def _journal_matches(saved, identity, password):
+    if not isinstance(saved, dict) or set(saved) != {*identity, 'credential_verifier'}:
+        return False
+    if any(saved[key] != value for key, value in identity.items()):
+        return False
+    verifier = saved['credential_verifier']
+    if not isinstance(verifier, dict) or set(verifier) != {'scheme', 'salt', 'digest'}:
+        return False
+    salt, digest = verifier['salt'], verifier['digest']
+    if (verifier['scheme'] != 'scrypt-v1'
+            or not isinstance(salt, str) or not re.fullmatch(r'[0-9a-f]{32}', salt)
+            or not isinstance(digest, str) or not re.fullmatch(r'[0-9a-f]{64}', digest)):
+        return False
+    return hmac.compare_digest(_credential_digest(password, bytes.fromhex(salt)), digest)
+
+
 def _journal(path, operation_id, name, image, volume, role, password):
-    record = {'operation_id': operation_id, 'name': name, 'image': image, 'volume': volume,
-              'role': role, 'credential_hash': hashlib.sha256(password.encode('ascii')).hexdigest()}
+    identity = {'operation_id': operation_id, 'name': name, 'image': image, 'volume': volume, 'role': role}
     # Keep all operations relative to one trusted, private directory descriptor.
     parent, filename = os.path.split(os.path.abspath(path))
     if filename in ('', '.', '..'):
@@ -45,12 +68,14 @@ def _journal(path, operation_id, name, image, volume, role, password):
                 info = os.fstat(stream.fileno())
                 if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
                         or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1
-                        or info.st_size > 4096 or json.load(stream) != record):
+                        or info.st_size > 4096 or not _journal_matches(json.load(stream), identity, password)):
                     raise RotationError('rotation journal identity mismatch')
                 os.fsync(stream.fileno())
         else:
             with os.fdopen(fd, 'w', encoding='utf-8') as stream:
-                json.dump(record, stream, sort_keys=True)
+                salt = secrets.token_bytes(16)
+                verifier = {'scheme': 'scrypt-v1', 'salt': salt.hex(), 'digest': _credential_digest(password, salt)}
+                json.dump({**identity, 'credential_verifier': verifier}, stream, sort_keys=True)
                 stream.flush()
                 os.fsync(stream.fileno())
         os.fsync(directory)
@@ -91,7 +116,9 @@ def rotate_isolated(image, volume, role, password, *, operation_id, journal_path
     durably stored password and the same verified target. The caller must
     serialize attempts and protect the journal directory from other writers.
     Use the same operation ID and journal path on every retry. The journal
-    stores no credentials. Volume checks do not provide exclusive access;
+    stores only a salted scrypt verifier, not the credential. Unsupported or
+    legacy journals are rejected without changing the journal or starting Docker.
+    Volume checks do not provide exclusive access;
     the caller must hold an enforceable supervisor boundary throughout.
     """
     if not re.fullmatch(r'sha256:[0-9a-f]{64}', image):

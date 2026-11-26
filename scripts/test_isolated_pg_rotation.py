@@ -139,6 +139,41 @@ class RotationTests(unittest.TestCase):
                     module.rotate_isolated(IMAGE, 'chat_postgres', role, password, operation_id=OP, journal_path=self.journal, run=self.docker)
         self.assertEqual(len(self.docker.calls), before)
 
+    def test_journal_uses_unique_salts_and_preserves_existing_retry_bytes(self):
+        self.rotate()
+        first = Path(self.journal).read_bytes()
+        self.rotate()
+        self.assertEqual(Path(self.journal).read_bytes(), first)
+        second = Path(self.tmp.name) / 'second'
+        module.rotate_isolated(IMAGE, 'chat_postgres', 'chat', SECRET, operation_id=OP,
+                               journal_path=second, run=self.docker)
+        verifier = json.loads(first)['credential_verifier']
+        other = json.loads(second.read_bytes())['credential_verifier']
+        self.assertEqual(verifier['scheme'], 'scrypt-v1')
+        self.assertNotEqual(verifier['salt'], other['salt'])
+        self.assertNotEqual(verifier['digest'], other['digest'])
+        self.assertNotIn(SECRET.encode(), first)
+
+    def test_legacy_and_invalid_verifiers_fail_closed_without_rewriting_journal(self):
+        self.rotate()
+        journal = Path(self.journal)
+        original = json.loads(journal.read_bytes())
+        legacy = dict(original)
+        del legacy['credential_verifier']
+        legacy['credential_hash'] = '0' * 64
+        candidates = [legacy]
+        for key, value in [('scheme', 'scrypt-v2'), ('salt', 'wrong'), ('digest', '0' * 64)]:
+            candidates.append({**original, 'credential_verifier': {**original['credential_verifier'], key: value}})
+        before = len(self.docker.calls)
+        for record in candidates:
+            with self.subTest(record=record):
+                body = json.dumps(record).encode()
+                journal.write_bytes(body)
+                with self.assertRaisesRegex(module.RotationError, 'journal unavailable or mismatched'):
+                    self.rotate()
+                self.assertEqual(journal.read_bytes(), body)
+        self.assertEqual(len(self.docker.calls), before)
+
     def test_invalid_values_never_invoke_docker(self):
         for image, volume, role, password in [('latest', 'chat_postgres', 'chat', SECRET), (IMAGE, 'bad/name', 'chat', SECRET), (IMAGE, 'chat_postgres', 'x;drop', SECRET), (IMAGE, 'chat_postgres', 'chat', 'password')]:
             with self.subTest(image=image, volume=volume, role=role):
