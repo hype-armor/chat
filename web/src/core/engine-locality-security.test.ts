@@ -38,6 +38,10 @@ function setup() {
     getJson: vi.fn(async (key: string) => structuredClone(values.get(key))),
     putJson: vi.fn(async (key: string, value: unknown) => { values.set(key, structuredClone(value)) }),
     putBytes: vi.fn(async () => {}),
+    putBatch: vi.fn(async (entries: readonly (readonly [string, Uint8Array])[]) => {
+      const staged = entries.map(([key, value]) => [key, key === 'app' ? JSON.parse(new TextDecoder().decode(value)) : value.slice()] as const)
+      for (const [key, value] of staged) values.set(key, value)
+    }),
     putKey: vi.fn(async () => {}),
     clear: vi.fn(async () => { values.clear() }),
   } as unknown as Engine['store']

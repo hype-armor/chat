@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test'
+import { devStorageSpecs } from './playwright.dev-storage-specs'
 
 // No chat-server, database, echo bot, LiveKit, or existing preview service.
 process.env.E2E_UI_FIXTURES = '1'
@@ -8,6 +9,7 @@ const origin = `http://127.0.0.1:${port}`
 export default defineConfig({
   testDir: 'e2e',
   testMatch: [
+    ...devStorageSpecs,
     'reactions.spec.ts',
     'deletion.spec.ts',
     'quality-of-life.spec.ts',
@@ -21,6 +23,7 @@ export default defineConfig({
     'issue132-chat.fixture.spec.ts',
     'locality.fixture.spec.ts',
     'responsive-details.spec.ts',
+    'restricted-channels.fixture.spec.ts',
     'details-priority.spec.ts',
     'storage-usage.fixture.spec.ts',
     'gif-fixture.spec.ts',

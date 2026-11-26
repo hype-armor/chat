@@ -59,7 +59,9 @@ describe('reply and typing WASM contracts', () => {
     engine['store'] = {
       getJson: async (key: string) => values.get(key),
       putJson: async (key: string, value: unknown) => { values.set(key, structuredClone(value)) },
-      putBytes: async (key: string, value: Uint8Array) => { values.set(key, value.slice()) },
+      putBatch: async (entries: readonly (readonly [string, Uint8Array])[]) => {
+        for (const [key, value] of entries) values.set(key, key === 'app' ? JSON.parse(new TextDecoder().decode(value)) : value.slice())
+      },
     } as unknown as Engine['store']
     engine['flushOutbox'] = vi.fn(async () => {})
     await engine.sendText(id, 'Worker original')

@@ -105,6 +105,14 @@ export class CoreClient {
     return expect(await this.call({ type: 'createGroup', name, usernames }), 'conversation').conversationId
   }
 
+  async createRestrictedChannel(parentId: string, name: string, usernames: string[]): Promise<string> {
+    return expect(await this.call({ type: 'createRestrictedChannel', parentId, name, usernames }), 'conversation').conversationId
+  }
+
+  async inviteToRestrictedChannel(channelId: string, usernames: string[]): Promise<void> {
+    expect(await this.call({ type: 'inviteToRestrictedChannel', channelId, usernames }), 'ok')
+  }
+
   async addMembers(conversationId: string, usernames: string[]) {
     expect(await this.call({ type: 'addMembers', conversationId, usernames }), 'ok')
   }
@@ -119,6 +127,10 @@ export class CoreClient {
 
   async members(conversationId: string): Promise<MemberInfo[]> {
     return expect(await this.call({ type: 'members', conversationId }), 'members').members
+  }
+
+  async setGroupTopic(conversationId: string, text: string) {
+    expect(await this.call({ type: 'setGroupTopic', conversationId, text }), 'ok')
   }
 
   async renameGroup(conversationId: string, name: string) {

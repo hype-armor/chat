@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Pull and rebuild only changed server, web, and echo inputs.
-# First run establishes a baseline. --force rebuilds all three images.
+# Pull and rebuild changed server and web inputs before restarting.
+# This updater builds and starts the app stack, not development test bots.
+# First run establishes a baseline. --force rebuilds the app images.
 # --dry-run inspects the current checkout without pulling or deploying.
-# After success, prune unused builder cache older than 24h (builder-wide).
+# --build-only pulls and builds but does not stop or start services.
+# A supervisor may inherit the existing update lock via CHAT_UPDATE_LOCK_FD.
+# After deployment, prune unused builder cache older than 24h (builder-wide).
 # Override retention with CHAT_BUILD_CACHE_MAX_AGE, e.g. 72h.
 set -euo pipefail
 
@@ -15,9 +18,9 @@ import stat
 import subprocess
 import sys
 
-compose = ['docker', 'compose', '-f', 'deploy/compose/docker-compose.yml', '--profile', 'echo']
+compose = ['docker', 'compose', '--env-file', '.env', '-f', 'deploy/compose/docker-compose.yml']
 config = json.loads(subprocess.check_output(compose + ['config', '--format', 'json']))
-services = ['server', 'web', 'echo']
+services = ['server', 'web']
 hashes = {name: hashlib.sha256(b'chat-update-inputs-v1\0') for name in services}
 
 # Treat unknown inputs conservatively. Keep this map aligned with the Dockerfiles.
@@ -30,14 +33,16 @@ def affected(path):
         return services
     if path.startswith('crates/chat-server/'):
         return ['server']
-    if path.startswith(('crates/chat-core/', 'crates/chat-echo/')):
-        return ['web', 'echo'] if path.startswith('crates/chat-core/') else ['echo']
+    if path.startswith('crates/chat-core/'):
+        return ['web']
+    if path.startswith('crates/chat-echo/'):
+        return []
     if path.startswith(('web/', 'patches/')) or path in ('package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', '.npmrc', 'scripts/build-wasm.sh', 'scripts/wasm-bindgen-version.sh'):
         return ['web']
     if path == 'deploy/docker/server.Dockerfile':
         return ['server']
     if path == 'deploy/docker/echo.Dockerfile':
-        return ['echo']
+        return []
     if path in ('deploy/docker/web.Dockerfile', 'deploy/docker/nginx.conf.template', 'deploy/docker/security-headers.inc.template'):
         return ['web']
     if path.startswith(('docs/', '.github/', 'deploy/helm/', 'deploy/k3s/', 'deploy/compose/')) or path in ('README.md', 'CLAUDE.md', 'AGENTS.md', 'LICENSE', 'LICENSE.md') or path.startswith('scripts/test-'):
@@ -98,12 +103,13 @@ PY
 }
 
 main() {
-  local force=false dry_run=false
+  local force=false dry_run=false build_only=false
   while (($#)); do
     case "$1" in
       --force) force=true ;;
       --dry-run) dry_run=true ;;
-      --help|-h) printf 'Usage: %s [--force] [--dry-run]\n' "$0"; return ;;
+      --build-only) build_only=true ;;
+      --help|-h) printf 'Usage: %s [--force] [--dry-run] [--build-only]\n' "$0"; return ;;
       *) printf 'Unknown argument: %s\n' "$1" >&2; return 2 ;;
     esac
     shift
@@ -113,11 +119,51 @@ main() {
   cd -- "$(dirname -- "$script")"
   local state
   state=$(git rev-parse --git-path chat-update)
-  local -a compose=(docker compose -f deploy/compose/docker-compose.yml --profile echo)
+  # Do not let the shell or .env enable development profiles. HTTPS, if it
+  # was running, is selected explicitly below.
+  export COMPOSE_PROFILES=
+  local -a compose=(docker compose --env-file .env -f deploy/compose/docker-compose.yml)
   if [[ $dry_run == false ]]; then
     mkdir -p -- "$state"
-    exec 9>"$state/lock"
-    flock -n 9 || { printf 'Another update is running.\n' >&2; return 1; }
+    if [[ -n ${CHAT_UPDATE_LOCK_FD:-} ]]; then
+      # A maintenance supervisor can hold this exact lock across builds and
+      # deployment. A different or closed descriptor is never accepted.
+      local inherited=$CHAT_UPDATE_LOCK_FD inherited_id lock_id
+      [[ $inherited =~ ^[0-9]+$ && $inherited -ge 3 && $inherited -le 255 ]] || {
+        printf 'Invalid inherited update lock descriptor.\n' >&2; return 1;
+      }
+      inherited_id=$(stat -Lc '%d:%i' "/proc/self/fd/$inherited") || return 1
+      lock_id=$(stat -Lc '%d:%i' "$state/lock") || return 1
+      [[ $inherited_id == "$lock_id" ]] || {
+        printf 'Inherited descriptor is not the update lock.\n' >&2; return 1;
+      }
+      flock -n "$inherited" || { printf 'Another update is running.\n' >&2; return 1; }
+    else
+      exec 9>"$state/lock"
+      flock -n 9 || { printf 'Another update is running.\n' >&2; return 1; }
+    fi
+    # The supervisor creates $state/maintenance-in-progress under this same
+    # lock before a migration and removes it only after recovery is complete.
+    # The Git directory and state directory must be private to trusted operators;
+    # this presence gate is not protection against a writer that can remove it.
+    # Any object at this name blocks updates, including malformed files and links.
+    if ! python3 - "$state/maintenance-in-progress" <<'PY'
+import os
+import sys
+
+try:
+    os.lstat(sys.argv[1])
+except FileNotFoundError:
+    sys.exit(0)
+except OSError as error:
+    print(f'Cannot check maintenance marker: {error}', file=sys.stderr)
+    sys.exit(1)
+print('Maintenance marker exists; supervised recovery is required.', file=sys.stderr)
+sys.exit(1)
+PY
+    then
+      return 1
+    fi
     git pull --ff-only
   else
     printf 'Dry run: current checkout only; no pull, build, or deployment.\n'
@@ -149,7 +195,7 @@ main() {
 
   # Never call the wrapper with an empty list: its default builds all images.
   if ((${#builds[@]})); then
-    sudo env CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}" ./scripts/compose-build.sh "${builds[@]}"
+    sudo env CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-$(nproc)}" ./scripts/compose-build.sh "${builds[@]}"
   else
     printf 'No image builds needed.\n'
   fi
@@ -158,14 +204,23 @@ main() {
     printf 'Build inputs changed during the update. Run update.sh again.\n' >&2
     return 1
   fi
-  while IFS=$'\t' read -r service digest image bind_digest; do
-    local -a extra=()
-    local item
-    for item in "${recreate[@]}"; do
-      if [[ $item == "$service" ]]; then extra=(--force-recreate); fi
-    done
-    "${compose[@]}" up -d --no-deps --no-build "${extra[@]}" "$service"
-  done <<< "$plan"
+  if [[ $build_only == true ]]; then
+    printf 'Build complete; services were not changed.\n'
+    return
+  fi
+  # Remember whether the optional HTTPS profile is running. Compose down
+  # removes the project's containers, including dependencies and profiles.
+  local running
+  running=$("${compose[@]}" --profile https ps --status running --services)
+  local -a startup=("${compose[@]}")
+  if grep -Fxq https <<< "$running"; then
+    startup+=(--profile https)
+  fi
+  # Keep the existing stack online during the builds above. Do not pass -v:
+  # PostgreSQL, blobs, and other named volumes must survive the restart.
+  # Include legacy echo containers only in shutdown, never in startup.
+  "${compose[@]}" --profile echo --profile https down
+  "${startup[@]}" up -d --no-build
 
   # Advance state only after every build and deployment command succeeds.
   local temporary

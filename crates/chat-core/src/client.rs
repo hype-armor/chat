@@ -320,11 +320,90 @@ impl Client {
         content: &Content,
         message_id: Vec<u8>,
     ) -> Result<Envelope> {
+        if matches!(content.body, Some(content::Body::Presence(_))) {
+            return Err(Error::Malformed("presence requires ephemeral transport"));
+        }
         let conv = self
             .conversations
             .get_mut(conversation_id)
             .ok_or(Error::Malformed("unknown conversation"))?;
         envelope::seal(conv, &self.device, &content.encode_to_vec(), message_id)
+    }
+
+    /// Experimental primitive only. Persist the snapshot before publishing the
+    /// ciphertext. A separate authorized ephemeral transport is required.
+    pub fn encrypt_presence(
+        &mut self,
+        event: &chat_proto::v1::PresenceEvent,
+        now_ms: u64,
+    ) -> Result<Vec<u8>> {
+        let conv = self
+            .conversations
+            .get_mut(&event.conversation_id)
+            .ok_or(Error::Malformed("unknown conversation"))?;
+        if !crate::presence::valid_event(
+            event,
+            self.device.identity(),
+            &conv.member_identities(),
+            &event.conversation_id,
+            &event.recipient_account,
+            event.consent_generation,
+            now_ms,
+        ) {
+            return Err(Error::Malformed("invalid presence"));
+        }
+        let content = Content {
+            sent_at_ms: event.sent_at_ms,
+            body: Some(content::Body::Presence(event.clone())),
+            reply_to: None,
+            reply_to_hash: None,
+        };
+        conv.encrypt(&self.device, &content.encode_to_vec())
+    }
+
+    /// Consume an ephemeral ciphertext with independently authenticated current
+    /// authorization. Persist the snapshot even when the result is invalid.
+    pub fn receive_presence(
+        &mut self,
+        conversation_id: &[u8],
+        ciphertext: &[u8],
+        sender_account: &[u8],
+        generation: u64,
+        now_ms: u64,
+    ) -> Result<Option<(Vec<u8>, chat_proto::v1::PresenceEvent)>> {
+        let conv = self
+            .conversations
+            .get_mut(conversation_id)
+            .ok_or(Error::Malformed("unknown conversation"))?;
+        let Received::Application { sender, data } = conv.receive(&self.device, ciphertext)? else {
+            return Ok(None);
+        };
+        let Ok(content) = Content::decode(data.as_slice()) else {
+            return Ok(None);
+        };
+        let Some(content::Body::Presence(event)) = content.body else {
+            return Ok(None);
+        };
+        if sender_account.len() != 16
+            || sender.len() != 32
+            || sender[..16] != *sender_account
+            || self.device.identity().len() != 32
+            || content.sent_at_ms != event.sent_at_ms
+            || content.reply_to.is_some()
+            || content.reply_to_hash.is_some()
+            || !crate::presence::valid_event(
+                &event,
+                &sender,
+                &conv.member_identities(),
+                conversation_id,
+                &self.device.identity()[..16],
+                generation,
+                now_ms,
+            )
+        {
+            return Ok(None);
+        }
+        Ok(Some((sender, event)))
     }
 
     pub fn receive(&mut self, env: &Envelope) -> Result<Event> {
@@ -344,6 +423,10 @@ impl Client {
         Ok(match envelope::open(conv, &self.device, env)? {
             Received::Application { sender, data } => {
                 let content = Content::decode(data.as_slice())?;
+                // Presence is never exposed through the durable receive path.
+                if matches!(content.body, Some(content::Body::Presence(_))) {
+                    return Ok(Event::Ignored);
+                }
                 if let Some(content::Body::Deletion(deletion)) = &content.body
                     && !valid_deletion(&sender, deletion, content.sent_at_ms)
                 {
@@ -561,6 +644,132 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn group_topic_is_encrypted_and_legacy_readers_advance() {
+        #[derive(Clone, PartialEq, prost::Message)]
+        struct LegacyContent {
+            #[prost(uint64, tag = "1")]
+            sent_at_ms: u64,
+            #[prost(message, optional, tag = "2")]
+            text: Option<Text>,
+        }
+        let mut alice = Client::new(Device::new(b"alice").unwrap());
+        let mut bob = Client::new(Device::new(b"bob").unwrap());
+        let kp = bob.key_packages(1).unwrap().remove(0);
+        let started = alice
+            .start_conversation(
+                &[JoinPackage {
+                    identity: b"bob",
+                    key_package: &kp,
+                }],
+                vec![1],
+            )
+            .unwrap();
+        bob.receive(&started.welcome).unwrap();
+        let id = started.conversation_id;
+        for (index, (topic, clock)) in [("secret topic", 1), ("", 2)].into_iter().enumerate() {
+            let content = Content {
+                sent_at_ms: 2,
+                reply_to: None,
+                reply_to_hash: None,
+                body: Some(content::Body::GroupTopic(chat_proto::v1::GroupTopic {
+                    text: topic.into(),
+                    clock,
+                })),
+            };
+            let env = alice.send(&id, &content, vec![index as u8 + 2]).unwrap();
+            assert_eq!(env.content_type, i32::from(ContentType::Application));
+            let Event::Message {
+                sender,
+                content: received,
+                conversation_id,
+            } = bob.receive(&env).unwrap()
+            else {
+                panic!("expected an authenticated topic");
+            };
+            assert_eq!(sender, b"alice");
+            assert_eq!(conversation_id, id);
+            assert_eq!(received, content);
+            assert!(
+                LegacyContent::decode(received.encode_to_vec().as_slice())
+                    .unwrap()
+                    .text
+                    .is_none()
+            );
+        }
+        let mut bob = Client::restore(&bob.snapshot().unwrap()).unwrap();
+        let next = alice.send(&id, &text("after topic"), vec![4]).unwrap();
+        assert!(
+            matches!(bob.receive(&next).unwrap(), Event::Message { content, .. } if content == text("after topic"))
+        );
+    }
+
+    #[test]
+    fn restricted_channel_info_is_encrypted_and_legacy_readers_advance() {
+        #[derive(Clone, PartialEq, prost::Message)]
+        struct LegacyContent {
+            #[prost(uint64, tag = "1")]
+            sent_at_ms: u64,
+            #[prost(message, optional, tag = "2")]
+            text: Option<Text>,
+            #[prost(message, optional, tag = "4")]
+            group_info: Option<chat_proto::v1::GroupInfo>,
+        }
+        let mut alice = Client::new(Device::new(b"alice").unwrap());
+        let mut bob = Client::new(Device::new(b"bob").unwrap());
+        let kp = bob.key_packages(1).unwrap().remove(0);
+        let started = alice
+            .start_conversation(
+                &[JoinPackage {
+                    identity: b"bob",
+                    key_package: &kp,
+                }],
+                vec![1; 16],
+            )
+            .unwrap();
+        bob.receive(&started.welcome).unwrap();
+        let id = started.conversation_id;
+        let content = Content {
+            sent_at_ms: 2,
+            reply_to: None,
+            reply_to_hash: None,
+            body: Some(content::Body::RestrictedChannelInfo(
+                chat_proto::v1::RestrictedChannelInfo {
+                    parent_conversation_id: vec![7; 16],
+                    name: "secret channel name".into(),
+                },
+            )),
+        };
+        let env = alice.send(&id, &content, vec![2; 16]).unwrap();
+        assert_eq!(env.content_type, i32::from(ContentType::Application));
+        assert!(
+            !env.encode_to_vec()
+                .windows(b"secret channel name".len())
+                .any(|w| w == b"secret channel name")
+        );
+        let Event::Message {
+            sender,
+            conversation_id,
+            content: received,
+        } = bob.receive(&env).unwrap()
+        else {
+            panic!("expected an authenticated channel info message");
+        };
+        assert_eq!(sender, b"alice");
+        assert_eq!(conversation_id, id);
+        assert_eq!(received, content);
+        let legacy = LegacyContent::decode(received.encode_to_vec().as_slice()).unwrap();
+        assert!(legacy.text.is_none());
+        assert!(legacy.group_info.is_none());
+        let mut bob = Client::restore(&bob.snapshot().unwrap()).unwrap();
+        let next = alice
+            .send(&id, &text("after channel info"), vec![3; 16])
+            .unwrap();
+        assert!(
+            matches!(bob.receive(&next).unwrap(), Event::Message { content, .. } if content == text("after channel info"))
+        );
     }
 
     #[test]

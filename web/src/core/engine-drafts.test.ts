@@ -44,6 +44,11 @@ function setup(values = new Map<string, unknown>()) {
     getJson: vi.fn(async (key: string) => structuredClone(values.get(key))),
     putJson: vi.fn(async (key: string, value: unknown) => { values.set(key, structuredClone(value)) }),
     putBytes: vi.fn(async () => {}),
+    putBatch: vi.fn(async (entries: readonly (readonly [string, Uint8Array])[]) => {
+      if (new Set(entries.map(([key]) => key)).size !== entries.length) throw new Error('Duplicate storage key in batch')
+      const staged = entries.map(([key, value]) => [key, key === 'app' ? JSON.parse(new TextDecoder().decode(value)) : value.slice()] as const)
+      for (const [key, value] of staged) values.set(key, value)
+    }),
     putFile: vi.fn(async (id: string, body?: Blob) => {
       if (body) values.set(`file:${id}`, body)
       else values.delete(`file:${id}`)
@@ -112,15 +117,17 @@ describe('device-local text drafts', () => {
     await engine.saveDraft(first, '  send me\n', 0)
     const gate = deferred()
     const started = deferred()
-    const original = vi.mocked(engine['store'].putJson).getMockImplementation()!
-    vi.mocked(engine['store'].putJson).mockImplementation(async (key, value) => {
-      if (key === 'app') { started.resolve(); await gate.promise }
-      await original(key, value)
+    const original = vi.mocked(engine['store'].putBatch).getMockImplementation()!
+    vi.mocked(engine['store'].putBatch).mockImplementation(async (entries) => {
+      started.resolve(); await gate.promise
+      await original(entries)
     })
     const sending = engine.sendText(first, 'send me', undefined, 1)
     await started.promise
     expect(events.filter((event) => event.type === 'draft')).toHaveLength(1)
     expect(values.has('app')).toBe(false)
+    expect(values.has('core')).toBe(false)
+    expect(engine['store'].putBatch).toHaveBeenCalledTimes(1)
     expect(engine['flushOutbox']).not.toHaveBeenCalled()
     const request = vi.fn<Engine['request']>(async () => undefined)
     engine['request'] = request
@@ -130,6 +137,7 @@ describe('device-local text drafts', () => {
     gate.resolve()
     await expect(sending).resolves.toEqual({ draft: { text: '', revision: 2 }, consumedRevision: 2 })
     expect(values.get('app')).toMatchObject({ outbox: [expect.objectContaining({ conversationId: first })], draftClears: { [first]: 2 } })
+    expect(values.get('core')).toEqual(new Uint8Array([2]))
     expect(engine['store'].deleteBytes).toHaveBeenCalledWith(draftKey())
     await expect(setup(values).engine.getDraft(first)).resolves.toEqual({ text: '', revision: 2 })
     await expect(engine.saveDraft(first, 'stale recreation', 1)).resolves.toEqual({ applied: false, draft: { text: '', revision: 2 } })
@@ -169,14 +177,12 @@ describe('device-local text drafts', () => {
   })
 
   it('keeps the previous draft visible if app acceptance fails', async () => {
-    const { engine, events } = setup()
+    const { engine, events, values } = setup()
     await engine.saveDraft(first, 'send me', 0)
-    const original = vi.mocked(engine['store'].putJson).getMockImplementation()!
-    vi.mocked(engine['store'].putJson).mockImplementation(async (key, value) => {
-      if (key === 'app') throw new Error('app transaction aborted')
-      await original(key, value)
-    })
+    vi.mocked(engine['store'].putBatch).mockRejectedValue(new Error('app transaction aborted'))
     await expect(engine.sendText(first, 'send me', undefined, 1)).rejects.toThrow('app transaction aborted')
+    expect(values.has('core')).toBe(false)
+    expect(values.has('app')).toBe(false)
     await expect(engine.getDraft(first)).resolves.toEqual({ text: 'send me', revision: 1 })
     expect(engine['state'].draftClears).toEqual({})
     expect(events.filter((event) => event.type === 'draft')).toHaveLength(1)
@@ -187,17 +193,14 @@ describe('device-local text drafts', () => {
     const { engine, values } = setup()
     await engine.saveDraft(first, 'rejected', 0)
     const core = engine['core']
-    const original = vi.mocked(engine['store'].putJson).getMockImplementation()!
-    vi.mocked(engine['store'].putJson).mockImplementation(async (key, value) => {
-      if (key === 'app') throw new Error('app transaction aborted')
-      await original(key, value)
-    })
+    const original = vi.mocked(engine['store'].putBatch).getMockImplementation()!
+    vi.mocked(engine['store'].putBatch).mockRejectedValue(new Error('app transaction aborted'))
     await expect(engine.sendText(first, 'rejected', undefined, 1)).rejects.toThrow('app transaction aborted')
     expect(engine['state'].outbox).toEqual([])
     expect(await engine['stored'](first)).toMatchObject([{ text: 'rejected', status: 'failed' }])
     expect(engine['core']).toBe(core)
     expect(core!.sendText).toHaveBeenCalledTimes(1)
-    vi.mocked(engine['store'].putJson).mockImplementation(original)
+    vi.mocked(engine['store'].putBatch).mockImplementation(original)
     await engine['exclusive'](() => engine['persist']())
     expect(values.get('app')).toMatchObject({ outbox: [], draftClears: {} })
     const request = vi.fn<Engine['request']>(async () => undefined)
@@ -262,11 +265,7 @@ describe('device-local text drafts', () => {
     const { engine, values } = setup()
     vi.spyOn(attachments, 'prepareImage').mockResolvedValue(undefined)
     await engine.saveDraft(first, 'caption', 0)
-    const original = vi.mocked(engine['store'].putJson).getMockImplementation()!
-    vi.mocked(engine['store'].putJson).mockImplementation(async (key, value) => {
-      if (key === 'app') throw new Error('app transaction aborted')
-      await original(key, value)
-    })
+    vi.mocked(engine['store'].putBatch).mockRejectedValue(new Error('app transaction aborted'))
     await expect(engine.sendFile(first, new File(['body'], 'note.txt'), 'caption', undefined, 1)).rejects.toThrow('app transaction aborted')
     await expect(engine.getDraft(first)).resolves.toEqual({ text: 'caption', revision: 1 })
     const history = await engine['stored'](first)
@@ -286,8 +285,8 @@ describe('device-local text drafts', () => {
     await engine.saveDraft(first, 'caption', 0)
     const original = vi.mocked(engine['store'].putJson).getMockImplementation()!
     let historyWrites = 0
+    vi.mocked(engine['store'].putBatch).mockRejectedValue(new Error('app transaction aborted'))
     vi.mocked(engine['store'].putJson).mockImplementation(async (key, value) => {
-      if (key === 'app') throw new Error('app transaction aborted')
       if (key === `messages:${first}` && ++historyWrites > 1) throw new Error('status cleanup failed')
       await original(key, value)
     })
@@ -348,10 +347,10 @@ describe('device-local text drafts', () => {
     vi.spyOn(attachments, 'prepareImage').mockResolvedValue(undefined)
     const gate = deferred()
     const started = deferred()
-    const original = vi.mocked(engine['store'].putJson).getMockImplementation()!
-    vi.mocked(engine['store'].putJson).mockImplementation(async (key, value) => {
-      if (key === 'app') { started.resolve(); await gate.promise }
-      await original(key, value)
+    const original = vi.mocked(engine['store'].putBatch).getMockImplementation()!
+    vi.mocked(engine['store'].putBatch).mockImplementation(async (entries) => {
+      started.resolve(); await gate.promise
+      await original(entries)
     })
     const sending = kind === 'text'
       ? engine.sendText(first, 'accepted')

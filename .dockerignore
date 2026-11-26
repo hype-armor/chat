@@ -11,6 +11,10 @@ chat-bot-state
 bot-config
 bot-invites.json
 bots.env
+.env
+.env.*
+**/.env
+**/.env.*
 .bot-state-test-*
 .bot-ipc-test-*
 .bot-integration-*

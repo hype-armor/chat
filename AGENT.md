@@ -121,7 +121,17 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   `update.sh`. Bot registration/start requires `--enable-bots`. Never replace missing
   keys over existing state or bypass bootstrap quotas. Run `scripts/test-update-with-bots.sh`
   with mock services after updater changes; keep bot config outside Git and build context.
+- The opt-in pre-topic WASM compatibility check uses independently built old/current packages
+  and explicit provenance manifests; see `docs/testing-topic-legacy-wasm.md`.
+  A current-only smoke test is not evidence of old-client compatibility.
+- Keep `VITE_EXPERIMENTAL_GROUP_TOPICS` off in release builds. See
+  `docs/group-topic-state.md` for scope and the isolated real-server browser check.
 - Run browser tests against isolated test services, never a live deployment.
+- Restricted channels are opt-in via `VITE_EXPERIMENTAL_RESTRICTED_CHANNELS=true`.
+  Do not send channel names or child conversation IDs in parent group traffic.
+  Wait for initial relay catch-up. Repair observed removals using exact MLS devices.
+  Preserve revocations across parent rejoin until the child removes those leaves.
+  Do not reuse queued ciphertext or automatically add a restored device during repair.
 - Notification service reset must remain a manual action for the current app worker.
   Unsubscribe before unregistering and reload only after success. Never clear encrypted site data to repair push.
 - Browser and OS permission grants belong to the browser. Do not cache fake grants or keep
@@ -139,6 +149,12 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   Never restore older labels as fallback or reconstruct headers on history load, request acceptance, unblock, or restore.
   Clear old global consent/caches without migration broadcasts. Retain queued MLS ciphertext to avoid ratchet gaps.
   Keep derived caches account/conversation-scoped and outside backup/sync; preserve approximate wording and GeoNames attribution.
+- Migration maintenance must fence PostgreSQL and SeaweedFS writers together.
+  Keep PostgreSQL TCP access in normal service. Preserve the fail-closed
+  production entry point until the persistent startup gate and storage ownership
+  are verified. See `docs/username-migration-deployment.md` for the release boundaries.
+- Run the opt-in Compose fence rehearsal only in a dedicated disposable guest.
+  Never point it at the shared Docker socket. Follow `docs/username-migration-compose-rehearsal.md`.
 - Compose startup and shutdown must load the persistent VAPID environment explicitly.
   The repair command must unset inherited VAPID variables before Compose reads the file.
   Run `python3 scripts/test-vapid-environment.py`; never test repair against live secrets or containers.
@@ -147,6 +163,8 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   `scripts/test-compose-build.sh` after changes to build controls.
 - Run responsive UI and interaction fixtures with
   `PW_ALL_BROWSERS=1 pnpm --filter web exec playwright test -c playwright.fixtures.config.ts`.
+  Run delivery and storage fixtures that import source modules in this Vite suite,
+  not the production-preview E2E suite. Both configs use `devStorageSpecs`.
   These fixtures do not prove call transport. The narrow-header echo-call test
   needs the isolated server and echo bot. Set `E2E_UI_FIXTURE_PORT` to a free
   dedicated port when another session runs UI fixtures. Call UI fixtures must

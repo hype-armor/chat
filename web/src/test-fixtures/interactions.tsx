@@ -10,7 +10,9 @@ import '../styles.css'
 const params = new URLSearchParams(location.search)
 const name = params.get('name') ?? 'Alice'
 const remote = name === 'Alice' ? 'Bob' : 'Alice'
-const isGroup = params.get('group') === '1'
+const restrictedChannels = params.get('channels') === '1'
+const channelRequests: unknown[] = []
+const isGroup = params.get('group') === '1' || restrictedChannels
 const title = params.get('title') ?? remote
 const room = params.get('room') ?? 'fixture'
 const channel = new BroadcastChannel(`interaction-fixture-${room}`)
@@ -55,6 +57,8 @@ const liveActivity = { updates: 0, pauses: 0, stops: [] as string[] }
 const liveStarts: { conversationId: string; durationMs: number | null; location: LocationInfo }[] = []
 const locationSends: { conversationId: string; location: LocationInfo }[] = []
 const leases = new TypingLeases()
+let topicPending: { resolve: () => void; reject: (error: Error) => void } | undefined
+const topicCalls: string[] = []
 let lastTyping = ''
 const typists = () => leases.details(Date.now(), () => true).map(({ account, detail }) => ({ account, name: account, ...detail }))
 const publishTyping = () => {
@@ -193,10 +197,25 @@ const core = {
   typing: async () => typists(),
   setTypingIndicators: async (on: boolean) => { view.typingIndicators = on; renderFixture() },
   avatar: async () => undefined,
-  members: async () => [
-    { account: name, name, isMe: true, isAdmin: true, blocked: false },
-    { account: remote, name: remote, isMe: false, isAdmin: false, blocked: false },
+  setGroupTopic: async (_id: string, text: string) => {
+    topicCalls.push(text)
+    await new Promise<void>((resolve, reject) => { topicPending = { resolve, reject } })
+    view.conversations[0].topic = text
+    renderFixture()
+    emit({ type: 'view', view: { ...view } })
+  },
+  members: async (id: string) => [
+    { account: name, name, username: `${name}.01`, isMe: true, isAdmin: true, blocked: false },
+    ...(id !== 'private-child' ? [{ account: remote, name: remote, username: `${remote}.02`, isMe: false, isAdmin: false, blocked: false }] : []),
+    ...(restrictedChannels && id === 'chat' ? [{ account: 'missing', name: 'Missing profile', isMe: false, isAdmin: false, blocked: false }] : []),
   ],
+  createRestrictedChannel: async (parentId: string, channelName: string, usernames: string[]) => {
+    channelRequests.push({ type: 'create', parentId, name: channelName, usernames })
+    view.conversations.push({ id: 'private-child', title: channelName, isGroup: true, amAdmin: true, status: 'active', memberCount: 1, request: false, unread: 0, lastAt: Date.now(), channelParentId: parentId, canInviteToRestrictedChannel: true })
+    renderFixture()
+    return 'private-child'
+  },
+  inviteToRestrictedChannel: async (channelId: string, usernames: string[]) => { channelRequests.push({ type: 'invite', channelId, usernames }) },
   groupCallStatus: async () => undefined,
   // Keep fixture calls at setup. These tests make no media or transport claim.
   iceServers: () => { callActions.push('answer'); return new Promise(() => {}) },
@@ -256,12 +275,22 @@ const core = {
 } as unknown as CoreClient
 const view: Extract<AppView, { phase: 'ready' }> = {
   phase: 'ready', me: { account: name, username: name, displayName: name }, connection: 'online',
-  conversations: [{ id: 'chat', title, isGroup, amAdmin: isGroup, status: 'active', memberCount: 2, peer: isGroup ? undefined : remote, request: false, unread: 0, lastAt: Date.now() }],
+  conversations: [{ id: 'chat', title, isGroup, amAdmin: isGroup, status: params.get('left') === '1' ? 'left' : 'active', memberCount: 2, peer: isGroup ? undefined : params.get('self') === '1' ? name : remote, request: params.get('request') === '1', unread: 0, lastAt: Date.now(), ...(params.has('topic') ? { topic: params.get('topic')! } : {}), canEditTopic: params.get('topics') === '1', ...(restrictedChannels ? { canCreateRestrictedChannel: true } : {}) }],
   alerts: [], readReceipts: true, typingIndicators: true, relayCalls: true, callStats: false,
   media: { photos: 'never', audio: 'never', video: 'never', files: 'never', quality: 'standard' }, liveSharing: [],
 }
 Object.assign(window, {
   interactionFixture: {
+    channelRequests,
+    pauseChannel() {
+      const child = view.conversations.find((conversation) => conversation.id === 'private-child')
+      if (child) child.channelSendPaused = true
+      renderFixture()
+    },
+    topicCalls: () => [...topicCalls],
+    setCanEditTopic(value: boolean) { view.conversations[0].canEditTopic = value; renderFixture() },
+    acceptTopic: () => { topicPending?.resolve(); topicPending = undefined },
+    rejectTopic: () => { topicPending?.reject(new Error('Topic queue refused')); topicPending = undefined },
     liveStarts,
     locationSends,
     liveActivity,

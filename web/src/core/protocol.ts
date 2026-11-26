@@ -13,6 +13,15 @@ export type ConversationSummary = {
   title: string
   isGroup: boolean
   amAdmin: boolean
+  /** Present only for channel members. Never advertise private children to the parent. */
+  channelParentId?: string
+  canCreateRestrictedChannel?: boolean
+  canInviteToRestrictedChannel?: boolean
+  channelSendPaused?: boolean
+  /** Authenticated encrypted group topic; absent means unknown, empty means cleared. */
+  topic?: string
+  /** Worker-confirmed experimental group topic editing capability. */
+  canEditTopic?: boolean
   /** 'left' / 'removed': read-only history. */
   status: 'active' | 'left' | 'removed' | 'restoring'
   /** Including this user. */
@@ -92,6 +101,8 @@ export type Verification = 'unverified' | 'verified' | 'changed'
 export type SafetyNumber = { digits: string; qrSize: number; qrModules: number[] }
 
 export type MemberInfo = {
+  /** Current username when the worker has an authenticated cached profile. */
+  username?: string
   account: string
   name: string
   isAdmin: boolean
@@ -265,11 +276,14 @@ export type CoreRequest =
   | { type: 'createInvite' }
   | { type: 'startChat'; username: string }
   | { type: 'createGroup'; name: string; usernames: string[] }
+  | { type: 'createRestrictedChannel'; parentId: string; name: string; usernames: string[] }
+  | { type: 'inviteToRestrictedChannel'; channelId: string; usernames: string[] }
   | { type: 'addMembers'; conversationId: string; usernames: string[] }
   | { type: 'members'; conversationId: string }
   | { type: 'pushKey' }
   | { type: 'enablePush'; subscription: PushSubscriptionJSON }
   | { type: 'renameGroup'; conversationId: string; name: string }
+  | { type: 'setGroupTopic'; conversationId: string; text: string }
   | { type: 'makeAdmin'; conversationId: string; account: string }
   | { type: 'removeMember'; conversationId: string; account: string }
   | { type: 'leaveGroup'; conversationId: string }

@@ -17,6 +17,22 @@ class FakeWorker implements WorkerLike {
 }
 
 describe('CoreClient', () => {
+  it('routes restricted channel creation and invitation through the worker', async () => {
+    const worker = new FakeWorker()
+    const client = new CoreClient(worker)
+    const creation = client.createRestrictedChannel('parent', 'Private plans', ['alex.27'])
+    expect(worker.sent[0].request).toEqual({ type: 'createRestrictedChannel', parentId: 'parent', name: 'Private plans', usernames: ['alex.27'] })
+    worker.reply({ id: worker.sent[0].id, body: { type: 'conversation', conversationId: 'child' } })
+    await expect(creation).resolves.toBe('child')
+    const invitation = client.inviteToRestrictedChannel('child', ['sam.04'])
+    expect(worker.sent[1].request).toEqual({ type: 'inviteToRestrictedChannel', channelId: 'child', usernames: ['sam.04'] })
+    worker.reply({ id: worker.sent[1].id, body: { type: 'ok' } })
+    await expect(invitation).resolves.toBeUndefined()
+    const rejected = client.inviteToRestrictedChannel('child', ['outsider.99'])
+    worker.reply({ id: worker.sent[2].id, body: { type: 'error', message: 'Parent membership required' } })
+    await expect(rejected).rejects.toThrow('Parent membership required')
+  })
+
   it('matches responses to requests by id, in any order', async () => {
     const worker = new FakeWorker()
     const client = new CoreClient(worker)
