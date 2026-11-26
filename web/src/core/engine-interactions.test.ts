@@ -107,6 +107,23 @@ describe('engine typing integration', () => {
     engine['clearTyping']()
   })
 
+  it('publishes activity changes without persisting them and expires the lease', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(50_000)
+    const { engine, apply, events, values } = setup()
+    await apply({ typingActive: true, typingExpiresAtMs: 58_000, typingActivity: 'thinking' })
+    expect(engine.typing(conversationId)).toEqual([{ account: peer, name: 'Alex', activity: 'thinking' }])
+    await apply({ typingActive: true, sentAtMs: 50_001, typingExpiresAtMs: 58_001, typingActivity: 'using', typingTool: 'read_file' })
+    expect(engine.typing(conversationId)).toEqual([{ account: peer, name: 'Alex', activity: 'using', tool: 'read_file' }])
+    await apply({ typingActive: true, sentAtMs: 50_002, typingExpiresAtMs: 58_002, typingActivity: 'using', typingTool: 'bad\n' })
+    expect(engine.typing(conversationId)).toEqual([{ account: peer, name: 'Alex' }])
+    expect(values.size).toBe(0)
+    expect(events.every((event) => event.type === 'typing')).toBe(true)
+    vi.advanceTimersByTime(8_250)
+    expect(engine.typing(conversationId)).toEqual([])
+    engine['clearTyping']()
+  })
+
   it('retains the receiver time floor after pruning and rejects a delayed start after rollback', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(50_000)

@@ -333,8 +333,12 @@ export class EventView {
     set text(value: string | null | undefined);
     get typingActive(): boolean | undefined;
     set typingActive(value: boolean | null | undefined);
+    get typingActivity(): string | undefined;
+    set typingActivity(value: string | null | undefined);
     get typingExpiresAtMs(): number | undefined;
     set typingExpiresAtMs(value: number | null | undefined);
+    get typingTool(): string | undefined;
+    set typingTool(value: string | null | undefined);
 }
 
 /**
@@ -602,7 +606,9 @@ export interface InitOutput {
     readonly __wbg_get_eventview_sentAtMs: (a: number) => number;
     readonly __wbg_get_eventview_text: (a: number) => [number, number];
     readonly __wbg_get_eventview_typingActive: (a: number) => number;
+    readonly __wbg_get_eventview_typingActivity: (a: number) => [number, number];
     readonly __wbg_get_eventview_typingExpiresAtMs: (a: number) => [number, number];
+    readonly __wbg_get_eventview_typingTool: (a: number) => [number, number];
     readonly __wbg_get_livelocationview_expiresAtMs: (a: number) => number;
     readonly __wbg_get_livelocationview_location: (a: number) => number;
     readonly __wbg_get_livelocationview_sessionId: (a: number) => [number, number];
@@ -697,7 +703,9 @@ export interface InitOutput {
     readonly __wbg_set_eventview_sentAtMs: (a: number, b: number) => void;
     readonly __wbg_set_eventview_text: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_typingActive: (a: number, b: number) => void;
+    readonly __wbg_set_eventview_typingActivity: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_typingExpiresAtMs: (a: number, b: number, c: number) => void;
+    readonly __wbg_set_eventview_typingTool: (a: number, b: number, c: number) => void;
     readonly __wbg_set_livelocationview_expiresAtMs: (a: number, b: number) => void;
     readonly __wbg_set_livelocationview_location: (a: number, b: number) => void;
     readonly __wbg_set_livelocationview_sessionId: (a: number, b: number, c: number) => void;

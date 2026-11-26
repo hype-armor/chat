@@ -60,7 +60,7 @@ const leases = new TypingLeases()
 let topicPending: { resolve: () => void; reject: (error: Error) => void } | undefined
 const topicCalls: string[] = []
 let lastTyping = ''
-const typists = () => leases.accounts(Date.now(), () => true).map((account) => ({ account, name: account }))
+const typists = () => leases.details(Date.now(), () => true).map(({ account, detail }) => ({ account, name: account, ...detail }))
 const publishTyping = () => {
   const next = typists()
   const key = JSON.stringify(next)
@@ -86,14 +86,14 @@ const resolveMessages = () => stored.filter((message) => !hiddenMessages.has(mes
     ? { messageId: original.id, from: original.from, fromName: original.fromName, text: original.text }
     : { messageId: message.replyTo, text: 'Original message unavailable', unavailable: true } }
 })
-const receive = (data: { type: string; message?: ChatMessage; active?: boolean }) => {
+const receive = (data: { type: string; message?: ChatMessage; active?: boolean; activity?: unknown; tool?: unknown; ttlMs?: number }) => {
   if (data.type === 'message' && data.message) {
     stored.push({ ...data.message, from: remote, fromName: remote, status: 'received' })
     refresh()
   } else if (data.type === 'typing') {
     if (!data.active && dropTypingStops) return
     const now = Date.now()
-    leases.update(`${remote}-device`, remote, !!data.active, now, now + TYPING_TTL_MS, now)
+    leases.update(`${remote}-device`, remote, !!data.active, now, now + (data.ttlMs ?? TYPING_TTL_MS), now, data.activity, data.tool)
     publishTyping()
   }
 }
@@ -311,6 +311,7 @@ Object.assign(window, {
     attachmentCaptions,
     canEncryptCalls,
     qualityActivity,
+    activity(value: string) { receive({ ...JSON.parse(value), type: 'typing' }) },
     deletionRequests,
     failDeletion(value: number) { failDeletion = value === 1 },
     failDeletionAcceptance(value: number) { failDeletionAcceptance = value === 1 },
