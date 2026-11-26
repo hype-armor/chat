@@ -14,9 +14,9 @@ with tempfile.TemporaryDirectory(prefix='chat-update-test-') as tmp:
         (root / directory).mkdir()
     (root / 'update.sh').write_text(script)
     (root / 'README.md').write_text('fixture')
-    (root / '.env').write_text('CHAT_VAPID_PRIVATE_KEY=synthetic\n')
+    (root / '.env').write_text('CHAT_VAPID_PRIVATE_KEY=synthetic\nCOMPOSE_PROFILES=echo\n')
     build = root / 'scripts/compose-build.sh'
-    build.write_text('#!/bin/sh\necho BUILD >> "$LOG"\n[ "${FAIL_BUILD:-0}" != 1 ]\n')
+    build.write_text('#!/bin/sh\n[ "$*" = "server web" ] || exit 1\necho BUILD >> "$LOG"\n[ "${FAIL_BUILD:-0}" != 1 ]\n')
     build.chmod(0o755)
     git = root / 'bin/git'
     git.write_text('''#!/usr/bin/env python3
@@ -34,8 +34,9 @@ else: raise SystemExit('unexpected git ' + str(args))
 import json, os, sys
 args = sys.argv[1:]
 with open(os.environ['LOG'], 'a') as f: f.write('DOCKER ' + json.dumps(args) + '\\n')
+assert os.environ.get('COMPOSE_PROFILES') == '', 'inherited Compose profile'
 if 'config' in args:
- print(json.dumps({'name': 'chat', 'services': {s: {'build': {'context': '.'}, 'image': 'chat-' + s} for s in ['server', 'web', 'echo', 'echo-invite']}}))
+ print(json.dumps({'name': 'chat', 'services': {s: {'build': {'context': '.'}, 'image': 'chat-' + s} for s in ['server', 'web']}}))
 elif 'ps' in args:
  print('server\\nweb\\n' + ('https' if os.environ.get('HTTPS') == '1' else ''))
 elif args[:2] == ['image', 'inspect']: print('synthetic-image')
@@ -45,7 +46,7 @@ elif args[:2] == ['image', 'inspect']: print('synthetic-image')
     sudo.write_text('#!/bin/sh\nexec "$@"\n')
     sudo.chmod(0o755)
     log = root / 'commands.log'
-    env = {**os.environ, 'PATH': str(root / 'bin') + os.pathsep + os.environ['PATH'], 'LOG': str(log)}
+    env = {**os.environ, 'PATH': str(root / 'bin') + os.pathsep + os.environ['PATH'], 'LOG': str(log), 'COMPOSE_PROFILES': 'echo'}
     for https in ('0', '1'):
         log.write_text('')
         result = subprocess.run(['bash', str(root / 'update.sh'), '--force'], env={**env, 'HTTPS': https}, text=True, capture_output=True, timeout=15)
@@ -59,6 +60,7 @@ elif args[:2] == ['image', 'inspect']: print('synthetic-image')
         assert '--no-deps' not in up[0][1] and '--no-build' in up[0][1]
         assert '--env-file' in down[0][1] and '--env-file' in up[0][1]
         assert ('https' in up[0][1]) == (https == '1'), up
+        assert [i for i, args in commands if any('echo' in arg for arg in args)] == [down[0][0]], commands
     log.write_text('')
     result = subprocess.run(['bash', str(root / 'update.sh'), '--force'], env={**env, 'FAIL_BUILD': '1'}, text=True, capture_output=True, timeout=15)
     assert result.returncode != 0
@@ -108,4 +110,4 @@ elif args[:2] == ['image', 'inspect']: print('synthetic-image')
     result = subprocess.run(['bash', str(root / 'update.sh'), '--dry-run'], env=env, text=True, capture_output=True, timeout=15)
     assert result.returncode == 0, (result.stdout, result.stderr)
     assert not any('"down"' in line or '"up"' in line for line in log.read_text().splitlines())
-print('PASS: build-before-down, full restart, HTTPS preservation, volume safety, failed build, build-only, inherited lock, durable maintenance gate, dry run')
+print('PASS: build-before-down, echo excluded from build/start, HTTPS preservation, volume safety, failed build, build-only, inherited lock, durable maintenance gate, dry run')

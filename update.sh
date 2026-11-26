@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pull and rebuild changed server and web inputs before restarting.
-# Echo uses its existing images and is not rebuilt by this script.
+# This updater builds and starts the app stack, not development test bots.
 # First run establishes a baseline. --force rebuilds the app images.
 # --dry-run inspects the current checkout without pulling or deploying.
 # --build-only pulls and builds but does not stop or start services.
@@ -18,9 +18,9 @@ import stat
 import subprocess
 import sys
 
-compose = ['docker', 'compose', '--env-file', '.env', '-f', 'deploy/compose/docker-compose.yml', '--profile', 'echo']
+compose = ['docker', 'compose', '--env-file', '.env', '-f', 'deploy/compose/docker-compose.yml']
 config = json.loads(subprocess.check_output(compose + ['config', '--format', 'json']))
-services = ['server', 'web', 'echo']
+services = ['server', 'web']
 hashes = {name: hashlib.sha256(b'chat-update-inputs-v1\0') for name in services}
 
 # Treat unknown inputs conservatively. Keep this map aligned with the Dockerfiles.
@@ -33,14 +33,16 @@ def affected(path):
         return services
     if path.startswith('crates/chat-server/'):
         return ['server']
-    if path.startswith(('crates/chat-core/', 'crates/chat-echo/')):
-        return ['web', 'echo'] if path.startswith('crates/chat-core/') else ['echo']
+    if path.startswith('crates/chat-core/'):
+        return ['web']
+    if path.startswith('crates/chat-echo/'):
+        return []
     if path.startswith(('web/', 'patches/')) or path in ('package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', '.npmrc', 'scripts/build-wasm.sh', 'scripts/wasm-bindgen-version.sh'):
         return ['web']
     if path == 'deploy/docker/server.Dockerfile':
         return ['server']
     if path == 'deploy/docker/echo.Dockerfile':
-        return ['echo']
+        return []
     if path in ('deploy/docker/web.Dockerfile', 'deploy/docker/nginx.conf.template', 'deploy/docker/security-headers.inc.template'):
         return ['web']
     if path.startswith(('docs/', '.github/', 'deploy/helm/', 'deploy/k3s/', 'deploy/compose/')) or path in ('README.md', 'CLAUDE.md', 'AGENTS.md', 'LICENSE', 'LICENSE.md') or path.startswith('scripts/test-'):
@@ -96,9 +98,7 @@ for service in services:
                     binds.update(chunk)
         else:
             binds.update(b'not-a-regular-file\0')
-    invite = config['services']['echo-invite']
-    invite_image = invite.get('image') or config['name'] + '-echo-invite'
-    print(service, hashes[service].hexdigest(), image, binds.hexdigest(), invite_image, sep='\t')
+    print(service, hashes[service].hexdigest(), image, binds.hexdigest(), sep='\t')
 PY
 }
 
@@ -119,7 +119,10 @@ main() {
   cd -- "$(dirname -- "$script")"
   local state
   state=$(git rev-parse --git-path chat-update)
-  local -a compose=(docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile echo)
+  # Do not let the shell or .env enable development profiles. HTTPS, if it
+  # was running, is selected explicitly below.
+  export COMPOSE_PROFILES=
+  local -a compose=(docker compose --env-file .env -f deploy/compose/docker-compose.yml)
   if [[ $dry_run == false ]]; then
     mkdir -p -- "$state"
     if [[ -n ${CHAT_UPDATE_LOCK_FD:-} ]]; then
@@ -166,17 +169,10 @@ PY
     printf 'Dry run: current checkout only; no pull, build, or deployment.\n'
   fi
 
-  local plan service digest image bind_digest invite_image previous previous_image previous_bind current
-  local echo_image= echo_invite_image=
+  local plan service digest image bind_digest previous previous_image previous_bind current
   local -a builds=() recreate=()
   plan=$(fingerprints)
-  while IFS=$'\t' read -r service digest image bind_digest invite_image; do
-    if [[ $service == echo ]]; then
-      echo_image=$image
-      echo_invite_image=$invite_image
-      printf 'echo: reuse existing image; automatic builds are disabled\n'
-      continue
-    fi
+  while IFS=$'\t' read -r service digest image bind_digest; do
     previous= previous_image= previous_bind=
     if [[ -f "$state/$service" ]]; then
       if ! read -r previous previous_image previous_bind < "$state/$service"; then
@@ -196,17 +192,6 @@ PY
     fi
   done <<< "$plan"
   if [[ $dry_run == true ]]; then return; fi
-
-  # The echo profile still starts during deployment. Fail before stopping the
-  # stack if either of its existing images is unavailable; never build them here.
-  if [[ $build_only == false ]]; then
-    for image in "$echo_image" "$echo_invite_image"; do
-      if [[ -z $image ]] || ! docker image inspect "$image" >/dev/null 2>&1; then
-        printf 'Required existing echo image is missing: %s\n' "$image" >&2
-        return 1
-      fi
-    done
-  fi
 
   # Never call the wrapper with an empty list: its default builds all images.
   if ((${#builds[@]})); then
@@ -233,13 +218,13 @@ PY
   fi
   # Keep the existing stack online during the builds above. Do not pass -v:
   # PostgreSQL, blobs, and other named volumes must survive the restart.
-  "${compose[@]}" down
+  # Include legacy echo containers only in shutdown, never in startup.
+  "${compose[@]}" --profile echo --profile https down
   "${startup[@]}" up -d --no-build
 
   # Advance state only after every build and deployment command succeeds.
   local temporary
-  while IFS=$'\t' read -r service digest image bind_digest invite_image; do
-    [[ $service == echo ]] && continue
+  while IFS=$'\t' read -r service digest image bind_digest; do
     current=$(docker image inspect --format '{{.Id}}' "$image")
     temporary=$(mktemp "$state/.next.XXXXXX")
     printf '%s %s %s\n' "$digest" "$current" "$bind_digest" > "$temporary"
