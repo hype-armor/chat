@@ -739,6 +739,7 @@ mod tests {
                 chat_proto::v1::RestrictedChannelInfo {
                     parent_conversation_id: vec![7; 16],
                     name: "secret channel name".into(),
+                    name_revision: 2,
                 },
             )),
         };

@@ -202,7 +202,7 @@ export class CoreClient {
      * Encrypts channel metadata only in the child MLS conversation. The worker
      * must authorize the sender and verify parent/channel membership before use.
      */
-    sendRestrictedChannelInfo(channel_id: Uint8Array, parent_id: Uint8Array, name: string, sent_at_ms: number, message_id: Uint8Array): Uint8Array;
+    sendRestrictedChannelInfo(channel_id: Uint8Array, parent_id: Uint8Array, name: string, name_revision: number, sent_at_ms: number, message_id: Uint8Array): Uint8Array;
     /**
      * Returns the encoded `Envelope`. The optional reply id must have 16 bytes.
      */
@@ -317,6 +317,8 @@ export class EventView {
      * Original message id, only for valid user-visible reply references.
      */
     set replyTo(value: Uint8Array | null | undefined);
+    get restrictedChannelNameRevision(): number | undefined;
+    set restrictedChannelNameRevision(value: number | null | undefined);
     get restrictedChannelName(): string | undefined;
     set restrictedChannelName(value: string | null | undefined);
     /**
@@ -601,6 +603,7 @@ export interface InitOutput {
     readonly __wbg_get_eventview_replyTo: (a: number) => [number, number];
     readonly __wbg_get_eventview_replyToHash: (a: number) => [number, number];
     readonly __wbg_get_eventview_restrictedChannelName: (a: number) => [number, number];
+    readonly __wbg_get_eventview_restrictedChannelNameRevision: (a: number) => number;
     readonly __wbg_get_eventview_restrictedChannelParentId: (a: number) => [number, number];
     readonly __wbg_get_eventview_sender: (a: number) => [number, number];
     readonly __wbg_get_eventview_sentAtMs: (a: number) => number;
@@ -698,6 +701,7 @@ export interface InitOutput {
     readonly __wbg_set_eventview_replyTo: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_replyToHash: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_restrictedChannelName: (a: number, b: number, c: number) => void;
+    readonly __wbg_set_eventview_restrictedChannelNameRevision: (a: number, b: number) => void;
     readonly __wbg_set_eventview_restrictedChannelParentId: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_sender: (a: number, b: number, c: number) => void;
     readonly __wbg_set_eventview_sentAtMs: (a: number, b: number) => void;
@@ -783,7 +787,7 @@ export interface InitOutput {
     readonly coreclient_sendProfile: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number, number, number];
     readonly coreclient_sendReaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => [number, number, number, number];
     readonly coreclient_sendReceipt: (a: number, b: number, c: number, d: number, e: any, f: number, g: number, h: number) => [number, number, number, number];
-    readonly coreclient_sendRestrictedChannelInfo: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+    readonly coreclient_sendRestrictedChannelInfo: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number, number, number];
     readonly coreclient_sendText: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
     readonly coreclient_sendTyping: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly coreclient_snapshot: (a: number) => [number, number, number, number];

@@ -2,7 +2,7 @@ import { Fragment, type FormEvent, useCallback, useEffect, useId, useLayoutEffec
 import { flushSync } from 'react-dom'
 import type { CoreClient } from '../core/client'
 import type { AppView, ChatMessage, ConversationSummary, GroupCallStatus, MemberInfo } from '../core/protocol'
-import { RestrictedChannelForm, visibleChildChannels } from './RestrictedChannels'
+import { RestrictedChannelForm, channelFamilies, validChannelName, visibleChildChannels } from './RestrictedChannels'
 import { SetupActions, SetupBanner, useSetup } from './Banners'
 import { Devices } from './Devices'
 import { ServerStorage } from './ServerStorage'
@@ -507,7 +507,8 @@ function ConversationBrowser({
   const nav = useRef<HTMLElement>(null)
   const { busy, error, run } = useAction()
   const filtering = normalizeSearch(query.trim()).length > 0
-  const results = filterConversations(conversations, query)
+  const matches = new Set(filterConversations(conversations, query).map((c) => c.id))
+  const results = conversations.filter((c) => matches.has(c.id) || (c.channelParentId && matches.has(c.channelParentId)))
   const requests = results.filter((c) => c.request)
   const accepted = results.filter((c) => !c.request)
   const username = searchUsername(query)
@@ -583,11 +584,11 @@ function ConversationBrowser({
         <details key={filtering ? 'filtered' : 'all'} className="message-requests" open={filtering ? true : undefined}>
           <summary>Message requests ({requests.length})</summary>
           <nav aria-label="Requests">
-            <ConversationList conversations={requests} selected={selected} onSelect={onSelect} query={query} sharing={sharing} />
+            <ConversationList conversations={conversations} displayed={requests} selected={selected} onSelect={onSelect} query={query} sharing={sharing} />
           </nav>
         </details>
       )}
-      <ConversationList conversations={accepted} selected={selected} onSelect={onSelect} query={query} sharing={sharing} />
+      <ConversationList conversations={conversations} displayed={accepted} selected={selected} onSelect={onSelect} query={query} sharing={sharing} />
       {filtering && results.length === 0 ? (
         <div className="empty search-empty">
           <p className="muted" role="status">No chats match "{query.trim()}"</p>
@@ -614,43 +615,59 @@ function ConversationBrowser({
 
 function ConversationList({
   conversations,
+  displayed,
   selected,
   onSelect,
   query,
   sharing,
 }: {
   conversations: ConversationSummary[]
+  displayed: ConversationSummary[]
   selected?: string
   onSelect: (id: string) => void
   query: string
   sharing: LiveShare[]
 }) {
+  const { families, unavailable } = channelFamilies(conversations, displayed)
+  const row = (c: ConversationSummary) => (
+    <button type="button" className={c.id === selected ? 'active' : ''} onClick={() => onSelect(c.id)}>
+      <Avatar name={c.title} id={c.peer ?? c.id} account={c.peer} />
+      <span className="title">
+        {highlightTitle(c.title, query).map((part, index) =>
+          part.match ? <mark key={index}>{part.text}</mark> : part.text,
+        )}
+        {sharing.some((s) => s.conversationId === c.id) && (
+          <span className="live-dot" role="img" aria-label="Sharing live location">
+            📍
+          </span>
+        )}
+        {c.unread > 0 && (
+          <span className="badge small unread" aria-label={`${c.unread} unread`}>
+            {c.unread}
+          </span>
+        )}
+      </span>
+      <span className="muted small preview">{c.lastText ?? 'No messages yet'}</span>
+      <span className="muted small when">{formatWhen(c.lastAt)}</span>
+    </button>
+  )
+  const childList = (children: ConversationSummary[]) => (
+    <ul className="conversation-children" aria-label="Private channels">
+      {children.map((child) => <li key={child.id}>{row(child)}</li>)}
+    </ul>
+  )
   return (
     <ul className="conversations">
-      {conversations.map((c) => (
-        <li key={c.id}>
-          <button type="button" className={c.id === selected ? 'active' : ''} onClick={() => onSelect(c.id)}>
-            <Avatar name={c.title} id={c.peer ?? c.id} account={c.peer} />
-            <span className="title">
-              {highlightTitle(c.title, query).map((part, index) =>
-                part.match ? <mark key={index}>{part.text}</mark> : part.text,
-              )}
-              {sharing.some((s) => s.conversationId === c.id) && (
-                <span className="live-dot" role="img" aria-label="Sharing live location">
-                  📍
-                </span>
-              )}
-              {c.unread > 0 && (
-                <span className="badge small unread" aria-label={`${c.unread} unread`}>
-                  {c.unread}
-                </span>
-              )}
-            </span>
-            <span className="muted small preview">{c.lastText ?? 'No messages yet'}</span>
-            <span className="muted small when">{formatWhen(c.lastAt)}</span>
-          </button>
+      {families.map(({ parent, children, contextual }) => (
+        <li key={parent.id}>
+          {contextual ? <span className="conversation-parent-label muted small">{parent.title}</span> : row(parent)}
+          {children.length > 0 && childList(children)}
         </li>
       ))}
+      {unavailable.length > 0 && <li>
+        <span className="conversation-parent-label muted small">Parent group unavailable</span>
+        {childList(unavailable)}
+      </li>}
     </ul>
   )
 }
@@ -978,12 +995,12 @@ function GroupInfo({
         <Avatar name={title} id={id} size={5} />
         <div className="details-name">
           <strong>{title}</strong>
-          {amAdmin && !channel.channelParentId && (
+          {(channel.channelParentId ? channel.canRenameRestrictedChannel : amAdmin) && (
             <button
               type="button"
               className="icon"
               ref={editTrigger}
-              aria-label="Edit group name"
+              aria-label={channel.channelParentId ? 'Edit channel name' : 'Edit group name'}
               hidden={editing}
               onClick={() => {
                 setName(title)
@@ -996,7 +1013,7 @@ function GroupInfo({
         </div>
         <span className="muted small">{memberCount} people</span>
       </div>
-      {amAdmin && !channel.channelParentId && editing && (
+      {(channel.channelParentId ? channel.canRenameRestrictedChannel : amAdmin) && editing && (
         <form
           className="rename"
           onSubmit={(e) => {
@@ -1008,11 +1025,12 @@ function GroupInfo({
           }}
         >
           <label>
-            Group name
-            <input autoFocus value={name} onChange={(e) => setName(e.target.value)} required maxLength={64} />
+            {channel.channelParentId ? 'Channel name' : 'Group name'}
+            <input autoFocus value={name} onChange={(e) => setName(e.target.value)} required maxLength={channel.channelParentId ? 512 : 64} />
           </label>
+          {channel.channelParentId && name.trim() && !validChannelName(name) && <p role="alert">Use at most 512 UTF-8 bytes for the channel name.</p>}
           <span className="actions">
-            <button type="submit" disabled={busy || !name.trim() || name.trim() === title}>Save</button>
+            <button type="submit" disabled={busy || !name.trim() || name.trim() === title || (!!channel.channelParentId && !validChannelName(name))}>Save</button>
             <button type="button" className="link" disabled={busy} onClick={() => setEditing(false)}>Cancel</button>
           </span>
         </form>

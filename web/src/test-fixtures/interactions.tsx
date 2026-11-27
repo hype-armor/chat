@@ -211,11 +211,18 @@ const core = {
   ],
   createRestrictedChannel: async (parentId: string, channelName: string, usernames: string[]) => {
     channelRequests.push({ type: 'create', parentId, name: channelName, usernames })
-    view.conversations.push({ id: 'private-child', title: channelName, isGroup: true, amAdmin: true, status: 'active', memberCount: 1, request: false, unread: 0, lastAt: Date.now(), channelParentId: parentId, canInviteToRestrictedChannel: true })
+    view.conversations.push({ id: 'private-child', title: channelName, isGroup: true, amAdmin: true, status: 'active', memberCount: 1, request: false, unread: 0, lastAt: Date.now(), channelParentId: parentId, canRenameRestrictedChannel: true, canInviteToRestrictedChannel: true })
     renderFixture()
     return 'private-child'
   },
   inviteToRestrictedChannel: async (channelId: string, usernames: string[]) => { channelRequests.push({ type: 'invite', channelId, usernames }) },
+  renameGroup: async (id: string, name: string) => {
+    const channel = view.conversations.find((conversation) => conversation.id === id)
+    if (!channel?.canRenameRestrictedChannel) throw new Error('Channel renaming is unavailable')
+    channelRequests.push({ type: 'rename', channelId: id, name })
+    channel.title = name
+    renderFixture()
+  },
   groupCallStatus: async () => undefined,
   // Keep fixture calls at setup. These tests make no media or transport claim.
   iceServers: () => { callActions.push('answer'); return new Promise(() => {}) },

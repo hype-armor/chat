@@ -303,6 +303,20 @@ form {
   background: var(--theirs);
 }
 
+.conversation-children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  padding-inline-start: 1rem;
+  border-inline-start: 1px solid var(--border);
+  margin-inline-start: 1rem;
+}
+
+.conversation-parent-label {
+  display: block;
+  padding: 0.5rem 1rem;
+}
+
 .preview {
   white-space: nowrap;
   overflow: hidden;

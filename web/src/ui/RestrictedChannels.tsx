@@ -8,6 +8,27 @@ export function visibleChildChannels(conversations: ConversationSummary[], paren
   return conversations.filter((conversation) => conversation.channelParentId === parentId)
 }
 
+/** Keep parent context even if only a child matches search or the current request section. */
+export function channelFamilies(conversations: ConversationSummary[], displayed: ConversationSummary[]) {
+  const roots = new Map(conversations.filter((conversation) => !conversation.channelParentId).map((parent) => [parent.id, parent]))
+  const shown = new Set(displayed.map((conversation) => conversation.id))
+  const children = new Map<string, ConversationSummary[]>()
+  const unavailable: ConversationSummary[] = []
+  for (const child of displayed) {
+    if (!child.channelParentId) continue
+    if (!roots.has(child.channelParentId)) unavailable.push(child)
+    else {
+      const siblings = children.get(child.channelParentId) ?? []
+      siblings.push(child)
+      children.set(child.channelParentId, siblings)
+    }
+  }
+  const families = [...roots.values()].flatMap((parent) => shown.has(parent.id) || children.has(parent.id)
+    ? [{ parent, children: children.get(parent.id) ?? [], contextual: !shown.has(parent.id) }]
+    : [])
+  return { families, unavailable }
+}
+
 export function channelInviteCandidates(parent: MemberInfo[], current: MemberInfo[]) {
   const existing = new Set(current.map((member) => member.account))
   return parent.filter((member) => !member.isMe && !member.blocked && !!member.username && !existing.has(member.account))
