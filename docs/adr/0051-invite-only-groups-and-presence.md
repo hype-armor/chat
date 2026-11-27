@@ -95,6 +95,17 @@ does not enforce an atomic cutoff across the parent and child.
 An invited device can briefly see an unnamed conversation before its encrypted
 channel metadata arrives. A non-invited device does not get the child Welcome.
 
+The conversation list nests locally visible private channels under the parent.
+An eligible parent admin who is also a current child member can rename the
+child without changing its MLS conversation, members, or history. Current
+clients accept versioned names from exact current child and parent devices of
+parent admins. Names are sent through the child only. A binding from a current
+client carries its latest accepted name revision for newly invited devices.
+Compare revisions first and names second to resolve concurrent edits
+independently of delivery order. A legacy binding without a revision cannot
+replace an established name. Older clients can continue to use the channel,
+but do not update or forward names that changed after their initial binding.
+
 CI runs a separate opt-in build for the real-relay test against disposable
 services. To repeat it from `web` with a disposable `DATABASE_URL`, run:
 

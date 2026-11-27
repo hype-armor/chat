@@ -237,6 +237,8 @@ pub struct EventView {
     pub restricted_channel_parent_id: Option<Vec<u8>>,
     #[wasm_bindgen(getter_with_clone, js_name = restrictedChannelName)]
     pub restricted_channel_name: Option<String>,
+    #[wasm_bindgen(js_name = restrictedChannelNameRevision)]
+    pub restricted_channel_name_revision: Option<u32>,
     #[wasm_bindgen(getter_with_clone, js_name = deletionTarget)]
     pub deletion_target: Option<Vec<u8>>,
     #[wasm_bindgen(getter_with_clone, js_name = deletionTargetHash)]
@@ -379,6 +381,7 @@ impl EventView {
             group_topic_clock: None,
             restricted_channel_parent_id: None,
             restricted_channel_name: None,
+            restricted_channel_name_revision: None,
             deletion_target: None,
             deletion_target_hash: None,
             deletion_target_author: None,
@@ -966,6 +969,7 @@ impl CoreClient {
         channel_id: &[u8],
         parent_id: &[u8],
         name: String,
+        name_revision: u32,
         sent_at_ms: f64,
         message_id: Vec<u8>,
     ) -> Result<Vec<u8>, JsError> {
@@ -981,6 +985,7 @@ impl CoreClient {
             content::Body::RestrictedChannelInfo(RestrictedChannelInfo {
                 parent_conversation_id: parent_id.to_vec(),
                 name,
+                name_revision,
             }),
             message_id,
         )
@@ -1360,6 +1365,7 @@ impl CoreClient {
                             view.kind = "restrictedChannelInfo".to_owned();
                             view.restricted_channel_parent_id = Some(info.parent_conversation_id);
                             view.restricted_channel_name = Some(info.name);
+                            view.restricted_channel_name_revision = Some(info.name_revision);
                         } else {
                             view.kind = "ignored".to_owned();
                         }
@@ -1676,7 +1682,7 @@ mod interaction_tests {
             last_sent_content_hash: None,
         };
         let envelope = sender
-            .send_restricted_channel_info(&id, &parent, "private name".into(), 10.0, vec![2; 16])
+            .send_restricted_channel_info(&id, &parent, "private name".into(), 7, 10.0, vec![2; 16])
             .unwrap();
         let event = receiver.receive(&envelope).unwrap();
         assert_eq!(event.kind, "restrictedChannelInfo");
@@ -1687,6 +1693,7 @@ mod interaction_tests {
             event.restricted_channel_name.as_deref(),
             Some("private name")
         );
+        assert_eq!(event.restricted_channel_name_revision, Some(7));
         assert!(event.group_name.is_none());
         assert!(event.group_admins.is_empty());
         assert!(event.content_hash.is_none());
@@ -1708,6 +1715,7 @@ mod interaction_tests {
                     RestrictedChannelInfo {
                         parent_conversation_id,
                         name,
+                        name_revision: 7,
                     },
                 )),
             };

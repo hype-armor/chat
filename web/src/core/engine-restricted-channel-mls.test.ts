@@ -93,6 +93,10 @@ describe('restricted channels with real MLS', () => {
     expect(alice.core.receive(text).text).toBe('Only here')
     expect(() => cathy.core.receive(text)).toThrow()
 
+    await alice.engine.renameGroup(channelId, 'Intermediate name')
+    await bob.deliver(channelId, fromBase64(alice.engine['state'].outbox.at(-1)!.envelope))
+    await alice.engine.renameGroup(channelId, 'Current private name')
+    await bob.deliver(channelId, fromBase64(alice.engine['state'].outbox.at(-1)!.envelope))
     alice.engine['state'].outbox = []
     const sendCommit = alice.engine['sendCommit'].bind(alice.engine)
     alice.engine['sendCommit'] = vi.fn(async (pending, commit, recipients, welcome, members) => {
@@ -112,8 +116,149 @@ describe('restricted channels with real MLS', () => {
     expect(cathy.summary(channelId)?.channelParentId).toBeUndefined()
     const info = alice.engine['state'].outbox.find((item) => item.conversationId === channelId)!
     await cathy.deliver(channelId, fromBase64(info.envelope))
-    expect(cathy.summary(channelId)).toMatchObject({ title: 'Private channel', channelParentId: parentId })
+    expect(cathy.summary(channelId)).toMatchObject({ title: 'Current private name', channelParentId: parentId })
+    expect(cathy.engine['state'].conversations[channelId].channelNameRevision).toBe(2)
     expect(() => cathy.core.receive(text)).toThrow()
+  })
+
+  it('renames in the child only using current parent authority and ignores stale or unauthorized names', async () => {
+    const { parentId, worker } = setup()
+    const alice = worker('alice'), bob = worker('bob'), cathy = worker('cathy')
+    const id = await alice.engine.createRestrictedChannel(parentId, 'Original', ['bob'])
+    const [welcome, binding] = alice.engine['state'].outbox
+    await bob.deliver(id, fromBase64(welcome.envelope), true)
+    await bob.deliver(id, fromBase64(binding.envelope))
+    const childRoster = bob.engine['restrictedRoster'](id)
+    const roles = [...bob.engine['state'].conversations[id].admins!]
+    expect(bob.summary(id)?.canRenameRestrictedChannel).toBe(false)
+    await expect(bob.engine.renameGroup(id, 'Unauthorized')).rejects.toThrow('Channel renaming is unavailable')
+    await expect(alice.engine.renameGroup(id, 'é'.repeat(257))).rejects.toThrow('512 UTF-8 bytes')
+    await alice.engine.renameGroup(id, '  Updated  ')
+    const renamed = alice.engine['state'].outbox.at(-1)!
+    expect(renamed).toMatchObject({ conversationId: id, recipients: [people.bob.device], silent: true })
+    expect(() => cathy.core.receive(fromBase64(renamed.envelope))).toThrow()
+    expect(cathy.summary(id)).toBeUndefined()
+    await bob.deliver(id, fromBase64(renamed.envelope))
+    expect(bob.summary(id)).toMatchObject({ id, title: 'Updated', channelParentId: parentId })
+    const info = (core: CoreClient, name: string, revision: number) => core.sendRestrictedChannelInfo(
+      fromHex(id), fromHex(parentId), name, revision, Date.now(), randomId())
+    await bob.deliver(id, info(alice.core, 'Legacy snapshot', 0))
+    await bob.deliver(id, info(alice.core, 'A stale tie', 1))
+    await bob.deliver(parentId, info(alice.core, 'Incorrect outer route', 99))
+    await bob.deliver(id, alice.core.sendRestrictedChannelInfo(fromHex(id), fromHex(hex('ff')), 'Incorrect parent', 99, Date.now(), randomId()))
+    expect(bob.summary(id)?.title).toBe('Updated')
+    const outboxLength = alice.engine['state'].outbox.length
+    await alice.engine.renameGroup(id, ' Updated ')
+    expect(alice.engine['state'].outbox).toHaveLength(outboxLength)
+
+    // The new parent admin is not the creator or a child-local admin.
+    for (const member of [alice, bob, cathy]) member.engine['state'].conversations[parentId].admins = [people.bob.account, people.cathy.account]
+    await expect(alice.engine.renameGroup(id, 'Demoted creator')).rejects.toThrow('Channel renaming is unavailable')
+    await expect(cathy.engine.renameGroup(id, 'Parent only')).rejects.toThrow()
+    await bob.deliver(id, info(alice.core, 'Forged after demotion', 99))
+    expect(bob.summary(id)?.title).toBe('Updated')
+    expect(bob.summary(id)?.canRenameRestrictedChannel).toBe(true)
+    await bob.engine.renameGroup(id, 'Renamed by parent admin')
+    await alice.deliver(id, fromBase64(bob.engine['state'].outbox.at(-1)!.envelope))
+    expect(alice.summary(id)?.title).toBe('Renamed by parent admin')
+    await bob.engine.renameGroup(id, 'é'.repeat(256))
+    await alice.deliver(id, fromBase64(bob.engine['state'].outbox.at(-1)!.envelope))
+    expect(alice.summary(id)?.title).toBe('é'.repeat(256))
+    expect(bob.engine['restrictedRoster'](id)).toEqual(childRoster)
+    expect(bob.engine['state'].conversations[id].admins).toEqual(roles)
+  })
+
+  it('reconciles a deferred name when a local membership commit settles', async () => {
+    const { parentId, worker } = setup()
+    const alice = worker('alice'), bob = worker('bob'), cathy = worker('cathy')
+    const id = await alice.engine.createRestrictedChannel(parentId, 'Original', ['bob'])
+    const [welcome, binding] = alice.engine['state'].outbox
+    await bob.deliver(id, fromBase64(welcome.envelope), true)
+    await bob.deliver(id, fromBase64(binding.envelope))
+    bob.core.removeMembers(fromHex(parentId), [identity(people.cathy)], randomId())
+    const pending = { conversationId: parentId, commitHash: 'accepted' }
+    bob.engine['state'].pendingCommit = pending
+    await alice.engine.renameGroup(id, 'Deferred name')
+    await bob.deliver(id, fromBase64(alice.engine['state'].outbox.at(-1)!.envelope))
+    expect(bob.summary(id)?.title).toBe('Original')
+    expect(bob.engine['state'].conversations[id].channelRenameCandidate).toMatchObject({ name: 'Deferred name' })
+    await bob.engine['finishCommit'](pending)
+    expect(bob.summary(id)?.title).toBe('Deferred name')
+    const persisted = JSON.parse(new TextDecoder().decode(bob.values.get('app') as Uint8Array))
+    expect(persisted.conversations[id]).toMatchObject({ name: 'Deferred name', channelNameRevision: 1 })
+    expect(cathy.summary(id)).toBeUndefined()
+  })
+
+  it('resolves equal rename revisions the same way in either delivery order', async () => {
+    const { parentId, worker } = setup()
+    const alice = worker('alice'), bob = worker('bob'), cathy = worker('cathy')
+    const id = await alice.engine.createRestrictedChannel(parentId, 'Original', ['bob', 'cathy'])
+    const [welcome, binding] = alice.engine['state'].outbox
+    for (const member of [bob, cathy]) {
+      await member.deliver(id, fromBase64(welcome.envelope), true)
+      await member.deliver(id, fromBase64(binding.envelope))
+    }
+    const info = (name: string) => alice.core.sendRestrictedChannelInfo(fromHex(id), fromHex(parentId), name, 1, Date.now(), randomId())
+    const a = info('Alpha'), z = info('Zulu')
+    await bob.deliver(id, a)
+    await bob.deliver(id, z)
+    await cathy.deliver(id, z)
+    await cathy.deliver(id, a)
+    expect(bob.summary(id)?.title).toBe('Zulu')
+    expect(cathy.summary(id)?.title).toBe('Zulu')
+  })
+
+  it('does not expose queued name metadata to another outbox flush before persistence', async () => {
+    const { parentId, worker } = setup()
+    const alice = worker('alice')
+    const id = await alice.engine.createRestrictedChannel(parentId, 'Original', ['bob'])
+    await vi.waitFor(() => expect(alice.engine['flushing']).toBe(false))
+    alice.engine['state'].outbox = []
+    const request = vi.mocked(alice.engine['request'])
+    request.mockClear()
+    let release!: () => void
+    const writing = new Promise<void>((resolve) => { release = resolve })
+    vi.mocked(alice.engine['store']!.putBatch).mockImplementationOnce(() => writing)
+    const rename = alice.engine.renameGroup(id, 'Persist first')
+    try {
+      await vi.waitFor(() => expect(alice.engine['state'].outbox).toHaveLength(1))
+      await alice.engine['flushOutbox']()
+      expect(request).not.toHaveBeenCalled()
+      expect(alice.summary(id)?.title).toBe('Original')
+    } finally {
+      release()
+      await rename
+    }
+    expect(alice.summary(id)?.title).toBe('Persist first')
+  })
+
+  it('does not publish or send a local rename if encrypted state persistence fails', async () => {
+    const { parentId, worker } = setup()
+    const alice = worker('alice')
+    const id = await alice.engine.createRestrictedChannel(parentId, 'Original', ['bob'])
+    alice.send.mockClear()
+    vi.mocked(alice.engine['store']!.putBatch).mockRejectedValueOnce(new Error('write failed'))
+    await expect(alice.engine.renameGroup(id, 'Not durable')).rejects.toThrow('write failed')
+    expect(alice.summary(id)?.title).toBe('Original')
+    expect(alice.engine['deliveryFenced']).toBe(true)
+    expect(alice.send).not.toHaveBeenCalled()
+  })
+
+  it('does not publish or acknowledge a rename if encrypted state persistence fails', async () => {
+    const { parentId, worker } = setup()
+    const alice = worker('alice'), bob = worker('bob')
+    const id = await alice.engine.createRestrictedChannel(parentId, 'Original', ['bob'])
+    const [welcome, binding] = alice.engine['state'].outbox
+    await bob.deliver(id, fromBase64(welcome.envelope), true)
+    await bob.deliver(id, fromBase64(binding.envelope))
+    await alice.engine.renameGroup(id, 'New name')
+    const update = alice.engine['state'].outbox.at(-1)!
+    bob.send.mockClear()
+    vi.mocked(bob.engine['store']!.putBatch).mockRejectedValueOnce(new Error('write failed'))
+    await expect(bob.deliver(id, fromBase64(update.envelope))).rejects.toThrow('write failed')
+    expect(bob.summary(id)?.title).toBe('Original')
+    expect(bob.engine['deliveryFenced']).toBe(true)
+    expect(bob.send).not.toHaveBeenCalled()
   })
 
   it('keeps a revocation through parent rejoin, then repairs exact child membership with no admin in the child', async () => {

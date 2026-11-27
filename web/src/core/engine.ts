@@ -196,6 +196,8 @@ type Account = {
   pendingDeletion?: { username: string; authorization: string; departuresComplete: boolean }
 }
 
+type ChannelInfoCandidate = { parentId: string; name: string; sender: string; revision?: number }
+
 type Conversation = {
   id: string
   peers: string[]
@@ -207,7 +209,10 @@ type Conversation = {
   /** A queued channel binding was canceled and must be issued under the repaired epoch. */
   channelNeedsBinding?: boolean
   /** Authenticated child metadata awaiting the parent's local roster reconciliation. */
-  channelInfoCandidate?: { parentId: string; name: string; sender: string }
+  channelInfoCandidate?: ChannelInfoCandidate
+  /** Child-only name metadata, independent of membership and parent identity. */
+  channelNameRevision?: number
+  channelRenameCandidate?: ChannelInfoCandidate
   /** Admin account ids in priority order (groups only, ADR-0016). */
   admins?: string[]
   /** 'left' or 'removed': history stays readable, sending is disabled. */
@@ -499,6 +504,7 @@ export class Engine {
   private acceptingReactions = new Set<string>()
 
   private readonly pendingRestrictedChannels = new Set<string>()
+  private readonly pendingChannelNames = new Map<string, string | undefined>()
   private readonly settlingRestrictedChannels = new Set<string>()
   private restrictedRepairRunning = false
   private restrictedRepairAttempt?: { socket: WebSocket; messageId: string }
@@ -854,6 +860,7 @@ export class Engine {
       this.topicSockets.clear()
       this.topicMembershipMutations.clear()
       this.pendingRestrictedChannels.clear()
+      this.pendingChannelNames.clear()
       this.settlingRestrictedChannels.clear()
       this.deletionCache = undefined
       this.deletionPreviewsReady.clear()
@@ -1333,6 +1340,7 @@ export class Engine {
       this.topicSockets.clear()
       this.topicMembershipMutations.clear()
       this.pendingRestrictedChannels.clear()
+      this.pendingChannelNames.clear()
       this.settlingRestrictedChannels.clear()
       this.deletionClock = new TypingClock()
       this.localityClock = new TypingClock()
@@ -2315,8 +2323,9 @@ export class Engine {
     if (!this.options.restrictedChannels) return {}
     if (!conv.channelParentId) return { canCreateRestrictedChannel: !!this.restrictedChannelAdmin(conv.id) }
     const ready = this.restrictedChannelReady(conv)
+    const canManage = ready && !!this.restrictedChannelAdmin(conv.channelParentId)
     return { channelParentId: conv.channelParentId, channelSendPaused: !ready,
-      canInviteToRestrictedChannel: ready && !!this.restrictedChannelAdmin(conv.channelParentId) }
+      canRenameRestrictedChannel: canManage, canInviteToRestrictedChannel: canManage }
   }
 
   /** The parent is read locally. Its members do not receive the child ID or name. */
@@ -2472,8 +2481,32 @@ export class Engine {
   }
 
   async renameGroup(conversationId: string, name: string) {
+    if (this.conv(conversationId)?.channelParentId) {
+      const session = this.draftSession()
+      const channelName = name.trim()
+      if (!channelName || new TextEncoder().encode(channelName).length > 512) throw new Error('Give the channel a name of at most 512 UTF-8 bytes')
+      await this.exclusive(async () => {
+        this.assertReactionSession(session)
+        const channel = this.conv(conversationId)
+        if (!channel?.channelParentId || !this.restrictedChannelAdmin(channel.channelParentId) || !this.restrictedChannelReady(channel)) {
+          throw new Error('Channel renaming is unavailable')
+        }
+        if (channel.name === channelName) return
+        const revision = (channel.channelNameRevision ?? 0) + 1
+        if (revision > 0xffffffff) throw new Error('Channel name revision limit reached')
+        this.queueRestrictedChannelInfo({ ...channel, name: channelName, channelNameRevision: revision })
+        this.pendingChannelNames.set(channel.id, channel.name)
+        channel.name = channelName
+        channel.channelNameRevision = revision
+        delete channel.channelNeedsBinding
+        await this.persistRestrictedMembership()
+        this.pendingChannelNames.delete(channel.id)
+      })
+      this.emitView()
+      void this.flushOutbox()
+      return
+    }
     const conv = this.requireAdmin(conversationId)
-    if (conv.channelParentId) throw new Error('Channel renaming is not available yet')
     const groupName = name.trim().slice(0, 64)
     if (!groupName) throw new Error('Give the group a name')
     await this.exclusive(async () => {
@@ -4937,8 +4970,10 @@ export class Engine {
           for (const conv of Object.values(this.state.conversations)) {
             if (conv.channelInfoCandidate) this.acceptRestrictedChannelInfo(conv)
           }
+          this.reconcileRestrictedChannelNames()
         }
         await this.persist()
+        if (sameSession()) this.pendingChannelNames.clear()
         if (this.pendingRestrictedChannels.size && sameSession()) {
           this.pendingRestrictedChannels.clear()
           if (currentSocket()) this.emitView()
@@ -5006,20 +5041,60 @@ export class Engine {
     await this.apply(event, messageId)
   }
 
+  private restrictedChannelInfoSender(channelId: string, parentId: string, identity: Uint8Array): boolean {
+    const sender = trySplitIdentity(identity)
+    const parent = this.conv(parentId)
+    return parentId !== channelId && !!sender && !!parent && !this.state.blocked.includes(sender.account) &&
+      !!parent.admins?.includes(sender.account) && [parentId, channelId].every((id) =>
+        this.restrictedRoster(id)?.some((device) => device.account === sender.account && device.device === sender.deviceId))
+  }
+
+  private newerChannelName(next: ChannelInfoCandidate, name: string | undefined, revision = 0): boolean {
+    // Authenticated admins can rename concurrently. Break equal revision ties
+    // by the value so the result does not depend on arrival order or clocks.
+    const incoming = next.revision ?? 0
+    return incoming > revision || (incoming > 0 && incoming === revision && next.name > (name ?? ''))
+  }
+
   private applyRestrictedChannelInfo(event: ReturnType<CoreClient['receive']>, channelId: string) {
-    const { restrictedChannelParentId, restrictedChannelName } = event
+    const { restrictedChannelParentId, restrictedChannelName: name, restrictedChannelNameRevision: revision = 0 } = event
     const channel = this.conv(channelId)
-    if (restrictedChannelParentId?.length !== 16 || !restrictedChannelName || !channel || channel.self || channel.status || !this.core) return
+    if (!this.options.restrictedChannels || restrictedChannelParentId?.length !== 16 || !name || name !== name.trim() ||
+        !channel || channel.self || channel.status || !this.core) return
     const parentId = toHex(restrictedChannelParentId)
     if (channel.channelParentId && channel.channelParentId !== parentId) return
-    // The notice can classify a newly joined conversation, not repurpose a named group.
+    // A binding can classify a newly joined conversation, not repurpose a named group.
     if (!channel.channelParentId && (channel.name || channel.admins?.length)) return
-    const sender = trySplitIdentity(event.sender)
-    const parent = this.conv(parentId)
-    if (parentId === channelId || !parent || !sender || this.state.blocked.includes(sender.account) ||
-        !parent.admins?.includes(sender.account) || !this.restrictedRoster(parentId)?.some((d) => d.account === sender.account && d.device === sender.deviceId) ||
-        !this.restrictedRoster(channelId)?.some((d) => d.account === sender.account && d.device === sender.deviceId)) return
-    if (!channel.channelParentId) channel.channelInfoCandidate = { parentId, name: restrictedChannelName, sender: toHex(event.sender) }
+    if (!this.restrictedChannelInfoSender(channelId, parentId, event.sender)) return
+    const candidate = { parentId, name, sender: toHex(event.sender), revision }
+    if (channel.channelParentId) {
+      const pending = channel.channelRenameCandidate
+      if (this.newerChannelName(candidate, channel.name, channel.channelNameRevision) &&
+          (!pending || this.newerChannelName(candidate, pending.name, pending.revision))) channel.channelRenameCandidate = candidate
+    } else if (!channel.channelInfoCandidate || this.newerChannelName(candidate, channel.channelInfoCandidate.name, channel.channelInfoCandidate.revision)) {
+      channel.channelInfoCandidate = candidate
+    }
+  }
+
+  private reconcileRestrictedChannelNames() {
+    for (const channel of Object.values(this.state.conversations)) {
+      if (channel.channelRenameCandidate) this.acceptRestrictedChannelRename(channel)
+    }
+  }
+
+  private acceptRestrictedChannelRename(channel: Conversation) {
+    const candidate = channel.channelRenameCandidate
+    if (!candidate || channel.channelParentId !== candidate.parentId) return
+    if (!this.restrictedChannelInfoSender(channel.id, candidate.parentId, fromHex(candidate.sender)) ||
+        !this.newerChannelName(candidate, channel.name, channel.channelNameRevision) || channel.status) {
+      delete channel.channelRenameCandidate
+      return
+    }
+    if (!this.restrictedChannelReady(channel, false)) return
+    if (!this.pendingChannelNames.has(channel.id)) this.pendingChannelNames.set(channel.id, channel.name)
+    channel.name = candidate.name
+    channel.channelNameRevision = candidate.revision
+    delete channel.channelRenameCandidate
   }
 
   private acceptRestrictedChannelInfo(channel: Conversation) {
@@ -5039,6 +5114,7 @@ export class Engine {
     delete channel.channelInfoCandidate
     channel.channelParentId = parentId
     channel.name = name
+    channel.channelNameRevision = candidate.revision
     channel.admins = [sender.account]
     channel.request = false
     this.pendingRestrictedChannels.add(channelId)
@@ -5351,7 +5427,8 @@ export class Engine {
         const item = this.state.outbox.find(({ conversationId, groupTopic }) => {
           const conv = this.conv(conversationId)
           // A topic on a channel is invalid, not paused. Select it for cancellation.
-          return !!groupTopic || (!conv?.channelInfoCandidate && (!conv?.channelParentId || this.restrictedChannelReady(conv)))
+          return !!groupTopic || (!this.pendingChannelNames.has(conversationId) && !conv?.channelInfoCandidate &&
+            (!conv?.channelParentId || this.restrictedChannelReady(conv)))
         })
         if (!item) return
         if (item.meDeletionBatch && (!this.privateSelfContext(item.conversationId) || this.recipients(item.conversationId).sort().join(',') !== [...item.recipients].sort().join(','))) {
@@ -5612,22 +5689,26 @@ export class Engine {
       for (const i of p.invitees) {
         if (i.account !== this.myAccount() && i.username) this.state.usernames[i.account] = i.username
       }
-      if (conv?.channelParentId) this.queueRestrictedChannelInfo(conv)
-      else {
+      if (!conv?.channelParentId) {
         if (conv?.name) this.queueGroupInfo(p.conversationId, conv.name, conv.admins ?? [])
         this.queueProfile(p.conversationId)
       }
     }
     this.state.pendingCommit = undefined
     if (p.repairReceipt) this.recent.add(p.repairReceipt.messageId)
-    if (conv?.channelParentId) this.retryRestrictedBinding(conv)
+    this.reconcileRestrictedChannelNames()
+    if (conv?.channelParentId) {
+      if (p.invitees) this.queueRestrictedChannelInfo(conv)
+      this.retryRestrictedBinding(conv)
+    }
     try { await this.persist() } catch (error) {
-      if (conv?.channelParentId) {
+      if (conv?.channelParentId || this.pendingChannelNames.size) {
         this.deliveryFenced = true
         try { this.ws?.close() } catch { /* Preserve the write failure. */ }
       }
       throw error
     }
+    this.pendingChannelNames.clear()
     if (conv?.channelParentId) this.settlingRestrictedChannels.delete(conv.id)
     this.emitView()
     if (!conv?.channelParentId) void this.repairRestrictedChannels()
@@ -5677,7 +5758,12 @@ export class Engine {
       // a competing authenticated commit must resolve that staged epoch.
       this.core!.discardCommit(fromHex(p.conversationId))
       this.state.pendingCommit = undefined
-      await this.persist()
+      this.reconcileRestrictedChannelNames()
+      if (this.pendingChannelNames.size) {
+        await this.persistRestrictedMembership()
+        this.pendingChannelNames.clear()
+        this.emitView()
+      } else await this.persist()
     }
   }
 
@@ -5718,7 +5804,7 @@ export class Engine {
 
   private queueRestrictedChannelInfo(channel: Conversation) {
     const messageId = randomId()
-    const envelope = this.core!.sendRestrictedChannelInfo(fromHex(channel.id), fromHex(channel.channelParentId!), channel.name!, Date.now(), messageId)
+    const envelope = this.core!.sendRestrictedChannelInfo(fromHex(channel.id), fromHex(channel.channelParentId!), channel.name!, channel.channelNameRevision ?? 0, Date.now(), messageId)
     this.state.outbox.push({ messageId: toHex(messageId), conversationId: channel.id, envelope: toBase64(envelope), recipients: this.recipients(channel.id), silent: true, restrictedChannelSetup: 'binding' })
     delete channel.channelNeedsBinding
   }
@@ -5859,7 +5945,8 @@ export class Engine {
   }
 
   private title(c: Conversation): string {
-    return c.name ?? (c.peers.map((p) => this.nameOf(p)).join(', ') || 'Just you')
+    const name = this.pendingChannelNames.has(c.id) ? this.pendingChannelNames.get(c.id) : c.name
+    return name ?? (c.peers.map((p) => this.nameOf(p)).join(', ') || 'Just you')
   }
 
   /** Checks an attachment from the wire; undefined if it is unusable. */

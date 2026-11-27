@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { createElement } from 'react'
 import type { CoreClient } from '../core/client'
 import type { ConversationSummary, MemberInfo } from '../core/protocol'
-import { channelInviteCandidates, RestrictedChannelForm, validChannelName, visibleChildChannels } from './RestrictedChannels'
+import { channelFamilies, channelInviteCandidates, RestrictedChannelForm, validChannelName, visibleChildChannels } from './RestrictedChannels'
 
 const member = (account: string, extra: Partial<MemberInfo> = {}): MemberInfo => ({ account, name: account, username: `${account}.27`, isMe: false, isAdmin: false, ...extra })
 const conversation = (id: string, extra: Partial<ConversationSummary> = {}): ConversationSummary => ({ id, title: id, isGroup: true, amAdmin: false, memberCount: 2, request: false, unread: 0, lastAt: 0, status: 'active', ...extra })
@@ -13,6 +13,21 @@ describe('restricted channels', () => {
     const child = conversation('child', { channelParentId: 'parent' })
     expect(visibleChildChannels([conversation('parent'), child, conversation('elsewhere', { channelParentId: 'other' })], 'parent')).toEqual([child])
     expect(visibleChildChannels([conversation('parent')], 'parent')).toEqual([])
+  })
+
+  it('groups only eligible rows under their actual parents without losing request or search context', () => {
+    const parent = conversation('parent')
+    const other = conversation('other')
+    const child = conversation('child', { channelParentId: parent.id, channelSendPaused: true })
+    const request = conversation('request', { channelParentId: parent.id, request: true })
+    const orphan = conversation('orphan', { channelParentId: 'missing', status: 'removed' })
+    const all = [child, request, other, orphan, parent]
+    expect(channelFamilies(all, [child, other, orphan, parent])).toEqual({ families: [
+      { parent: other, contextual: false, children: [] }, { parent, contextual: false, children: [child] },
+    ], unavailable: [orphan] })
+    expect(channelFamilies(all, [request])).toEqual({ families: [{ parent, contextual: true, children: [request] }], unavailable: [] })
+    expect(channelFamilies(all, [child])).toEqual({ families: [{ parent, contextual: true, children: [child] }], unavailable: [] })
+    expect(channelFamilies([parent], [parent]).families[0].children).toEqual([])
   })
 
   it('selects only named parent members, excluding self, blocked and existing channel accounts', () => {

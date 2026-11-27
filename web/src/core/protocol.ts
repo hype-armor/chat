@@ -16,6 +16,7 @@ export type ConversationSummary = {
   /** Present only for channel members. Never advertise private children to the parent. */
   channelParentId?: string
   canCreateRestrictedChannel?: boolean
+  canRenameRestrictedChannel?: boolean
   canInviteToRestrictedChannel?: boolean
   channelSendPaused?: boolean
   /** Authenticated encrypted group topic; absent means unknown, empty means cleared. */

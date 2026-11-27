@@ -2,7 +2,7 @@ import { test, expect } from './fixtures'
 
 test.skip(!process.env.E2E_UI_FIXTURES, 'needs the Vite UI fixture server')
 
-for (const width of [390, 1280]) test(`creates and invites private channels at ${width}px`, async ({ page }) => {
+for (const width of [390, 1280]) test(`creates, invites and renames nested private channels at ${width}px`, async ({ page }) => {
   await page.setViewportSize({ width, height: 844 })
   await page.route('**/v1/**', (route) => route.abort('blockedbyclient'))
   await page.goto('/e2e/interactions-fixture.html?channels=1&title=Parent%20group')
@@ -35,10 +35,18 @@ for (const width of [390, 1280]) test(`creates and invites private channels at $
   ])
   await page.getByRole('button', { name: 'Conversation menu' }).click()
   await page.getByRole('menuitem', { name: 'Group info', exact: true }).click()
+  await page.getByRole('button', { name: 'Edit channel name' }).click()
+  await page.getByLabel('Channel name', { exact: true }).fill('Private decisions')
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByRole('region', { name: 'Group info' }).getByText('Private decisions', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Parent group', exact: true }).click()
-  await page.getByRole('button', { name: 'Conversation menu' }).click()
-  await page.getByRole('menuitem', { name: 'Group info', exact: true }).click()
-  await page.getByRole('region', { name: 'Private channels', exact: true }).getByRole('button', { name: 'Private planning' }).click()
+  if (width === 390) await page.getByRole('button', { name: 'Back to conversations' }).click()
+  const nav = page.getByRole('navigation', { name: 'Conversations', exact: true })
+  const parent = nav.locator('ul.conversations > li').filter({ has: page.getByRole('button', { name: /Parent group/ }) })
+  const child = parent.getByRole('list', { name: 'Private channels' }).getByRole('button', { name: /Private decisions/ })
+  await expect(child).toBeVisible()
+  await expect(nav.locator('ul.conversations > li > button').filter({ hasText: 'Private decisions' })).toHaveCount(0)
+  await child.click()
   await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toHaveValue('Preserved channel draft')
   await page.evaluate(() => (window as unknown as { interactionFixture: { pauseChannel(): void } }).interactionFixture.pauseChannel())
   await expect(page.getByText('Channel sending is paused', { exact: false })).toBeVisible()

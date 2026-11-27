@@ -41,6 +41,9 @@ message Content {
 message RestrictedChannelInfo {
   bytes parent_conversation_id = 1;
   string name = 2;
+  // Zero or missing is the original binding, not an update to an established
+  // channel. Carry the current revision when binding a newly invited device.
+  uint32 name_revision = 3;
 }
 
 // Experimental wire format only. This is deliberately not a Content body: no
