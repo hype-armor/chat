@@ -167,8 +167,10 @@ E2E_SERVER=1 DATABASE_URL=postgres://... pnpm --filter web e2e
   `PW_ALL_BROWSERS=1 pnpm --filter web exec playwright test -c playwright.fixtures.config.ts`.
   Run delivery and storage fixtures that import source modules in this Vite suite,
   not the production-preview E2E suite. Both configs use `devStorageSpecs`.
-  These fixtures do not prove call transport. The narrow-header echo-call test
-  needs the isolated server and echo bot. Set `E2E_UI_FIXTURE_PORT` to a free
+  These fixtures do not prove call transport. In call E2E setup, wait for the
+  conversation to show the peer's display name before asserting it in a call dialog.
+  A call captures the conversation title when it starts. The narrow-header
+  echo-call test needs the isolated server and echo bot. Set `E2E_UI_FIXTURE_PORT` to a free
   dedicated port when another session runs UI fixtures. Call UI fixtures must
   assert the fail-closed error and keyboard dismissal when `canEncryptCalls()`
   is false. Do not bypass the encrypted-media capability guard. For calls across

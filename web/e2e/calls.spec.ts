@@ -26,6 +26,9 @@ async function pair(browser: Browser, browserName: string) {
   await alice.getByLabel('Message', { exact: true }).fill('hi')
   await alice.getByRole('button', { name: 'Send', exact: true }).click()
   await openChat(bob, /Alice/)
+  // Starting a call captures the chat title. Wait for Bob's profile instead of
+  // putting his temporary username into the call dialog's accessible name.
+  await expect(alice.getByRole('region', { name: 'Conversation with Bob', exact: true })).toBeVisible()
   return { alice, bob }
 }
 
